@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PitStop-Sports</string>
+    <string name="title_activity_main">PitStop-Sports</string>
+    <string name="package_name">br.com.pitstopsports.app</string>
+    <string name="custom_url_scheme">br.com.pitstopsports.app</string>
+</resources>

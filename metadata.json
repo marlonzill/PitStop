@@ -1,0 +1,6 @@
+{
+  "name": "PitStop Sports — Coletor GPS & Navegação Rally",
+  "description": "Aplicativo oficial PitStop Sports para navegação digital por planilha (NBP/T15), hodômetro GPS, cantada por voz e coleta para apuração de rally de regularidade.",
+  "requestFramePermissions": ["geolocation", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
