@@ -7,7 +7,7 @@ import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   const isGhPages = process.env.GITHUB_PAGES === 'true';
-  const basePath = isGhPages ? '/PitStop-Sports/' : '/';
+  const basePath = isGhPages ? '/PitStop/' : '/';
 
   return {
     base: basePath,
