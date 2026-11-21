@@ -4,8 +4,11 @@ import { Geolocation } from '@capacitor/geolocation';
 import {
   Activity,
   ArrowLeft,
+  Camera,
   Check,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Compass,
   Copy,
   Cpu,
@@ -21,19 +24,34 @@ import {
   Pencil,
   Play,
   Plus,
+  Power,
   RotateCcw,
   Satellite,
   Save,
   Settings,
   Settings2,
+  Square,
   Trash2,
   TrendingUp,
   Upload,
+  X,
 } from 'lucide-react';
 import { OdometerCockpit } from './OdometerCockpit';
 import { SurveyCockpit } from './SurveyCockpit';
 import { VelocityMapboxView } from './VelocityMapboxView';
 import { useNavSettings } from '../utils/navSettings';
+import {
+  clearGoProFleetError,
+  getGoProDisplayName,
+  renameGoProInFleet,
+  shutterAllGoPro,
+  shutterSingleGoPro,
+  sleepAllGoPro,
+  toggleSingleGoProPower,
+  useGoProFleet,
+  wakeAllGoPro,
+  wakeSavedGoProInFleet,
+} from '../utils/goproBle';
 import {
   autoDetectNearestTrack,
   bearingBetweenDeg,
@@ -511,6 +529,11 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachAdvice, setCoachAdvice] = useState<string | null>(null);
   const [coachError, setCoachError] = useState<string | null>(null);
+
+  const goproFleet = useGoProFleet();
+  const [goproDrawerOpen, setGoproDrawerOpen] = useState(false);
+  const [editingGoProId, setEditingGoProId] = useState<string | null>(null);
+  const [editingGoProName, setEditingGoProName] = useState('');
 
   const tracksRef = useRef<VelocityTrack[]>(tracks);
   tracksRef.current = tracks;
@@ -1809,6 +1832,296 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     survey: 'Levantamento',
   };
 
+  const hasAnyGoPro =
+    goproFleet.cameras.length > 0 || goproFleet.savedDevices.length > 0;
+  const activeGoProsReady = goproFleet.cameras.filter(
+    (c) => c.connected && !c.sleeping
+  );
+  const recordingGoProCount = goproFleet.cameras.filter((c) => c.recording).length;
+  const savedMissingGoPros = goproFleet.savedDevices.filter(
+    (sd) => !goproFleet.cameras.some((c) => c.id === sd.deviceId)
+  );
+
+  const goproQuickBar = hasAnyGoPro ? (
+    <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-white space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setGoproDrawerOpen((v) => !v)}
+          className="flex min-w-0 items-center gap-2 text-left"
+        >
+          <span
+            className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+              recordingGoProCount > 0
+                ? 'bg-[#E10600] animate-pulse'
+                : activeGoProsReady.length > 0
+                  ? 'bg-emerald-400'
+                  : 'bg-zinc-500'
+            }`}
+          />
+          <Camera className="h-4 w-4 shrink-0 text-[#E10600]" />
+          <div className="min-w-0">
+            <p className="text-xs font-extrabold uppercase tracking-wide truncate">
+              GoPro ({activeGoProsReady.length}/{goproFleet.cameras.length || goproFleet.savedDevices.length})
+              {recordingGoProCount > 0 ? ` · ${recordingGoProCount} REC` : ''}
+            </p>
+          </div>
+          {goproDrawerOpen ? (
+            <ChevronUp className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+          )}
+        </button>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {activeGoProsReady.length > 0 ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  void shutterAllGoPro(recordingGoProCount === 0);
+                }}
+                className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-extrabold uppercase ${
+                  recordingGoProCount > 0
+                    ? 'border border-zinc-600 bg-zinc-800 text-white'
+                    : 'pitstop-btn-red text-white'
+                }`}
+              >
+                {recordingGoProCount > 0 ? (
+                  <>
+                    <Square className="h-3 w-3 fill-current" />
+                    <span>Parar</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3 w-3 fill-current" />
+                    <span>REC Todas</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void sleepAllGoPro();
+                }}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-2 text-[11px] font-bold text-[#C0C4C9] hover:text-white"
+                title="Desligar / Hibernar todas as GoPro"
+              >
+                <Power className="h-3.5 w-3.5 text-zinc-400" />
+                <span>Desligar</span>
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                void wakeAllGoPro();
+              }}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-950/40 px-2.5 text-[11px] font-extrabold text-emerald-300 uppercase hover:bg-emerald-950/70"
+            >
+              <Power className="h-3.5 w-3.5" />
+              <span>Ligar GoPro</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {goproFleet.errorMsg && (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-red-700/60 bg-red-950/40 px-2.5 py-1.5 text-[11px] text-red-200">
+          <span className="truncate">{goproFleet.errorMsg}</span>
+          <button
+            type="button"
+            onClick={clearGoProFleetError}
+            className="shrink-0 text-red-300 hover:text-white"
+            aria-label="Fechar erro GoPro"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {goproDrawerOpen && (
+        <div className="space-y-1.5 border-t border-zinc-800 pt-2">
+          {goproFleet.cameras.map((cam) => {
+            const label = getGoProDisplayName(cam);
+            const asleep = cam.sleeping || !cam.connected;
+            const isEditing = editingGoProId === cam.id;
+            return (
+              <div
+                key={cam.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5"
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      asleep
+                        ? 'bg-zinc-500'
+                        : cam.recording
+                          ? 'bg-[#E10600] animate-pulse'
+                          : 'bg-emerald-400'
+                    }`}
+                  />
+                  {isEditing ? (
+                    <div className="flex flex-1 items-center gap-1">
+                      <input
+                        type="text"
+                        value={editingGoProName}
+                        onChange={(e) => setEditingGoProName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            renameGoProInFleet(cam.id, editingGoProName);
+                            setEditingGoProId(null);
+                          }
+                          if (e.key === 'Escape') setEditingGoProId(null);
+                        }}
+                        placeholder="Ex: Capô"
+                        autoFocus
+                        className="h-7 min-w-0 flex-1 rounded border border-zinc-600 bg-[#111214] px-2 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          renameGoProInFleet(cam.id, editingGoProName);
+                          setEditingGoProId(null);
+                        }}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded bg-emerald-600 text-white"
+                        aria-label="Salvar nome"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="truncate text-xs font-bold text-white">{label}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingGoProId(cam.id);
+                          setEditingGoProName(cam.alias || cam.name);
+                        }}
+                        className="p-0.5 text-zinc-500 hover:text-white"
+                        aria-label={`Renomear ${label}`}
+                        title="Nomear câmera"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <span className="font-mono text-[10px] text-zinc-400 tabular-nums shrink-0">
+                        {cam.batteryPct}%
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    disabled={asleep}
+                    onClick={() => {
+                      void shutterSingleGoPro(cam, !cam.recording);
+                    }}
+                    className={`inline-flex h-7 items-center gap-1 rounded px-2 text-[10px] font-extrabold uppercase disabled:opacity-35 ${
+                      cam.recording
+                        ? 'border border-zinc-600 bg-zinc-800 text-white'
+                        : 'bg-[#E10600] text-white'
+                    }`}
+                  >
+                    {cam.recording ? 'Parar' : 'REC'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={cam.reconnecting}
+                    onClick={() => {
+                      void toggleSingleGoProPower(cam);
+                    }}
+                    className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[10px] font-bold ${
+                      asleep
+                        ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+                        : 'border-zinc-700 bg-[#111214] text-[#C0C4C9] hover:text-white'
+                    }`}
+                  >
+                    <Power className="h-3 w-3" />
+                    <span>{asleep ? 'Ligar' : 'Desligar'}</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          {savedMissingGoPros.map((sd) => {
+            const label = getGoProDisplayName(sd);
+            const isEditing = editingGoProId === sd.deviceId;
+            return (
+              <div
+                key={sd.deviceId}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5"
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-zinc-600" />
+                  {isEditing ? (
+                    <div className="flex flex-1 items-center gap-1">
+                      <input
+                        type="text"
+                        value={editingGoProName}
+                        onChange={(e) => setEditingGoProName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            renameGoProInFleet(sd.deviceId, editingGoProName);
+                            setEditingGoProId(null);
+                          }
+                          if (e.key === 'Escape') setEditingGoProId(null);
+                        }}
+                        placeholder="Ex: Capô"
+                        autoFocus
+                        className="h-7 min-w-0 flex-1 rounded border border-zinc-600 bg-[#111214] px-2 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          renameGoProInFleet(sd.deviceId, editingGoProName);
+                          setEditingGoProId(null);
+                        }}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded bg-emerald-600 text-white"
+                        aria-label="Salvar nome"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="truncate text-xs font-bold text-zinc-300">{label}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingGoProId(sd.deviceId);
+                          setEditingGoProName(sd.alias || sd.name);
+                        }}
+                        className="p-0.5 text-zinc-500 hover:text-white"
+                        aria-label={`Renomear ${label}`}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={goproFleet.wakingId === sd.deviceId}
+                  onClick={() => {
+                    void wakeSavedGoProInFleet(sd);
+                  }}
+                  className="inline-flex h-7 items-center gap-1 rounded border border-emerald-500/50 bg-emerald-950/40 px-2.5 text-[10px] font-extrabold text-emerald-300 uppercase"
+                >
+                  <Power className="h-3 w-3" />
+                  <span>{goproFleet.wakingId === sd.deviceId ? 'Ligando...' : 'Ligar'}</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-3">
       {/* Compact Top Bar inside Velocidade (RaceChrono-inspired) */}
@@ -2018,6 +2331,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               <span>Levantamento</span>
             </button>
           </div>
+
+          {goproQuickBar}
         </section>
       )}
 
@@ -2355,6 +2670,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               <span>Abrir Análise &amp; Treinador IA</span>
             </button>
           )}
+
+          {goproQuickBar}
         </section>
       )}
 
@@ -3594,6 +3911,125 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 }}
                 onDragTrapEnd={handleDragTrapEnd}
                 containerClassName="relative h-[340px] w-full overflow-hidden bg-[#000000] sm:h-[440px]"
+                fullscreenOverlay={
+                  <div className="rounded-xl border border-zinc-700/90 bg-[#080B0D]/92 p-2 text-white shadow-2xl backdrop-blur-md space-y-2">
+                    {/* Colocar Marcos direto em Tela Cheia */}
+                    <div className="grid grid-cols-4 gap-1">
+                      {(
+                        [
+                          ['start', 'Largada', 'text-emerald-300 border-emerald-600/40'],
+                          ['finish', 'Chegada', 'text-red-300 border-red-600/40'],
+                          ['start_finish', 'Larg/Cheg', 'text-sky-300 border-sky-600/40'],
+                          ['split', 'Parcial', 'text-amber-300 border-amber-600/40'],
+                        ] as const
+                      ).map(([kindVal, label, tone]) => {
+                        const isPlacingThis = placementKind === kindVal;
+                        return (
+                          <button
+                            key={kindVal}
+                            type="button"
+                            onClick={() =>
+                              setPlacementKind((prev) =>
+                                prev === kindVal ? null : kindVal
+                              )
+                            }
+                            className={`inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg border px-1 text-[10px] font-extrabold uppercase transition-colors sm:text-xs ${
+                              isPlacingThis
+                                ? 'border-amber-300 bg-amber-400 text-zinc-950'
+                                : `${tone} bg-[#111214] hover:bg-zinc-800`
+                            }`}
+                          >
+                            <Plus className="h-3 w-3 shrink-0" />
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Rotação rápida, Largura, +GPS e Salvar Pista dentro da Tela Cheia */}
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <div className="flex min-w-[140px] flex-1 items-center gap-2">
+                        <span className="font-mono text-[10px] font-bold text-amber-300 tabular-nums shrink-0">
+                          {activeBearing.toFixed(0)}°
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={360}
+                          step={1}
+                          value={activeBearing}
+                          aria-label="Girar Marco em tela cheia"
+                          onChange={(e) => {
+                            const val = Number(e.target.value) % 360;
+                            setDraftBearingDeg(val);
+                            if (selectedTrap) {
+                              handleUpdateTrapProps(selectedTrap.id, { bearingDeg: val });
+                            }
+                          }}
+                          className="h-5 w-full cursor-pointer accent-lime-400"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={5}
+                          max={150}
+                          value={activeWidthM}
+                          onChange={(e) => {
+                            const raw = Number(e.target.value);
+                            if (!Number.isFinite(raw)) return;
+                            const clamped = Math.min(150, Math.max(5, raw));
+                            setNewTrapWidthM(clamped);
+                            if (selectedTrap) {
+                              handleUpdateTrapProps(selectedTrap.id, { widthM: clamped });
+                            }
+                          }}
+                          aria-label="Largura (m)"
+                          className="h-8 w-12 rounded-lg border border-zinc-700 bg-[#111214] text-center font-mono text-[11px] font-bold text-white"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => handleDropTrapAtPosition(activeKind)}
+                          className="inline-flex h-8 items-center rounded-lg border border-zinc-700 bg-[#111214] px-2 text-[10px] font-bold text-emerald-300"
+                          title="Capturar Marco na posição GPS atual"
+                        >
+                          +GPS
+                        </button>
+
+                        {selectedTrap && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTrap(selectedTrap.id)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#111214] text-zinc-400 hover:text-red-400"
+                            aria-label={`Remover ${selectedTrap.name}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={handleSaveCurrentTrackToLibrary}
+                          className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[10px] font-extrabold uppercase ${
+                            justSavedTrack
+                              ? 'bg-emerald-600 text-white'
+                              : 'pitstop-btn-red text-white'
+                          }`}
+                        >
+                          {justSavedTrack ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : (
+                            <Save className="h-3.5 w-3.5" />
+                          )}
+                          <span>{justSavedTrack ? 'Salva' : 'Salvar'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                }
               />
 
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 bg-[#14161A] px-3 py-2.5">

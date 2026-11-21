@@ -6,7 +6,6 @@ import type { ActiveTab } from '../types/rally';
 import { useNavSettings } from '../utils/navSettings';
 import { listSavedRoadbooks } from '../utils/roadbookStorage';
 import { APP_VERSION } from '../version';
-import { PitStopLogo } from './PitStopLogo';
 
 interface InitialStatusTabProps {
   onNavigate: (tab: ActiveTab) => void;
@@ -20,6 +19,8 @@ interface BatteryManagerLike extends EventTarget {
 interface NavigatorWithBattery extends Navigator {
   getBattery?: () => Promise<BatteryManagerLike>;
 }
+
+const HOME_BG_URL = `${import.meta.env.BASE_URL}assets/aistudio/image_973de89f_6ba539fe.jpg`;
 
 export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }) => {
   const [settings] = useNavSettings();
@@ -90,12 +91,49 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
   }, []);
 
   return (
-    <div className="relative flex min-h-[calc(100dvh-9.5rem)] flex-col items-center justify-center px-2 py-2 text-center sm:px-3 sm:py-4">
-      {/* Integrated PitStop-Sports Hero Centerpiece */}
-      <div className="relative flex w-full max-w-4xl flex-col items-center">
-        <PitStopLogo variant="full" animated className="w-full max-w-sm sm:max-w-xl" />
+    <div className="relative -mx-2 -mt-2.5 flex min-h-[calc(100dvh-7.8rem)] flex-col items-center justify-end overflow-hidden bg-[#080B0D] px-3 pt-44 pb-7 text-center sm:-mx-6 sm:-mt-5 sm:min-h-[calc(100dvh-8.4rem)] sm:px-6 sm:pt-56 sm:pb-8">
+      {/* Full-bleed PitStop-Sports Hero Background + Pulsing Side LED Glow Overlays (100% pointer-events-none) */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 overflow-hidden select-none"
+      >
+        {/* Centered portrait emblem canvas matching original image proportions */}
+        <div className="relative mx-auto h-full w-full max-w-[540px]">
+          <img
+            src={HOME_BG_URL}
+            alt=""
+            className="h-full w-full object-cover object-[50%_20%] opacity-95"
+          />
 
-        <div className="-mt-2 flex items-center justify-center gap-2.5 sm:-mt-3">
+          {/* Seamless radial & edge blend into #080B0D on wide viewports */}
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                'radial-gradient(ellipse 64% 58% at 50% 34%, transparent 48%, rgba(8,11,13,0.72) 82%, #080B0D 100%)',
+            }}
+          />
+
+          {/* Side Pulsing LED Glow Overlays (-18deg) emerging from left & right edges without covering center PITSTOP SPORTS text */}
+          {/* Left Side Red Neon + Cool White LED Beams */}
+          <div className="pitstop-led-red-left absolute top-[34%] -left-[10%] h-8 w-[34%] sm:h-10" />
+          <div className="pitstop-led-white-left absolute top-[29.5%] -left-[10%] h-3.5 w-[30%] sm:h-4" />
+          <div className="pitstop-led-ignition-left absolute top-[32%] -left-[10%] h-4 w-[31%]" />
+
+          {/* Right Side Cool White + Red Neon LED Beams */}
+          <div className="pitstop-led-white-right absolute top-[20.5%] -right-[10%] h-4 w-[31%] sm:h-5" />
+          <div className="pitstop-led-red-right absolute top-[25%] -right-[10%] h-6 w-[30%] sm:h-8" />
+          <div className="pitstop-led-ignition-right absolute top-[22%] -right-[10%] h-4 w-[30%]" />
+        </div>
+
+        {/* Top & Bottom Dark Asphalt Fades for Clean Integration and Crisp Button Contrast */}
+        <div className="absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-[#080B0D] via-[#080B0D]/40 to-transparent" />
+        <div className="absolute inset-x-0 bottom-0 h-[48%] bg-gradient-to-t from-[#080B0D] via-[#080B0D]/88 to-transparent" />
+      </div>
+
+      {/* Foreground Interactive Controls */}
+      <div className="relative z-10 flex w-full max-w-3xl flex-col items-center">
+        <div className="flex items-center justify-center gap-2.5">
           <span
             aria-hidden="true"
             className="h-px w-6 bg-gradient-to-r from-transparent to-zinc-600/60 sm:w-10"
@@ -110,7 +148,7 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
         </div>
 
         {/* Primary Motorsport Launch Actions — clean 4-button grid */}
-        <div className="mt-5 grid w-full max-w-3xl grid-cols-2 gap-2 sm:mt-7 lg:grid-cols-4 sm:gap-2.5">
+        <div className="mt-4 grid w-full grid-cols-2 gap-2 sm:mt-5 lg:grid-cols-4 sm:gap-2.5">
           <button
             type="button"
             onClick={() => onNavigate('navegacao')}
@@ -149,7 +187,7 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
         </div>
 
         {/* Minimal Unboxed Readiness Line */}
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 font-mono text-[11px] text-[#B5B5B5] tabular-nums">
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 font-mono text-[11px] text-[#B5B5B5] tabular-nums">
           <span className="inline-flex items-center gap-1.5">
             <Satellite className={`h-3.5 w-3.5 ${gpsActive ? 'text-emerald-400' : 'text-[#E10600]'}`} />
             <span>
@@ -177,7 +215,7 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
       </div>
 
       {/* App Version in Bottom Corner */}
-      <span className="pointer-events-none absolute right-2 bottom-0.5 font-mono text-[11px] font-semibold tracking-wider text-zinc-500 tabular-nums">
+      <span className="pointer-events-none absolute right-3 bottom-1 z-10 font-mono text-[11px] font-semibold tracking-wider text-zinc-500 tabular-nums">
         {APP_VERSION}
       </span>
     </div>

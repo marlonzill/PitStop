@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   AlertTriangle,
   Battery,
   Bluetooth,
   Camera,
+  Check,
   HardDrive,
   Image,
+  Pencil,
   Play,
   Power,
   RefreshCw,
@@ -13,27 +15,31 @@ import {
   Thermometer,
   Trash2,
   Video,
+  X,
 } from 'lucide-react';
 import {
-  applyGoProRemoteSettings,
-  createSimulatedCameraFleet,
-  disconnectGoProBle,
+  activateSimulatedGoProFleet,
+  applyBatchSettingsToFleet,
+  clearGoProFleetError,
+  disconnectGoProFromFleet,
+  forgetSavedGoProFromFleet,
+  getGoProDisplayName,
   isGoProBleSupported,
-  loadSavedGoProDevices,
-  pollAllGoProKeepAlive,
-  removeSavedGoProDevice,
-  scanAndConnectGoProBle,
-  sendGoProCaptureMode,
-  sendGoProShutter,
-  sendGoProSleep,
-  wakeOrReconnectGoProById,
-  type GoProCameraState,
-  type GoProCaptureMode,
+  modeAllGoPro,
+  modeSingleGoPro,
+  renameGoProInFleet,
+  scanAndAddGoProToFleet,
+  shutterAllGoPro,
+  shutterSingleGoPro,
+  sleepAllGoPro,
+  toggleSingleGoProPower,
+  useGoProFleet,
+  wakeAllGoPro,
+  wakeSavedGoProInFleet,
   type GoProFps,
   type GoProHyperSmooth,
   type GoProLens,
   type GoProResolution,
-  type SavedGoProDevice,
 } from '../utils/goproBle';
 import { useNavSettings } from '../utils/navSettings';
 
@@ -45,203 +51,25 @@ function formatRecTimer(sec: number): string {
 
 export const GoProBlePanel: React.FC = () => {
   const [settings, updateSettings] = useNavSettings();
-  const [cameras, setCameras] = useState<GoProCameraState[]>([]);
-  const [savedDevices, setSavedDevices] = useState<SavedGoProDevice[]>(() => loadSavedGoProDevices());
-  const [scanning, setScanning] = useState(false);
-  const [wakingId, setWakingId] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const { cameras, savedDevices, scanning, wakingId, errorMsg } = useGoProFleet();
+
   const [batchRes, setBatchRes] = useState<GoProResolution>('4K');
   const [batchFps, setBatchFps] = useState<GoProFps>(60);
   const [batchHs, setBatchHs] = useState<GoProHyperSmooth>('boost');
   const [batchLens, setBatchLens] = useState<GoProLens>('wide');
 
-  const updateCamera = (camId: string, patch: Partial<GoProCameraState>) => {
-    setCameras((prev) => prev.map((c) => (c.id === camId ? { ...c, ...patch } : c)));
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+
+  const beginRename = (deviceId: string, currentName: string) => {
+    setEditingId(deviceId);
+    setEditingName(currentName);
   };
 
-  // Recording duration tick every 1s
-  useEffect(() => {
-    if (cameras.length === 0) return;
-    const id = window.setInterval(() => {
-      setCameras((prev) =>
-        prev.map((c) => {
-          if (!c.connected || c.sleeping || !c.recording) return c;
-          const nextSec = c.encodingDurationSec + 1;
-          const nextBatt =
-            c.isSimulated && nextSec % 25 === 0 ? Math.max(5, c.batteryPct - 1) : c.batteryPct;
-          const nextSd =
-            c.isSimulated && nextSec % 60 === 0
-              ? Math.max(0, c.sdRemainingMin - 1)
-              : c.sdRemainingMin;
-          return {
-            ...c,
-            encodingDurationSec: nextSec,
-            batteryPct: nextBatt,
-            sdRemainingMin: nextSd,
-            sdFull: nextSd <= 1,
-          };
-        })
-      );
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [cameras.length]);
-
-  // Open GoPro Keep-Alive ([0x03, 0x5B, 0x01, 0x42]) + Status Poll every 3 seconds
-  useEffect(() => {
-    const hasLiveConnected = cameras.some((c) => !c.isSimulated && c.connected && !c.sleeping);
-    if (!hasLiveConnected) return;
-    const id = window.setInterval(() => {
-      pollAllGoProKeepAlive();
-    }, 3000);
-    return () => window.clearInterval(id);
-  }, [cameras]);
-
-  // Trigger Auto-REC on stage start event when enabled
-  useEffect(() => {
-    const onStageStart = () => {
-      if (!settings.goproAutoRecOnStart || cameras.length === 0) return;
-      cameras.forEach((cam) => {
-        if (cam.connected && !cam.sleeping && !cam.recording) {
-          if (!cam.isSimulated) sendGoProShutter(cam.id, true).catch(() => {});
-          updateCamera(cam.id, { recording: true, encodingDurationSec: 0 });
-        }
-      });
-    };
-    window.addEventListener('pitstop:stage-started', onStageStart);
-    return () => window.removeEventListener('pitstop:stage-started', onStageStart);
-  }, [settings.goproAutoRecOnStart, cameras]);
-
-  const handleScanBle = async () => {
-    setErrorMsg(null);
-    if (cameras.length >= 7) {
-      setErrorMsg('Limite recomendado de 7 conexões BLE simultâneas atingido.');
-      return;
-    }
-    setScanning(true);
-    try {
-      const cam = await scanAndConnectGoProBle(updateCamera);
-      setSavedDevices(loadSavedGoProDevices());
-      setCameras((prev) => {
-        const idx = prev.findIndex((x) => x.id === cam.id);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = cam;
-          return next;
-        }
-        return [...prev, cam];
-      });
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error
-          ? err.message
-          : 'Não foi possível parear com a GoPro via Bluetooth BLE.'
-      );
-    } finally {
-      setScanning(false);
-    }
-  };
-
-  const handleWakeOrReconnectSaved = async (saved: SavedGoProDevice) => {
-    setErrorMsg(null);
-    setWakingId(saved.deviceId);
-    try {
-      const cam = await wakeOrReconnectGoProById(saved.deviceId, saved.name, updateCamera);
-      setCameras((prev) => {
-        const idx = prev.findIndex((x) => x.id === cam.id);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = cam;
-          return next;
-        }
-        return [...prev, cam];
-      });
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error
-          ? err.message
-          : `Não foi possível acordar/reconectar "${saved.name}". Verifique se a câmera está ao alcance.`
-      );
-    } finally {
-      setWakingId(null);
-    }
-  };
-
-  const handleShutterSingle = async (cam: GoProCameraState, start: boolean) => {
-    if (!cam.connected || cam.sleeping) return;
-    if (!cam.isSimulated) {
-      await sendGoProShutter(cam.id, start).catch((err) => {
-        setErrorMsg(err instanceof Error ? err.message : 'Erro ao enviar comando de gravação.');
-      });
-    }
-    updateCamera(cam.id, {
-      recording: start,
-      encodingDurationSec: start ? 0 : cam.encodingDurationSec,
-    });
-  };
-
-  const handleModeSingle = async (cam: GoProCameraState, mode: GoProCaptureMode) => {
-    if (!cam.connected || cam.sleeping) return;
-    if (!cam.isSimulated) {
-      await sendGoProCaptureMode(cam.id, mode).catch(() => {});
-    }
-    updateCamera(cam.id, { captureMode: mode });
-  };
-
-  const handleShutterAll = async (start: boolean) => {
-    for (const cam of cameras) {
-      if (!cam.connected || cam.sleeping) continue;
-      if (!cam.isSimulated) {
-        await sendGoProShutter(cam.id, start).catch(() => {});
-      }
-      updateCamera(cam.id, {
-        recording: start,
-        encodingDurationSec: start ? 0 : cam.encodingDurationSec,
-      });
-    }
-  };
-
-  const handleModeAll = async (mode: GoProCaptureMode) => {
-    for (const cam of cameras) {
-      if (!cam.connected || cam.sleeping) continue;
-      if (!cam.isSimulated) {
-        await sendGoProCaptureMode(cam.id, mode).catch(() => {});
-      }
-      updateCamera(cam.id, { captureMode: mode });
-    }
-  };
-
-  const handleSleepAll = async (sleep: boolean) => {
-    for (const cam of cameras) {
-      if (sleep) {
-        if (!cam.isSimulated) await sendGoProSleep(cam.id).catch(() => {});
-        updateCamera(cam.id, { sleeping: true, connected: false, recording: false });
-      } else {
-        if (!cam.isSimulated) {
-          await wakeOrReconnectGoProById(cam.id, cam.name, updateCamera).catch(() => {});
-        } else {
-          updateCamera(cam.id, { sleeping: false, connected: true, reconnecting: false });
-        }
-      }
-    }
-  };
-
-  const handleApplyBatchSettings = async () => {
-    for (const cam of cameras) {
-      if (!cam.isSimulated && cam.connected && !cam.sleeping) {
-        await applyGoProRemoteSettings(cam.id, {
-          resolution: batchRes,
-          fps: batchFps,
-          hypersmooth: batchHs,
-          lens: batchLens,
-        }).catch(() => {});
-      }
-      updateCamera(cam.id, {
-        resolution: batchRes,
-        fps: batchFps,
-        hypersmooth: batchHs,
-        lens: batchLens,
-      });
-    }
+  const commitRename = (deviceId: string) => {
+    renameGoProInFleet(deviceId, editingName);
+    setEditingId(null);
+    setEditingName('');
   };
 
   const bleReady = isGoProBleSupported();
@@ -261,14 +89,16 @@ export const GoProBlePanel: React.FC = () => {
               </h2>
             </div>
             <p className="mt-0.5 text-xs text-[#B5B5B5]">
-              Controle até 7 câmeras via Open GoPro BLE (nativo no APK Android + Web Bluetooth).
+              Controle até 7 câmeras via Open GoPro BLE e nomeie cada câmera para uso rápido em Velocidade.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleScanBle}
+              onClick={() => {
+                void scanAndAddGoProToFleet();
+              }}
               disabled={scanning}
               className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold text-white uppercase whitespace-nowrap"
             >
@@ -278,10 +108,7 @@ export const GoProBlePanel: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => {
-                setErrorMsg(null);
-                setCameras(createSimulatedCameraFleet(5));
-              }}
+              onClick={() => activateSimulatedGoProFleet(5)}
               className="pitstop-btn-metal inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3 text-xs font-bold whitespace-nowrap"
             >
               <Video className="h-3.5 w-3.5 text-emerald-400" />
@@ -298,45 +125,93 @@ export const GoProBlePanel: React.FC = () => {
         )}
 
         {errorMsg && (
-          <div className="rounded-lg border border-red-700/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
-            {errorMsg}
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-red-700/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+            <span>{errorMsg}</span>
+            <button
+              type="button"
+              onClick={clearGoProFleetError}
+              className="shrink-0 p-0.5 text-red-300 hover:text-white"
+              aria-label="Fechar aviso"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
 
-        {/* Saved Devices Quick Reconnect / Wake */}
+        {/* Saved Devices Quick Reconnect / Wake + Inline Naming */}
         {savedNotShown.length > 0 && (
           <div className="space-y-1.5 rounded-lg border border-zinc-800 bg-[#080B0D] p-2.5">
             <p className="font-mono text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
-              Câmeras Salvas (Reconexão Rápida / Acordar)
+              Câmeras Salvas (Reconexão Rápida / Nomear)
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {savedNotShown.map((sd) => (
-                <div
-                  key={sd.deviceId}
-                  className="inline-flex items-center gap-1 rounded-lg border border-zinc-700 bg-[#111214] pl-2.5 pr-1 py-1"
-                >
-                  <span className="text-xs font-bold text-white">{sd.name}</span>
-                  <button
-                    type="button"
-                    disabled={wakingId === sd.deviceId}
-                    onClick={() => handleWakeOrReconnectSaved(sd)}
-                    className="rounded bg-emerald-600/90 px-2 py-1 text-[10px] font-extrabold text-white uppercase hover:bg-emerald-500"
+              {savedNotShown.map((sd) => {
+                const displayName = getGoProDisplayName(sd);
+                const isEditing = editingId === sd.deviceId;
+                return (
+                  <div
+                    key={sd.deviceId}
+                    className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-zinc-700 bg-[#111214] pl-2.5 pr-1 py-1"
                   >
-                    {wakingId === sd.deviceId ? 'Conectando...' : 'Ligar / Acordar'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      removeSavedGoProDevice(sd.deviceId);
-                      setSavedDevices(loadSavedGoProDevices());
-                    }}
-                    className="p-1 text-zinc-500 hover:text-red-400"
-                    aria-label={`Esquecer ${sd.name}`}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+                    {isEditing ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename(sd.deviceId);
+                            if (e.key === 'Escape') setEditingId(null);
+                          }}
+                          placeholder="Ex: Capô, Para-brisa"
+                          autoFocus
+                          className="h-7 w-32 rounded border border-zinc-600 bg-[#080B0D] px-2 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => commitRename(sd.deviceId)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded bg-emerald-600 text-white"
+                          aria-label="Salvar nome da câmera"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-xs font-bold text-white">{displayName}</span>
+                        <button
+                          type="button"
+                          onClick={() => beginRename(sd.deviceId, sd.alias || sd.name)}
+                          className="p-1 text-zinc-400 hover:text-white"
+                          aria-label={`Renomear ${displayName}`}
+                          title="Dar nome para esta GoPro"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={wakingId === sd.deviceId}
+                      onClick={() => {
+                        void wakeSavedGoProInFleet(sd);
+                      }}
+                      className="rounded bg-emerald-600/90 px-2 py-1 text-[10px] font-extrabold text-white uppercase hover:bg-emerald-500"
+                    >
+                      {wakingId === sd.deviceId ? 'Conectando...' : 'Ligar / Acordar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => forgetSavedGoProFromFleet(sd.deviceId)}
+                      className="p-1 text-zinc-500 hover:text-red-400"
+                      aria-label={`Esquecer ${displayName}`}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -347,7 +222,9 @@ export const GoProBlePanel: React.FC = () => {
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <button
                 type="button"
-                onClick={() => handleShutterAll(true)}
+                onClick={() => {
+                  void shutterAllGoPro(true);
+                }}
                 className="pitstop-btn-red inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white uppercase"
               >
                 <Play className="h-4 w-4 fill-current" />
@@ -356,7 +233,9 @@ export const GoProBlePanel: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => handleShutterAll(false)}
+                onClick={() => {
+                  void shutterAllGoPro(false);
+                }}
                 className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 text-xs font-extrabold text-white uppercase hover:bg-zinc-800"
               >
                 <Square className="h-4 w-4 fill-current text-zinc-300" />
@@ -365,7 +244,9 @@ export const GoProBlePanel: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => handleSleepAll(false)}
+                onClick={() => {
+                  void wakeAllGoPro();
+                }}
                 className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/35 px-3 text-xs font-bold text-emerald-300 uppercase hover:bg-emerald-950/60"
               >
                 <Power className="h-4 w-4" />
@@ -374,7 +255,9 @@ export const GoProBlePanel: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => handleSleepAll(true)}
+                onClick={() => {
+                  void sleepAllGoPro();
+                }}
                 className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-bold text-[#C0C4C9] uppercase hover:text-white"
               >
                 <Power className="h-4 w-4 text-zinc-500" />
@@ -385,7 +268,9 @@ export const GoProBlePanel: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => handleModeAll('video')}
+                onClick={() => {
+                  void modeAllGoPro('video');
+                }}
                 className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-bold text-[#C0C4C9] hover:border-[#E10600] hover:text-white"
               >
                 <Video className="h-3.5 w-3.5 text-[#E10600]" />
@@ -393,7 +278,9 @@ export const GoProBlePanel: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => handleModeAll('photo')}
+                onClick={() => {
+                  void modeAllGoPro('photo');
+                }}
                 className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-bold text-[#C0C4C9] hover:border-[#E10600] hover:text-white"
               >
                 <Image className="h-3.5 w-3.5 text-amber-400" />
@@ -425,7 +312,14 @@ export const GoProBlePanel: React.FC = () => {
             </span>
             <button
               type="button"
-              onClick={handleApplyBatchSettings}
+              onClick={() => {
+                void applyBatchSettingsToFleet({
+                  resolution: batchRes,
+                  fps: batchFps,
+                  hypersmooth: batchHs,
+                  lens: batchLens,
+                });
+              }}
               className="pitstop-btn-metal rounded-lg px-3 py-1.5 text-xs font-bold"
             >
               Aplicar em Todas
@@ -492,6 +386,9 @@ export const GoProBlePanel: React.FC = () => {
           {cameras.map((cam) => {
             const hasAlert = cam.overheating || cam.sdFull || cam.batteryPct <= 15;
             const disconnectedOrSleeping = cam.sleeping || !cam.connected;
+            const displayName = getGoProDisplayName(cam);
+            const isEditing = editingId === cam.id;
+
             return (
               <div
                 key={cam.id}
@@ -504,22 +401,57 @@ export const GoProBlePanel: React.FC = () => {
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={`h-2.5 w-2.5 rounded-full shrink-0 ${
-                          disconnectedOrSleeping
-                            ? 'bg-zinc-500'
-                            : cam.recording
-                              ? 'bg-[#E10600] animate-pulse'
-                              : 'bg-emerald-400'
-                        }`}
-                      />
-                      <span className="truncate font-['Barlow_Condensed'] text-lg font-bold text-white uppercase">
-                        {cam.name}
-                      </span>
-                    </div>
-                    <p className="font-mono text-[11px] text-[#B5B5B5]">
+                  <div className="min-w-0 flex-1">
+                    {isEditing ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename(cam.id);
+                            if (e.key === 'Escape') setEditingId(null);
+                          }}
+                          placeholder="Nome (ex: Capô, Para-brisa)"
+                          autoFocus
+                          className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-600 bg-[#080B0D] px-2.5 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => commitRename(cam.id)}
+                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white"
+                          aria-label="Confirmar nome"
+                        >
+                          <Check className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                            disconnectedOrSleeping
+                              ? 'bg-zinc-500'
+                              : cam.recording
+                                ? 'bg-[#E10600] animate-pulse'
+                                : 'bg-emerald-400'
+                          }`}
+                        />
+                        <span className="truncate font-['Barlow_Condensed'] text-lg font-bold text-white uppercase">
+                          {displayName}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => beginRename(cam.id, cam.alias || cam.name)}
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                          aria-label={`Renomear ${displayName}`}
+                          title="Renomear câmera"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                    <p className="font-mono text-[11px] text-[#B5B5B5] truncate">
+                      {cam.alias ? `${cam.name} · ` : ''}
                       {cam.captureMode === 'video' ? 'VÍDEO' : 'FOTO'} · {cam.resolution} · {cam.fps}fps ·{' '}
                       {cam.lens.toUpperCase()}
                     </p>
@@ -527,12 +459,9 @@ export const GoProBlePanel: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!cam.isSimulated) disconnectGoProBle(cam.id).catch(() => {});
-                      setCameras((prev) => prev.filter((c) => c.id !== cam.id));
-                    }}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-[#080B0D] text-zinc-400 hover:text-red-400"
-                    aria-label={`Desconectar ${cam.name}`}
+                    onClick={() => disconnectGoProFromFleet(cam)}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-[#080B0D] text-zinc-400 hover:text-red-400"
+                    aria-label={`Desconectar ${displayName}`}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -604,7 +533,9 @@ export const GoProBlePanel: React.FC = () => {
                   <button
                     type="button"
                     disabled={disconnectedOrSleeping}
-                    onClick={() => handleModeSingle(cam, 'video')}
+                    onClick={() => {
+                      void modeSingleGoPro(cam, 'video');
+                    }}
                     className={`min-h-[34px] inline-flex items-center justify-center gap-1 rounded-lg border text-[11px] font-bold ${
                       cam.captureMode === 'video'
                         ? 'border-[#E10600] bg-[#E10600]/20 text-white'
@@ -617,7 +548,9 @@ export const GoProBlePanel: React.FC = () => {
                   <button
                     type="button"
                     disabled={disconnectedOrSleeping}
-                    onClick={() => handleModeSingle(cam, 'photo')}
+                    onClick={() => {
+                      void modeSingleGoPro(cam, 'photo');
+                    }}
                     className={`min-h-[34px] inline-flex items-center justify-center gap-1 rounded-lg border text-[11px] font-bold ${
                       cam.captureMode === 'photo'
                         ? 'border-amber-400 bg-amber-500/20 text-amber-200'
@@ -634,7 +567,9 @@ export const GoProBlePanel: React.FC = () => {
                   <button
                     type="button"
                     disabled={disconnectedOrSleeping}
-                    onClick={() => handleShutterSingle(cam, !cam.recording)}
+                    onClick={() => {
+                      void shutterSingleGoPro(cam, !cam.recording);
+                    }}
                     className={`col-span-2 min-h-[40px] rounded-lg text-xs font-extrabold uppercase ${
                       cam.recording
                         ? 'bg-zinc-800 text-white border border-zinc-600'
@@ -646,21 +581,8 @@ export const GoProBlePanel: React.FC = () => {
                   <button
                     type="button"
                     disabled={cam.reconnecting}
-                    onClick={async () => {
-                      if (disconnectedOrSleeping) {
-                        if (!cam.isSimulated) {
-                          await wakeOrReconnectGoProById(cam.id, cam.name, updateCamera).catch((err) =>
-                            setErrorMsg(
-                              err instanceof Error ? err.message : 'Falha ao acordar GoPro.'
-                            )
-                          );
-                        } else {
-                          updateCamera(cam.id, { sleeping: false, connected: true });
-                        }
-                      } else {
-                        if (!cam.isSimulated) await sendGoProSleep(cam.id).catch(() => {});
-                        updateCamera(cam.id, { sleeping: true, connected: false, recording: false });
-                      }
+                    onClick={() => {
+                      void toggleSingleGoProPower(cam);
                     }}
                     className={`min-h-[40px] inline-flex items-center justify-center gap-1 rounded-lg border px-1.5 text-[11px] font-bold ${
                       disconnectedOrSleeping

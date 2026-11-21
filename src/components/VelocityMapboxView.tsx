@@ -52,6 +52,7 @@ interface VelocityMapboxViewProps {
   onSelectTrap?: (trapId: string) => void;
   onDragTrapEnd?: (trapId: string, lat: number, lon: number) => void;
   onCenterChange?: (lat: number, lon: number) => void;
+  fullscreenOverlay?: React.ReactNode;
 }
 
 function trapColorByKind(kind: TrapKind): string {
@@ -194,6 +195,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   onSelectTrap,
   onDragTrapEnd,
   onCenterChange,
+  fullscreenOverlay,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -724,11 +726,22 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         <button
           type="button"
           onClick={handlePlaceAtCrosshair}
-          className="pitstop-btn-red absolute bottom-3 left-3 z-[400] inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-extrabold text-white shadow-xl active:scale-95"
+          className={`pitstop-btn-red absolute z-[410] inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-extrabold text-white shadow-xl active:scale-95 ${
+            isFullscreen && fullscreenOverlay ? 'top-2.5 left-2.5' : 'bottom-3 left-3'
+          }`}
         >
           <Plus className="h-4 w-4" />
           <span>Marcar na Mira</span>
         </button>
+      )}
+
+      {/* Barra flutuante de criação/edição de Marcos exclusiva do modo Tela Cheia */}
+      {isFullscreen && fullscreenOverlay && (
+        <div className="pointer-events-none absolute inset-x-2.5 bottom-2.5 z-[410] flex justify-center pr-12 sm:pr-0">
+          <div className="pointer-events-auto w-full max-w-2xl">
+            {fullscreenOverlay}
+          </div>
+        </div>
       )}
     </div>
   );
