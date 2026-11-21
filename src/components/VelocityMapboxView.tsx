@@ -14,6 +14,7 @@ import {
 import {
   buildMarcoArrowGeometry,
   buildMarcoGateLineString,
+  computeSampleGForces,
   type TrapKind,
   type VelocitySample,
   type VelocityTrap,
@@ -43,6 +44,7 @@ interface VelocityMapboxViewProps {
   currentPos: { lat: number; lon: number } | null;
   navigationMode?: boolean;
   navHeadingDeg?: number | null;
+  heatmapMode?: 'none' | 'speed' | 'accel';
   containerClassName?: string;
   placementKind?: TrapKind | null;
   selectedTrapId?: string | null;
@@ -184,6 +186,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   currentPos,
   navigationMode = false,
   navHeadingDeg = null,
+  heatmapMode = 'none',
   containerClassName = 'relative mt-2 h-80 w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[420px]',
   placementKind = null,
   selectedTrapId = null,
@@ -322,16 +325,64 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     return () => window.clearTimeout(t);
   }, [isFullscreen]);
 
-  // Renderiza traçado e ponto scrubber
+  // Renderiza traçado (linha simples ou mapa de calor por velocidade / aceleração) e ponto scrubber
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
     if (!routeLayer) return;
     routeLayer.clearLayers();
 
     if (editableTrace.length > 1) {
-      const latLngs: [number, number][] = editableTrace.map((s) => [s.lat, s.lon]);
-      L.polyline(latLngs, { color: '#FFFFFF', weight: 6, opacity: 0.85 }).addTo(routeLayer);
-      L.polyline(latLngs, { color: '#E10600', weight: 3.5, opacity: 0.95 }).addTo(routeLayer);
+      if (heatmapMode === 'none') {
+        const latLngs: [number, number][] = editableTrace.map((s) => [s.lat, s.lon]);
+        L.polyline(latLngs, { color: '#FFFFFF', weight: 6, opacity: 0.85 }).addTo(routeLayer);
+        L.polyline(latLngs, { color: '#E10600', weight: 3.5, opacity: 0.95 }).addTo(routeLayer);
+      } else {
+        const maxSpd = Math.max(
+          60,
+          ...editableTrace.map((s) => (Number.isFinite(s.speedKmh) ? s.speedKmh : 0))
+        );
+        const minSpd = Math.min(
+          maxSpd - 10,
+          ...editableTrace.map((s) => (Number.isFinite(s.speedKmh) ? s.speedKmh : maxSpd))
+        );
+
+        for (let i = 1; i < editableTrace.length; i += 1) {
+          const prev = editableTrace[i - 1];
+          const curr = editableTrace[i];
+          let segColor = '#f59e0b';
+
+          if (heatmapMode === 'speed') {
+            const ratio = Math.max(
+              0,
+              Math.min(1, (curr.speedKmh - minSpd) / Math.max(15, maxSpd - minSpd))
+            );
+            segColor =
+              ratio >= 0.66 ? '#10b981' : ratio >= 0.33 ? '#f59e0b' : '#E10600';
+          } else {
+            const longG =
+              typeof curr.accelLongG === 'number'
+                ? curr.accelLongG
+                : computeSampleGForces(prev, curr).accelLongG;
+            segColor =
+              longG > 0.06 ? '#10b981' : longG < -0.06 ? '#E10600' : '#f59e0b';
+          }
+
+          L.polyline(
+            [
+              [prev.lat, prev.lon],
+              [curr.lat, curr.lon],
+            ],
+            { color: '#000000', weight: 7, opacity: 0.55 }
+          ).addTo(routeLayer);
+          L.polyline(
+            [
+              [prev.lat, prev.lon],
+              [curr.lat, curr.lon],
+            ],
+            { color: segColor, weight: 4.5, opacity: 0.98 }
+          ).addTo(routeLayer);
+        }
+      }
     }
 
     const scrubber = editableTrace[postEditIdx];
@@ -339,12 +390,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       L.circleMarker([scrubber.lat, scrubber.lon], {
         radius: 7,
         color: '#FFFFFF',
-        weight: 2,
+        weight: 2.5,
         fillColor: '#38bdf8',
         fillOpacity: 1,
       }).addTo(routeLayer);
     }
-  }, [editableTrace, postEditIdx]);
+  }, [editableTrace, postEditIdx, heatmapMode]);
 
   // Renderiza cada Marco (@turf/turf linha transversal + seta perpendicular + marcador central no mesmo ponto)
   const gatesDataKey = useMemo(

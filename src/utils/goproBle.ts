@@ -1,4 +1,7 @@
-// Open GoPro BLE GATT API (0xFEA6) Controller & Bench Simulator for up to 7 cameras
+// Open GoPro BLE GATT API (0xFEA6) Controller via @capacitor-community/bluetooth-le
+// Native Android/iOS APK + Web Bluetooth fallback + Bench Simulator (up to 7 cameras)
+import { Capacitor } from '@capacitor/core';
+import { BleClient, numbersToDataView } from '@capacitor-community/bluetooth-le';
 
 export const GOPRO_SERVICE_UUID = '0000fea6-0000-1000-8000-00805f9b34fb';
 export const GOPRO_CMD_REQ_UUID = 'b5f90072-aa8d-11e3-9046-0002a5d5c51b';
@@ -8,10 +11,18 @@ export const GOPRO_SET_RSP_UUID = 'b5f90075-aa8d-11e3-9046-0002a5d5c51b';
 export const GOPRO_QRY_REQ_UUID = 'b5f90076-aa8d-11e3-9046-0002a5d5c51b';
 export const GOPRO_QRY_RSP_UUID = 'b5f90077-aa8d-11e3-9046-0002a5d5c51b';
 
+const SAVED_GOPRO_KEY = 'pitstop_saved_gopro_devices_v1';
+
 export type GoProResolution = '4K' | '2.7K' | '1080p';
 export type GoProFps = 30 | 60 | 120;
 export type GoProHyperSmooth = 'off' | 'on' | 'boost' | 'autoboost';
 export type GoProLens = 'wide' | 'linear' | 'superview' | 'horizon_lock';
+export type GoProCaptureMode = 'video' | 'photo';
+
+export interface SavedGoProDevice {
+  deviceId: string;
+  name: string;
+}
 
 export interface GoProCameraState {
   id: string;
@@ -21,6 +32,7 @@ export interface GoProCameraState {
   reconnecting: boolean;
   sleeping: boolean;
   recording: boolean;
+  captureMode: GoProCaptureMode;
   encodingDurationSec: number;
   batteryPct: number;
   sdRemainingMin: number;
@@ -34,47 +46,8 @@ export interface GoProCameraState {
   lastSeenMs: number;
 }
 
-interface BleCharacteristicLike extends EventTarget {
-  writeValueWithResponse?: (val: BufferSource) => Promise<void>;
-  writeValue?: (val: BufferSource) => Promise<void>;
-  startNotifications?: () => Promise<BleCharacteristicLike>;
-  value?: DataView;
-}
-
-interface BleGattServerLike {
-  connected: boolean;
-  connect: () => Promise<BleGattServerLike>;
-  disconnect: () => void;
-  getPrimaryService: (uuid: string) => Promise<{
-    getCharacteristic: (uuid: string) => Promise<BleCharacteristicLike>;
-  }>;
-}
-
-interface BleDeviceLike extends EventTarget {
-  id: string;
-  name?: string;
-  gatt?: BleGattServerLike;
-}
-
-interface NavigatorBluetoothExt extends Navigator {
-  bluetooth?: {
-    requestDevice: (opts: {
-      filters?: { services?: string[]; namePrefix?: string }[];
-      optionalServices?: string[];
-      acceptAllDevices?: boolean;
-    }) => Promise<BleDeviceLike>;
-  };
-}
-
-interface LiveBleSession {
-  device: BleDeviceLike;
-  cmdReq: BleCharacteristicLike;
-  setReq: BleCharacteristicLike;
-  qryReq: BleCharacteristicLike;
-  parseQueryResponse: (ev: Event) => void;
-}
-
-const liveSessions = new Map<string, LiveBleSession>();
+const connectedDeviceIds = new Set<string>();
+let bleInitPromise: Promise<void> | null = null;
 
 // Open GoPro Setting ID mappings
 const RESOLUTION_VALUE_MAP: Record<GoProResolution, number> = {
@@ -103,132 +76,206 @@ const LENS_VALUE_MAP: Record<GoProLens, number> = {
   horizon_lock: 8,
 };
 
-function encodeShutterPacket(start: boolean): Uint8Array {
-  return new Uint8Array([0x03, 0x01, 0x01, start ? 0x01 : 0x00]);
-}
+// Exact Open GoPro BLE Command Payloads
+const CMD_SHUTTER_START = [0x03, 0x01, 0x01, 0x01];
+const CMD_SHUTTER_STOP = [0x03, 0x01, 0x01, 0x00];
+const CMD_MODE_VIDEO = [0x04, 0x3e, 0x02, 0x03, 0xe8];
+const CMD_MODE_PHOTO = [0x04, 0x3e, 0x02, 0x03, 0xe9];
+const CMD_SLEEP = [0x01, 0x05];
+const CMD_KEEP_ALIVE = [0x03, 0x5b, 0x01, 0x42];
+const QRY_STATUS_POLL = [0x06, 0x13, 10, 13, 70, 35, 6];
 
-function encodeSleepPacket(): Uint8Array {
-  return new Uint8Array([0x01, 0x05]);
-}
-
-function encodeKeepAlivePacket(): Uint8Array {
-  return new Uint8Array([0x03, 0x5b, 0x01, 0x42]);
-}
-
-function encodeSettingPacket(settingId: number, value: number): Uint8Array {
-  return new Uint8Array([0x03, settingId, 0x01, value]);
-}
-
-function encodeStatusQueryPacket(): Uint8Array {
-  // Query ID 10 (encoding), ID 13 (duration sec), ID 70 (battery %), ID 35 (SD rem), ID 6 (overheating)
-  return new Uint8Array([0x06, 0x13, 10, 13, 70, 35, 6]);
-}
-
-async function writeBleCharacteristic(
-  chr: BleCharacteristicLike,
-  bytes: Uint8Array
-): Promise<void> {
-  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  if (typeof chr.writeValueWithResponse === 'function') {
-    await chr.writeValueWithResponse(buf);
-  } else if (typeof chr.writeValue === 'function') {
-    await chr.writeValue(buf);
+export function loadSavedGoProDevices(): SavedGoProDevice[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(SAVED_GOPRO_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (x): x is SavedGoProDevice =>
+        Boolean(x && typeof x.deviceId === 'string' && x.deviceId.length > 0)
+    );
+  } catch {
+    return [];
   }
 }
 
-export function isWebBluetoothSupported(): boolean {
+export function saveGoProDeviceToStorage(deviceId: string, name: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const list = loadSavedGoProDevices();
+    const filtered = list.filter((d) => d.deviceId !== deviceId);
+    filtered.unshift({ deviceId, name: name || 'GoPro HERO' });
+    window.localStorage.setItem(SAVED_GOPRO_KEY, JSON.stringify(filtered.slice(0, 12)));
+  } catch {
+    // Ignore quota errors
+  }
+}
+
+export function removeSavedGoProDevice(deviceId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const filtered = loadSavedGoProDevices().filter((d) => d.deviceId !== deviceId);
+    window.localStorage.setItem(SAVED_GOPRO_KEY, JSON.stringify(filtered));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function isGoProBleSupported(): boolean {
+  if (Capacitor.isNativePlatform()) return true;
   if (typeof navigator === 'undefined') return false;
-  const nav = navigator as NavigatorBluetoothExt;
+  const nav = navigator as Navigator & {
+    bluetooth?: { requestDevice?: unknown };
+  };
   return Boolean(nav.bluetooth && typeof nav.bluetooth.requestDevice === 'function');
+}
+
+export async function ensureGoProBleInitialized(): Promise<void> {
+  if (!isGoProBleSupported()) {
+    throw new Error(
+      'Bluetooth BLE indisponível neste navegador. Use o App Android (.apk), Chrome no Android ou o Simulador.'
+    );
+  }
+  if (!bleInitPromise) {
+    bleInitPromise = BleClient.initialize({ androidNeverForLocation: true }).catch((err) => {
+      bleInitPromise = null;
+      throw err;
+    });
+  }
+  await bleInitPromise;
+
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const enabled = await BleClient.isEnabled();
+      if (!enabled) {
+        await BleClient.requestEnable();
+      }
+    } catch {
+      // User may enable Bluetooth manually or OS already handles it
+    }
+  }
+}
+
+function parseQueryNotification(
+  camId: string,
+  view: DataView,
+  onTelemetryUpdate: (id: string, patch: Partial<GoProCameraState>) => void
+): void {
+  if (!view || view.byteLength < 4) return;
+  let idx = 3;
+  const patch: Partial<GoProCameraState> = {
+    lastSeenMs: Date.now(),
+    connected: true,
+    sleeping: false,
+  };
+  while (idx + 2 <= view.byteLength) {
+    const statusId = view.getUint8(idx);
+    const valLen = view.getUint8(idx + 1);
+    idx += 2;
+    if (idx + valLen > view.byteLength) break;
+    if (statusId === 10 && valLen >= 1) {
+      patch.recording = view.getUint8(idx) === 1;
+    } else if (statusId === 70 && valLen >= 1) {
+      patch.batteryPct = Math.min(100, view.getUint8(idx));
+    } else if (statusId === 6 && valLen >= 1) {
+      patch.overheating = view.getUint8(idx) === 1;
+    } else if (statusId === 13 && valLen >= 4) {
+      patch.encodingDurationSec = view.getUint32(idx, false);
+    } else if (statusId === 35 && valLen >= 4) {
+      const remSec = view.getUint32(idx, false);
+      patch.sdRemainingMin = Math.round(remSec / 60);
+      patch.sdFull = remSec <= 60;
+    }
+    idx += valLen;
+  }
+  onTelemetryUpdate(camId, patch);
+}
+
+async function connectGattAndSubscribe(
+  deviceId: string,
+  onTelemetryUpdate: (camId: string, patch: Partial<GoProCameraState>) => void
+): Promise<void> {
+  await BleClient.connect(deviceId, (disconnectedId) => {
+    connectedDeviceIds.delete(disconnectedId);
+    onTelemetryUpdate(disconnectedId, {
+      connected: false,
+      reconnecting: false,
+      recording: false,
+    });
+  });
+
+  connectedDeviceIds.add(deviceId);
+
+  if (Capacitor.isNativePlatform()) {
+    await BleClient.discoverServices(deviceId).catch(() => {});
+  }
+
+  // Subscribe to Command Response & Query Status notifications
+  await BleClient.startNotifications(
+    deviceId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_CMD_RSP_UUID,
+    () => {
+      onTelemetryUpdate(deviceId, { lastSeenMs: Date.now(), connected: true, sleeping: false });
+    }
+  ).catch(() => {});
+
+  await BleClient.startNotifications(
+    deviceId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_QRY_RSP_UUID,
+    (value) => parseQueryNotification(deviceId, value, onTelemetryUpdate)
+  ).catch(() => {});
+
+  // Read Query Characteristic if exposed + send Keep-Alive & initial poll
+  await BleClient.read(deviceId, GOPRO_SERVICE_UUID, GOPRO_QRY_REQ_UUID)
+    .then((val) => parseQueryNotification(deviceId, val, onTelemetryUpdate))
+    .catch(() => {});
+
+  await BleClient.write(
+    deviceId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_CMD_REQ_UUID,
+    numbersToDataView(CMD_KEEP_ALIVE)
+  ).catch(() => {});
+
+  await BleClient.write(
+    deviceId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_QRY_REQ_UUID,
+    numbersToDataView(QRY_STATUS_POLL)
+  ).catch(() => {});
 }
 
 export async function scanAndConnectGoProBle(
   onTelemetryUpdate: (camId: string, patch: Partial<GoProCameraState>) => void
 ): Promise<GoProCameraState> {
-  const nav = navigator as NavigatorBluetoothExt;
-  if (!nav.bluetooth?.requestDevice) {
-    throw new Error(
-      'Web Bluetooth BLE indisponível neste navegador/WebView. Use Chrome no Android ou ative o Simulador de Bancada.'
-    );
-  }
+  await ensureGoProBleInitialized();
 
-  const device = await nav.bluetooth.requestDevice({
-    filters: [{ services: [GOPRO_SERVICE_UUID] }, { namePrefix: 'GoPro' }],
+  const device = await BleClient.requestDevice({
+    services: [GOPRO_SERVICE_UUID],
     optionalServices: [GOPRO_SERVICE_UUID],
   });
 
-  if (!device.gatt) {
-    throw new Error('Dispositivo selecionado não expôs servidor GATT BLE.');
-  }
+  const camId = device.deviceId;
+  const camName = device.name || 'GoPro HERO';
 
-  const server = await device.gatt.connect();
-  const service = await server.getPrimaryService(GOPRO_SERVICE_UUID);
-  const cmdReq = await service.getCharacteristic(GOPRO_CMD_REQ_UUID);
-  const cmdRsp = await service.getCharacteristic(GOPRO_CMD_RSP_UUID);
-  const setReq = await service.getCharacteristic(GOPRO_SET_REQ_UUID);
-  const qryReq = await service.getCharacteristic(GOPRO_QRY_REQ_UUID);
-  const qryRsp = await service.getCharacteristic(GOPRO_QRY_RSP_UUID);
-
-  const camId = device.id || `gopro_${Date.now()}`;
-
-  const parseQueryResponse = (ev: Event) => {
-    const target = ev.target as BleCharacteristicLike | null;
-    const view = target?.value;
-    if (!view || view.byteLength < 4) return;
-    // Open GoPro Query response: [len, cmdId, err, statusId, valLen, val...]
-    let idx = 3;
-    const patch: Partial<GoProCameraState> = { lastSeenMs: Date.now(), connected: true, sleeping: false };
-    while (idx + 2 <= view.byteLength) {
-      const statusId = view.getUint8(idx);
-      const valLen = view.getUint8(idx + 1);
-      idx += 2;
-      if (idx + valLen > view.byteLength) break;
-      if (statusId === 10 && valLen >= 1) {
-        patch.recording = view.getUint8(idx) === 1;
-      } else if (statusId === 70 && valLen >= 1) {
-        patch.batteryPct = Math.min(100, view.getUint8(idx));
-      } else if (statusId === 6 && valLen >= 1) {
-        patch.overheating = view.getUint8(idx) === 1;
-      } else if (statusId === 13 && valLen >= 4) {
-        patch.encodingDurationSec = view.getUint32(idx, false);
-      } else if (statusId === 35 && valLen >= 4) {
-        const remSec = view.getUint32(idx, false);
-        patch.sdRemainingMin = Math.round(remSec / 60);
-        patch.sdFull = remSec <= 60;
-      }
-      idx += valLen;
-    }
-    onTelemetryUpdate(camId, patch);
-  };
-
-  try {
-    await cmdRsp.startNotifications?.();
-    await qryRsp.startNotifications?.();
-    qryRsp.addEventListener('characteristicvaluechanged', parseQueryResponse);
-  } catch {
-    // Ignore optional notify limitations on some devices
-  }
-
-  device.addEventListener('gattserverdisconnected', () => {
-    onTelemetryUpdate(camId, { connected: false, reconnecting: true });
-  });
-
-  liveSessions.set(camId, { device, cmdReq, setReq, qryReq, parseQueryResponse });
-
-  // Initial status poll & keepalive
-  writeBleCharacteristic(qryReq, encodeStatusQueryPacket()).catch(() => {});
-  writeBleCharacteristic(cmdReq, encodeKeepAlivePacket()).catch(() => {});
+  await connectGattAndSubscribe(camId, onTelemetryUpdate);
+  saveGoProDeviceToStorage(camId, camName);
 
   return {
     id: camId,
-    name: device.name || 'GoPro HERO',
-    model: device.name || 'HERO Open GoPro',
+    name: camName,
+    model: camName,
     connected: true,
     reconnecting: false,
     sleeping: false,
     recording: false,
+    captureMode: 'video',
     encodingDurationSec: 0,
-    batteryPct: 92,
+    batteryPct: 95,
     sdRemainingMin: 120,
     overheating: false,
     sdFull: false,
@@ -241,44 +288,100 @@ export async function scanAndConnectGoProBle(
   };
 }
 
+export async function wakeOrReconnectGoProById(
+  deviceId: string,
+  name: string,
+  onTelemetryUpdate: (camId: string, patch: Partial<GoProCameraState>) => void
+): Promise<GoProCameraState> {
+  await ensureGoProBleInitialized();
+
+  onTelemetryUpdate(deviceId, { reconnecting: true });
+  try {
+    await connectGattAndSubscribe(deviceId, onTelemetryUpdate);
+    onTelemetryUpdate(deviceId, {
+      connected: true,
+      reconnecting: false,
+      sleeping: false,
+      lastSeenMs: Date.now(),
+    });
+    return {
+      id: deviceId,
+      name: name || 'GoPro HERO',
+      model: name || 'GoPro HERO',
+      connected: true,
+      reconnecting: false,
+      sleeping: false,
+      recording: false,
+      captureMode: 'video',
+      encodingDurationSec: 0,
+      batteryPct: 95,
+      sdRemainingMin: 120,
+      overheating: false,
+      sdFull: false,
+      resolution: '4K',
+      fps: 60,
+      hypersmooth: 'boost',
+      lens: 'wide',
+      isSimulated: false,
+      lastSeenMs: Date.now(),
+    };
+  } catch (err) {
+    onTelemetryUpdate(deviceId, { connected: false, reconnecting: false });
+    throw err;
+  }
+}
+
 export async function sendGoProShutter(camId: string, start: boolean): Promise<void> {
-  const sess = liveSessions.get(camId);
-  if (!sess || !sess.device.gatt?.connected) return;
-  await writeBleCharacteristic(sess.cmdReq, encodeShutterPacket(start));
+  if (!connectedDeviceIds.has(camId)) return;
+  await BleClient.write(
+    camId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_CMD_REQ_UUID,
+    numbersToDataView(start ? CMD_SHUTTER_START : CMD_SHUTTER_STOP)
+  );
+}
+
+export async function sendGoProCaptureMode(camId: string, mode: GoProCaptureMode): Promise<void> {
+  if (!connectedDeviceIds.has(camId)) return;
+  await BleClient.write(
+    camId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_CMD_REQ_UUID,
+    numbersToDataView(mode === 'video' ? CMD_MODE_VIDEO : CMD_MODE_PHOTO)
+  );
 }
 
 export async function sendGoProSleep(camId: string): Promise<void> {
-  const sess = liveSessions.get(camId);
-  if (!sess || !sess.device.gatt?.connected) return;
-  await writeBleCharacteristic(sess.cmdReq, encodeSleepPacket());
+  if (!connectedDeviceIds.has(camId)) return;
+  await BleClient.write(
+    camId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_CMD_REQ_UUID,
+    numbersToDataView(CMD_SLEEP)
+  );
+  connectedDeviceIds.delete(camId);
 }
 
-export async function sendGoProWakeOrReconnect(
-  camId: string,
-  onTelemetryUpdate: (id: string, patch: Partial<GoProCameraState>) => void
-): Promise<void> {
-  const sess = liveSessions.get(camId);
-  if (!sess?.device.gatt) return;
-  if (!sess.device.gatt.connected) {
-    const server = await sess.device.gatt.connect();
-    const service = await server.getPrimaryService(GOPRO_SERVICE_UUID);
-    sess.cmdReq = await service.getCharacteristic(GOPRO_CMD_REQ_UUID);
-    const cmdRsp = await service.getCharacteristic(GOPRO_CMD_RSP_UUID);
-    sess.setReq = await service.getCharacteristic(GOPRO_SET_REQ_UUID);
-    sess.qryReq = await service.getCharacteristic(GOPRO_QRY_REQ_UUID);
-    const qryRsp = await service.getCharacteristic(GOPRO_QRY_RSP_UUID);
-    try {
-      await cmdRsp.startNotifications?.();
-      await qryRsp.startNotifications?.();
-      qryRsp.removeEventListener('characteristicvaluechanged', sess.parseQueryResponse);
-      qryRsp.addEventListener('characteristicvaluechanged', sess.parseQueryResponse);
-    } catch {
-      // Ignore optional notification errors
-    }
+export async function sendGoProKeepAliveAndPoll(camId: string): Promise<void> {
+  if (!connectedDeviceIds.has(camId)) return;
+  await BleClient.write(
+    camId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_CMD_REQ_UUID,
+    numbersToDataView(CMD_KEEP_ALIVE)
+  ).catch(() => {});
+  await BleClient.write(
+    camId,
+    GOPRO_SERVICE_UUID,
+    GOPRO_QRY_REQ_UUID,
+    numbersToDataView(QRY_STATUS_POLL)
+  ).catch(() => {});
+}
+
+export function pollAllGoProKeepAlive(): void {
+  for (const camId of connectedDeviceIds) {
+    sendGoProKeepAliveAndPoll(camId).catch(() => {});
   }
-  await writeBleCharacteristic(sess.cmdReq, encodeKeepAlivePacket());
-  await writeBleCharacteristic(sess.qryReq, encodeStatusQueryPacket());
-  onTelemetryUpdate(camId, { connected: true, reconnecting: false, sleeping: false, lastSeenMs: Date.now() });
 }
 
 export async function applyGoProRemoteSettings(
@@ -290,41 +393,58 @@ export async function applyGoProRemoteSettings(
     lens?: GoProLens;
   }
 ): Promise<void> {
-  const sess = liveSessions.get(camId);
-  if (!sess || !sess.device.gatt?.connected) return;
+  if (!connectedDeviceIds.has(camId)) return;
   if (opts.resolution) {
-    await writeBleCharacteristic(sess.setReq, encodeSettingPacket(2, RESOLUTION_VALUE_MAP[opts.resolution]));
+    await BleClient.write(
+      camId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_SET_REQ_UUID,
+      numbersToDataView([0x03, 2, 0x01, RESOLUTION_VALUE_MAP[opts.resolution]])
+    );
   }
   if (opts.fps) {
-    await writeBleCharacteristic(sess.setReq, encodeSettingPacket(3, FPS_VALUE_MAP[opts.fps]));
+    await BleClient.write(
+      camId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_SET_REQ_UUID,
+      numbersToDataView([0x03, 3, 0x01, FPS_VALUE_MAP[opts.fps]])
+    );
   }
   if (opts.hypersmooth) {
-    await writeBleCharacteristic(sess.setReq, encodeSettingPacket(135, HYPERSMOOTH_VALUE_MAP[opts.hypersmooth]));
+    await BleClient.write(
+      camId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_SET_REQ_UUID,
+      numbersToDataView([0x03, 135, 0x01, HYPERSMOOTH_VALUE_MAP[opts.hypersmooth]])
+    );
   }
   if (opts.lens) {
-    await writeBleCharacteristic(sess.setReq, encodeSettingPacket(121, LENS_VALUE_MAP[opts.lens]));
+    await BleClient.write(
+      camId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_SET_REQ_UUID,
+      numbersToDataView([0x03, 121, 0x01, LENS_VALUE_MAP[opts.lens]])
+    );
   }
 }
 
-export function pollAllGoProStatus(): void {
-  for (const [, sess] of liveSessions) {
-    if (sess.device.gatt?.connected) {
-      writeBleCharacteristic(sess.qryReq, encodeStatusQueryPacket()).catch(() => {});
-      writeBleCharacteristic(sess.cmdReq, encodeKeepAlivePacket()).catch(() => {});
-    }
-  }
-}
-
-export function disconnectGoProBle(camId: string): void {
-  const sess = liveSessions.get(camId);
-  if (sess?.device.gatt?.connected) {
-    sess.device.gatt.disconnect();
-  }
-  liveSessions.delete(camId);
+export async function disconnectGoProBle(camId: string): Promise<void> {
+  connectedDeviceIds.delete(camId);
+  await BleClient.stopNotifications(camId, GOPRO_SERVICE_UUID, GOPRO_CMD_RSP_UUID).catch(() => {});
+  await BleClient.stopNotifications(camId, GOPRO_SERVICE_UUID, GOPRO_QRY_RSP_UUID).catch(() => {});
+  await BleClient.disconnect(camId).catch(() => {});
 }
 
 export function createSimulatedCameraFleet(count = 5): GoProCameraState[] {
-  const positions = ['Capô Frontal', 'Para-Brisa Interno', 'Santo Antônio', 'Para-Choque Diant.', 'Traseira', 'Suspensão Esq.', 'Capacete Navegador'];
+  const positions = [
+    'Capô Frontal',
+    'Para-Brisa Interno',
+    'Santo Antônio',
+    'Para-Choque Diant.',
+    'Traseira',
+    'Suspensão Esq.',
+    'Capacete Navegador',
+  ];
   const clamped = Math.min(7, Math.max(1, count));
   return Array.from({ length: clamped }).map((_, i) => ({
     id: `sim_gp_${i + 1}`,
@@ -334,6 +454,7 @@ export function createSimulatedCameraFleet(count = 5): GoProCameraState[] {
     reconnecting: false,
     sleeping: false,
     recording: false,
+    captureMode: 'video',
     encodingDurationSec: 0,
     batteryPct: Math.max(24, 96 - i * 11),
     sdRemainingMin: 185 - i * 18,

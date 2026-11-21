@@ -95,12 +95,22 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
       <div className="relative flex w-full max-w-4xl flex-col items-center">
         <PitStopLogo variant="full" animated className="w-full max-w-sm sm:max-w-xl" />
 
-        <h1 className="mt-4 font-['Barlow_Condensed'] text-2xl font-extrabold italic tracking-wide text-white uppercase sm:mt-5 sm:text-4xl">
-          Rotas <span className="text-[#E10600]">na medida exata</span>
-        </h1>
+        <div className="-mt-2 flex items-center justify-center gap-2.5 sm:-mt-3">
+          <span
+            aria-hidden="true"
+            className="h-px w-6 bg-gradient-to-r from-transparent to-zinc-600/60 sm:w-10"
+          />
+          <p className="pitstop-slogan-text font-['Barlow_Condensed'] text-xs font-bold italic tracking-[0.28em] uppercase sm:text-sm">
+            Rotas na medida exata
+          </p>
+          <span
+            aria-hidden="true"
+            className="h-px w-6 bg-gradient-to-l from-transparent to-zinc-600/60 sm:w-10"
+          />
+        </div>
 
         {/* Primary Motorsport Launch Actions — clean 4-button grid */}
-        <div className="mt-4 grid w-full max-w-3xl grid-cols-2 gap-2 sm:mt-6 lg:grid-cols-4 sm:gap-2.5">
+        <div className="mt-5 grid w-full max-w-3xl grid-cols-2 gap-2 sm:mt-7 lg:grid-cols-4 sm:gap-2.5">
           <button
             type="button"
             onClick={() => onNavigate('navegacao')}

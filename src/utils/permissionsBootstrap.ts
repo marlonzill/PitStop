@@ -1,3 +1,4 @@
+import { BleClient } from '@capacitor-community/bluetooth-le';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem } from '@capacitor/filesystem';
 import { Geolocation } from '@capacitor/geolocation';
@@ -92,16 +93,22 @@ export async function checkAllPermissionsStatus(): Promise<AppPermissionsSnapsho
 
   // Bluetooth
   try {
-    const navExt = navigator as NavigatorExtended;
-    if (navExt.bluetooth) {
-      if (typeof navExt.bluetooth.getAvailability === 'function') {
-        const avail = await navExt.bluetooth.getAvailability();
-        result.bluetooth = avail ? 'granted' : 'prompt';
-      } else {
-        result.bluetooth = 'prompt';
-      }
+    if (Capacitor.isNativePlatform()) {
+      await BleClient.initialize({ androidNeverForLocation: true }).catch(() => {});
+      const enabled = await BleClient.isEnabled().catch(() => false);
+      result.bluetooth = enabled ? 'granted' : 'prompt';
     } else {
-      result.bluetooth = Capacitor.isNativePlatform() ? 'prompt' : 'unsupported';
+      const navExt = navigator as NavigatorExtended;
+      if (navExt.bluetooth) {
+        if (typeof navExt.bluetooth.getAvailability === 'function') {
+          const avail = await navExt.bluetooth.getAvailability();
+          result.bluetooth = avail ? 'granted' : 'prompt';
+        } else {
+          result.bluetooth = 'prompt';
+        }
+      } else {
+        result.bluetooth = 'unsupported';
+      }
     }
   } catch {
     result.bluetooth = 'prompt';

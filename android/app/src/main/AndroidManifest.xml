@@ -51,7 +51,9 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
-    <!-- Bluetooth / BLE for Open GoPro & External GPS -->
+    <!-- Bluetooth / BLE (Open GoPro HERO9-HERO13 via @capacitor-community/bluetooth-le) & External GPS
+         Permissões obrigatórias no Android 12+ (API 31+): BLUETOOTH_SCAN, BLUETOOTH_CONNECT
+         Android <= 11 (API <= 30): BLUETOOTH, BLUETOOTH_ADMIN e ACCESS_FINE_LOCATION (declarada acima). -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />

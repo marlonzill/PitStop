@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Calculator, Flag, Home, Route, Settings } from 'lucide-react';
 import { InitialStatusTab } from './components/InitialStatusTab';
 import { NavigationCockpit } from './components/NavigationCockpit';
@@ -14,6 +15,8 @@ import { normalizeRoomCode, normalizeRoomPin } from './utils/pairingClient';
 import { bootstrapFirstRunPermissions } from './utils/permissionsBootstrap';
 
 const isCompetitorEnv = import.meta.env.VITE_APP_TARGET === 'competitor';
+const isNativeAndroid =
+  Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 
 function readUrlRoute(): {
   isApuracao: boolean;
@@ -178,11 +181,15 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-rally-asphalt text-[#F4F4F4] flex flex-col">
-      {/* PitStop-Sports Safe-Area Top Header */}
-      <header className="sticky top-0 z-30 pt-safe bg-[#080B0D]/95 text-white backdrop-blur-md">
+      {/* PitStop-Sports Top Header (flush at top on native Android WebView) */}
+      <header
+        className={`sticky top-0 z-30 bg-[#080B0D]/95 text-white backdrop-blur-md ${
+          isNativeAndroid ? '' : 'pt-safe'
+        }`}
+      >
         <div className="relative overflow-hidden">
-          <div className="relative mx-auto flex min-h-[50px] max-w-7xl items-center justify-between gap-1.5 px-2 py-1 sm:min-h-[56px] sm:gap-3 sm:px-4 sm:py-1.5 lg:px-8">
-            {/* Compact stylized P badge on both mobile and desktop */}
+          <div className="relative mx-auto flex min-h-[54px] max-w-7xl items-center justify-between gap-1.5 px-2 py-1 sm:min-h-[58px] sm:gap-3 sm:px-4 sm:py-1.5 lg:px-8">
+            {/* Stylized PitStop P badge */}
             <a
               href={import.meta.env.BASE_URL}
               onClick={(e) => {
@@ -198,29 +205,29 @@ export default function App() {
             >
               <PitStopLogo
                 variant="icon"
-                className="h-9 w-9 sm:h-10 sm:w-10 transition-transform group-hover:scale-105"
+                className="h-10 w-10 sm:h-11 sm:w-11 transition-transform group-hover:scale-105"
               />
             </a>
 
-            {/* 5 Ordered Tabs: compact single-row icon bar on smartphones, icon + text on desktop */}
+            {/* 5 Ordered Tabs: larger icon + clear abbreviation on mobile, full label on desktop */}
             {!isApuracao && !publicResultSlug ? (
               <nav
                 aria-label="Menu principal"
-                className="flex flex-1 items-center justify-between gap-0.5 rounded-lg border border-zinc-800 bg-[#111214] p-0.5 lg:flex-none lg:gap-1"
+                className="flex flex-1 items-center justify-between gap-0.5 rounded-xl border border-zinc-800 bg-[#111214] p-0.5 lg:flex-none lg:gap-1"
               >
                 <button
                   type="button"
                   onClick={() => setActiveTab('inicial')}
                   aria-label="Início"
                   title="Início"
-                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-1.5 rounded-lg px-1 py-1 sm:px-2.5 text-[10px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'inicial'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
                   <Home className="h-4 w-4 shrink-0" />
-                  <span className="hidden lg:inline">Início</span>
+                  <span className="leading-none">Início</span>
                 </button>
 
                 <button
@@ -228,13 +235,14 @@ export default function App() {
                   onClick={() => setActiveTab('navegacao')}
                   aria-label="Regularidade"
                   title="Regularidade"
-                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-1.5 rounded-lg px-1 py-1 sm:px-2.5 text-[10px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'navegacao'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
                   <Route className="h-4 w-4 shrink-0" />
+                  <span className="leading-none lg:hidden">Regul.</span>
                   <span className="hidden lg:inline">Regularidade</span>
                 </button>
 
@@ -243,13 +251,14 @@ export default function App() {
                   onClick={() => setActiveTab('velocidade')}
                   aria-label="Velocidade"
                   title="Velocidade"
-                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-1.5 rounded-lg px-1 py-1 sm:px-2.5 text-[10px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'velocidade'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
                   <Flag className="h-4 w-4 shrink-0" />
+                  <span className="leading-none lg:hidden">Veloc.</span>
                   <span className="hidden lg:inline">Velocidade</span>
                 </button>
 
@@ -258,13 +267,14 @@ export default function App() {
                   onClick={() => setActiveTab('calculadora')}
                   aria-label="Calculadora"
                   title="Calculadora"
-                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-1.5 rounded-lg px-1 py-1 sm:px-2.5 text-[10px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'calculadora'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
                   <Calculator className="h-4 w-4 shrink-0" />
+                  <span className="leading-none lg:hidden">Calc.</span>
                   <span className="hidden lg:inline">Calculadora</span>
                 </button>
 
@@ -273,13 +283,14 @@ export default function App() {
                   onClick={() => openSettingsSection('hub')}
                   aria-label="Configurações"
                   title="Configurações"
-                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-1.5 rounded-lg px-1 py-1 sm:px-2.5 text-[10px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'configuracoes'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
                   <Settings className="h-4 w-4 shrink-0" />
+                  <span className="leading-none lg:hidden">Config.</span>
                   <span className="hidden lg:inline">Configurações</span>
                 </button>
               </nav>

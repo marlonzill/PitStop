@@ -134,21 +134,13 @@ export const PitStopLogo: React.FC<PitStopLogoProps> = ({
   return (
     <div className={`relative flex w-full items-center justify-center ${className}`}>
       {!imgError ? (
-        <div
-          className="relative w-full max-w-3xl overflow-hidden"
-          style={{
-            WebkitMaskImage:
-              'radial-gradient(ellipse 68% 64% at 50% 50%, rgba(0,0,0,1) 34%, rgba(0,0,0,0.62) 60%, rgba(0,0,0,0) 93%)',
-            maskImage:
-              'radial-gradient(ellipse 68% 64% at 50% 50%, rgba(0,0,0,1) 34%, rgba(0,0,0,0.62) 60%, rgba(0,0,0,0) 93%)',
-          }}
-        >
+        <div className="pitstop-hero-mask relative w-full max-w-3xl overflow-hidden">
           <img
             src={heroSrc}
             alt="PitStop-Sports"
             referrerPolicy="no-referrer"
             onError={() => setImgError(true)}
-            className="block h-auto w-full select-none object-cover scale-[1.03]"
+            className="block h-auto w-full select-none object-cover mix-blend-lighten"
           />
 
           {/* Synchronized animated diagonal lighting running along the 3333.png speed blades */}

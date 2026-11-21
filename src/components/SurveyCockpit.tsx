@@ -11,22 +11,15 @@ import {
   CornerUpRight,
   Flag,
   MapPin,
-  Minus,
   Navigation,
-  Plus,
   RotateCcw,
   Satellite,
   ShieldAlert,
-  SlidersHorizontal,
   Upload,
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import {
-  calibrationPctFromWValue,
-  useNavSettings,
-  wValueFromCalibrationPct,
-} from '../utils/navSettings';
+import { useNavSettings } from '../utils/navSettings';
 import { haversineMeters } from '../utils/rallyEngine';
 import {
   bearingBetweenDeg,
@@ -183,7 +176,7 @@ function classifyTurn(signedDeg: number): { kind: ManeuverKind; label: string } 
 }
 
 function renderManeuverIcon(kind: ManeuverKind) {
-  const cls = 'h-7 w-7 sm:h-8 sm:w-8 text-white shrink-0';
+  const cls = 'h-5 w-5 text-white shrink-0';
   switch (kind) {
     case 'left':
       return <CornerUpLeft className={cls} />;
@@ -207,7 +200,7 @@ interface SurveyCockpitProps {
 }
 
 export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true }) => {
-  const [settings, updateSettings] = useNavSettings();
+  const [settings] = useNavSettings();
   const [source, setSource] = useState<DriveMode>('gps');
   const [totalKm, setTotalKm] = useState(0);
   const [tripKm, setTripKm] = useState(0);
@@ -626,17 +619,11 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     setTripKm((v) => Math.max(0, v + deltaKm));
   };
 
-  const adjustCalPct = (delta: number) => {
-    const next = Math.min(130, Math.max(70, Number((settings.calibrationPct + delta).toFixed(2))));
-    updateSettings({ calibrationPct: next });
-  };
-
   const displayedTripKm = regressive ? Math.max(0, targetKm - tripKm) : tripKm;
   const avgSpeedKmh =
     avgSpeedSamples.length > 0
       ? Math.round(avgSpeedSamples.reduce((a, b) => a + b, 0) / avgSpeedSamples.length)
       : 0;
-  const activeW = wValueFromCalibrationPct(settings.calibrationPct, settings.wBaseValue);
 
   const toggleWazeNavigation = () => {
     setWazeNavActive((prev) => {
@@ -664,11 +651,11 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   return (
     <div className="mx-auto max-w-5xl space-y-3 text-white">
       {/* Top Header: Levantamento + GPS/Simulador + Importar KML/KMZ */}
-      <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2.5">
+      <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2">
         <div className="flex items-center gap-2">
-          <Compass className="h-5 w-5 text-amber-400" />
-          <h1 className="font-['Barlow_Condensed'] text-lg font-extrabold italic tracking-wide uppercase sm:text-xl">
-            Levantamento · KML/KMZ
+          <Compass className="h-4 w-4 text-[#E10600]" />
+          <h1 className="font-['Barlow_Condensed'] text-lg font-extrabold italic tracking-wide uppercase">
+            Levantamento · KML
           </h1>
         </div>
 
@@ -781,35 +768,30 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
         </div>
       )}
 
-      {/* Mapbox Medium View + Waze Navigation HUD */}
-      <section className="rounded-2xl border border-zinc-800 bg-[#111214] p-3 sm:p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-zinc-800">
-          <div className="flex items-center gap-2 min-w-0">
-            <MapPin className="h-4 w-4 shrink-0 text-[#E10600]" />
-            <div className="min-w-0">
-              <p className="truncate text-xs font-extrabold text-white sm:text-sm">
-                {loadedTrack ? loadedTrack.name : 'Mapa Mapbox (Padrão: Erechim, RS)'}
-              </p>
-              <p className="font-mono text-[10px] text-[#B5B5B5]">
-                {loadedTrack
-                  ? `${loadedTrack.referenceDistanceKm.toFixed(2).replace('.', ',')} km · ${routeSamples.length} vértices · ${orderedTraps.length} pontos`
-                  : 'Importe um arquivo .KML ou .KMZ para visualizar e navegar estilo Waze'}
-              </p>
-            </div>
+      {/* Compact Map & Navegar HUD */}
+      <section className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 sm:p-3">
+        <div className="flex items-center justify-between gap-2 pb-2 border-b border-zinc-800">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <MapPin className="h-3.5 w-3.5 shrink-0 text-[#E10600]" />
+            <p className="truncate text-xs font-bold text-white">
+              {loadedTrack
+                ? `${loadedTrack.name} · ${loadedTrack.referenceDistanceKm.toFixed(1).replace('.', ',')} km`
+                : 'Mapa (Erechim / GPS)'}
+            </p>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 shrink-0">
             {wazeNavActive && (
               <button
                 type="button"
                 onClick={() => setWazeVoiceEnabled((v) => !v)}
-                title={wazeVoiceEnabled ? 'Silenciar voz Waze' : 'Ativar voz Waze'}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white"
+                title={wazeVoiceEnabled ? 'Silenciar voz' : 'Ativar voz'}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white"
               >
                 {wazeVoiceEnabled ? (
-                  <Volume2 className="h-4 w-4 text-emerald-400" />
+                  <Volume2 className="h-3.5 w-3.5 text-emerald-400" />
                 ) : (
-                  <VolumeX className="h-4 w-4" />
+                  <VolumeX className="h-3.5 w-3.5" />
                 )}
               </button>
             )}
@@ -817,38 +799,38 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             <button
               type="button"
               onClick={toggleWazeNavigation}
-              className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold uppercase transition-colors ${
+              className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-extrabold uppercase transition-colors ${
                 wazeNavActive
-                  ? 'bg-sky-500 text-slate-950 shadow-lg'
+                  ? 'bg-sky-500 text-slate-950'
                   : 'pitstop-btn-red text-white'
               }`}
             >
-              <Navigation className="h-3.5 w-3.5" />
-              <span>{wazeNavActive ? 'Navegando (Waze)' : 'Navegar tipo Waze'}</span>
+              <Navigation className="h-3 w-3" />
+              <span>{wazeNavActive ? 'Navegando' : 'Navegar'}</span>
             </button>
           </div>
         </div>
 
-        {/* Waze-Style Turn-by-Turn Guidance Banner */}
+        {/* Slim Waze Turn-by-Turn Strip */}
         {wazeNavActive && (
-          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-400/50 bg-gradient-to-r from-[#0B2A4A] to-[#081A2E] px-3.5 py-2.5 shadow-lg">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-sky-500/25 border border-sky-400/40">
-                {guidance ? renderManeuverIcon(guidance.kind) : <Navigation className="h-7 w-7 text-sky-300" />}
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-sky-400/40 bg-[#081A2E] px-2.5 py-1.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-500/20 border border-sky-400/30">
+                {guidance ? renderManeuverIcon(guidance.kind) : <Navigation className="h-4 w-4 text-sky-300" />}
               </div>
-              <div className="min-w-0">
-                <p className="font-mono text-lg font-black leading-none text-sky-300 tabular-nums sm:text-xl">
-                  {guidance
-                    ? guidance.distToManeuverM >= 1000
-                      ? `Em ${(guidance.distToManeuverM / 1000).toFixed(2).replace('.', ',')} km`
-                      : `Em ${guidance.distToManeuverM} m`
-                    : 'Aguardando rota KML/KMZ'}
-                </p>
-                <p className="mt-0.5 truncate text-sm font-extrabold text-white sm:text-base">
-                  {guidance ? guidance.instruction : 'Modo mapa livre ativado (Erechim / GPS)'}
+              <div className="min-w-0 leading-tight">
+                <p className="truncate text-xs font-extrabold text-white">
+                  <span className="font-mono text-sky-300 mr-1.5 tabular-nums">
+                    {guidance
+                      ? guidance.distToManeuverM >= 1000
+                        ? `${(guidance.distToManeuverM / 1000).toFixed(1).replace('.', ',')}km`
+                        : `${guidance.distToManeuverM}m`
+                      : 'GPS'}
+                  </span>
+                  {guidance ? guidance.instruction : 'Mapa livre'}
                 </p>
                 {guidance && (
-                  <p className="truncate font-mono text-[11px] text-sky-200/80">
+                  <p className="truncate font-mono text-[10px] text-sky-200/75">
                     {guidance.targetLabel}
                   </p>
                 )}
@@ -856,25 +838,18 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             </div>
 
             {guidance && (
-              <div className="flex items-center gap-4 font-mono text-right tabular-nums">
-                <div>
-                  <p className="text-[10px] font-bold text-sky-300 uppercase">Restante</p>
-                  <p className="text-base font-black text-white">
-                    {guidance.remainingTotalKm.toFixed(2).replace('.', ',')} km
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-sky-300 uppercase">Proa</p>
-                  <p className="text-base font-black text-amber-300">
-                    {headingDeg !== null ? `${headingDeg}°` : '--°'}
-                  </p>
-                </div>
+              <div className="shrink-0 text-right font-mono text-[11px] leading-tight tabular-nums">
+                <span className="font-bold text-white">
+                  {guidance.remainingTotalKm.toFixed(1).replace('.', ',')}km
+                </span>
+                <span className="ml-1.5 text-amber-300">
+                  {headingDeg !== null ? `${headingDeg}°` : ''}
+                </span>
               </div>
             )}
           </div>
         )}
 
-        {/* Mapbox Integrated Medium Viewport */}
         <VelocityMapboxView
           trackId={loadedTrack?.id ?? 'levantamento-erechim'}
           editableTrace={routeSamples}
@@ -883,7 +858,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           currentPos={currentPos}
           navigationMode={wazeNavActive}
           navHeadingDeg={headingDeg}
-          containerClassName="relative mt-2.5 h-80 w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[420px]"
+          containerClassName="relative mt-2 h-56 w-full overflow-hidden rounded-lg border border-zinc-800 bg-[#000000] sm:h-72"
         />
       </section>
 
@@ -1026,13 +1001,13 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           </div>
         </div>
 
-        {/* Controle de Limite de Velocidade no Levantamento junto com as velocidades */}
+        {/* Limite de Velocidade (Clean & Simples) */}
         <div
-          className={`rounded-2xl border p-3 transition-colors sm:p-4 ${
+          className={`rounded-xl border p-3 transition-colors ${
             recceZone === 'over'
-              ? 'border-red-500 bg-red-950/85 shadow-[0_0_24px_rgba(225,6,0,0.45)]'
+              ? 'border-red-500 bg-red-950/80'
               : recceZone === 'warning'
-                ? 'border-amber-400 bg-amber-950/60 shadow-[0_0_16px_rgba(245,158,11,0.3)]'
+                ? 'border-amber-400 bg-amber-950/50'
                 : 'border-zinc-800 bg-[#111214]'
           }`}
         >
@@ -1040,94 +1015,21 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             <div className="flex items-center gap-2">
               {recceZone === 'over' || recceZone === 'warning' ? (
                 <AlertTriangle
-                  className={`h-5 w-5 shrink-0 ${
+                  className={`h-4 w-4 shrink-0 ${
                     recceZone === 'over' ? 'text-red-300' : 'text-amber-300'
                   }`}
                 />
               ) : (
-                <ShieldAlert className="h-5 w-5 shrink-0 text-[#E10600]" />
+                <ShieldAlert className="h-4 w-4 shrink-0 text-[#E10600]" />
               )}
-              <div>
-                <h2 className="font-['Barlow_Condensed'] text-base font-extrabold tracking-wide uppercase sm:text-lg">
-                  Limite de Velocidade (Levantamento)
-                </h2>
-                <p className="font-mono text-[11px] text-[#C0C4C9]">
-                  {recceZone === 'over'
-                    ? `ACIMA DO LIMITE (${speedKmh} / ${reccePrefs.speedLimitKmh} km/h) — REDUZA!`
-                    : recceZone === 'warning'
-                      ? `ATENÇÃO: Próximo do limite (${speedKmh} / ${reccePrefs.speedLimitKmh} km/h)`
-                      : reccePrefs.enabled
-                        ? `Limite ${reccePrefs.speedLimitKmh} km/h (aviso ${warnThresholdKmh} km/h)`
-                        : 'Monitoramento de limite desativado'}
-                </p>
-              </div>
+              <span className="text-xs font-extrabold tracking-wide uppercase">
+                Limite de Velocidade
+              </span>
             </div>
 
             <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() =>
-                  setReccePrefs((p) => ({ ...p, soundEnabled: !p.soundEnabled }))
-                }
-                title={reccePrefs.soundEnabled ? 'Silenciar alerta sonoro' : 'Ativar alerta sonoro'}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
-              >
-                {reccePrefs.soundEnabled ? (
-                  <Volume2 className="h-4 w-4 text-emerald-400" />
-                ) : (
-                  <VolumeX className="h-4 w-4 text-zinc-500" />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setReccePrefs((p) => ({ ...p, enabled: !p.enabled }))
-                }
-                className={`min-h-[36px] rounded-lg px-3 text-xs font-extrabold uppercase ${
-                  reccePrefs.enabled
-                    ? 'pitstop-btn-red text-white'
-                    : 'border border-zinc-700 bg-[#080B0D] text-zinc-400'
-                }`}
-              >
-                {reccePrefs.enabled ? 'Ativo' : 'Ativar'}
-              </button>
-            </div>
-          </div>
-
-          {reccePrefs.enabled && (
-            <div className="mt-3 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums">
-                <span className="text-[#C0C4C9]">
-                  Aviso em <strong className="text-amber-300">{warnThresholdKmh}</strong> · Limite{' '}
-                  <strong className="text-white">{reccePrefs.speedLimitKmh} km/h</strong>
-                </span>
-                <span className="text-[#C0C4C9]">
-                  Excedências:{' '}
-                  <strong className={recceOverCount > 0 ? 'text-[#FF2A2A]' : 'text-emerald-400'}>
-                    {recceOverCount}
-                  </strong>
-                  {reccePeakSpeedKmh > 0 ? ` (Pico ${reccePeakSpeedKmh})` : ''}
-                </span>
-              </div>
-
-              <div className="relative h-3.5 w-full overflow-hidden rounded-full border border-zinc-700 bg-[#080B0D]">
-                <div
-                  className={`h-full transition-all duration-150 ${
-                    recceZone === 'over'
-                      ? 'bg-[#FF2A2A]'
-                      : recceZone === 'warning'
-                        ? 'bg-amber-400'
-                        : 'bg-emerald-500'
-                  }`}
-                  style={{ width: `${speedPctOfLimit}%` }}
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-[11px] font-bold text-[#B5B5B5] uppercase">
-                    Limite:
-                  </span>
+              {reccePrefs.enabled && (
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() =>
@@ -1136,7 +1038,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                         speedLimitKmh: Math.max(10, p.speedLimitKmh - 5),
                       }))
                     }
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
                     aria-label="Diminuir limite em 5 km/h"
                   >
                     −
@@ -1157,7 +1059,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                       }
                     }}
                     aria-label="Limite de velocidade em km/h"
-                    className="h-8 w-16 rounded-md border border-zinc-700 bg-[#080B0D] text-center font-mono text-xs font-extrabold text-white focus:border-[#E10600] focus:outline-none"
+                    className="h-8 w-14 rounded-lg border border-zinc-700 bg-[#080B0D] text-center font-mono text-xs font-extrabold text-white focus:border-[#E10600] focus:outline-none"
                   />
                   <button
                     type="button"
@@ -1167,116 +1069,79 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                         speedLimitKmh: Math.min(200, p.speedLimitKmh + 5),
                       }))
                     }
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
                     aria-label="Aumentar limite em 5 km/h"
                   >
                     +
                   </button>
-
-                  {[40, 50, 60, 80, 100].map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setReccePrefs((p) => ({ ...p, speedLimitKmh: preset }))}
-                      className={`h-8 rounded-md px-2 font-mono text-[11px] font-bold ${
-                        reccePrefs.speedLimitKmh === preset
-                          ? 'bg-[#E10600] text-white'
-                          : 'border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
-                      }`}
-                    >
-                      {preset}
-                    </button>
-                  ))}
                 </div>
+              )}
 
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-[11px] font-bold text-[#B5B5B5] uppercase">
-                    Pré-alerta:
-                  </span>
-                  {[3, 5, 10].map((margin) => (
-                    <button
-                      key={margin}
-                      type="button"
-                      onClick={() => setReccePrefs((p) => ({ ...p, warningMarginKmh: margin }))}
-                      className={`h-8 rounded-md px-2 font-mono text-[11px] font-bold ${
-                        reccePrefs.warningMarginKmh === margin
-                          ? 'bg-amber-400 text-slate-950 font-extrabold'
-                          : 'border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
-                      }`}
-                    >
-                      -{margin} km/h
-                    </button>
-                  ))}
-                  {recceOverCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRecceOverCount(0);
-                        setReccePeakSpeedKmh(0);
-                      }}
-                      className="ml-1 text-[11px] font-semibold text-zinc-400 underline hover:text-white"
-                    >
-                      Zerar registro
-                    </button>
-                  )}
-                </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setReccePrefs((p) => ({ ...p, soundEnabled: !p.soundEnabled }))
+                }
+                title={reccePrefs.soundEnabled ? 'Silenciar alerta' : 'Ativar alerta'}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
+              >
+                {reccePrefs.soundEnabled ? (
+                  <Volume2 className="h-3.5 w-3.5 text-emerald-400" />
+                ) : (
+                  <VolumeX className="h-3.5 w-3.5 text-zinc-500" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setReccePrefs((p) => ({ ...p, enabled: !p.enabled }))
+                }
+                className={`h-8 rounded-lg px-2.5 text-[11px] font-extrabold uppercase ${
+                  reccePrefs.enabled
+                    ? 'pitstop-btn-red text-white'
+                    : 'border border-zinc-700 bg-[#080B0D] text-zinc-400'
+                }`}
+              >
+                {reccePrefs.enabled ? 'Ativo' : 'Off'}
+              </button>
+            </div>
+          </div>
+
+          {reccePrefs.enabled && (
+            <div className="mt-2.5 space-y-1.5">
+              <div className="relative h-2 w-full overflow-hidden rounded-full bg-[#080B0D]">
+                <div
+                  className={`h-full transition-all duration-150 ${
+                    recceZone === 'over'
+                      ? 'bg-[#FF2A2A]'
+                      : recceZone === 'warning'
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-500'
+                  }`}
+                  style={{ width: `${speedPctOfLimit}%` }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between font-mono text-[11px] text-[#C0C4C9] tabular-nums">
+                <span>
+                  {speedKmh} / {reccePrefs.speedLimitKmh} km/h
+                </span>
+                {recceOverCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecceOverCount(0);
+                      setReccePeakSpeedKmh(0);
+                    }}
+                    className="text-red-300 underline hover:text-white"
+                  >
+                    {recceOverCount}x acima (Pico {reccePeakSpeedKmh}) · limpar
+                  </button>
+                )}
               </div>
             </div>
           )}
-        </div>
-      </section>
-
-      {/* Inline Quick W Fino Adjustment */}
-      <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-2.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <SlidersHorizontal className="h-4 w-4 text-[#E10600]" />
-            <span className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-              Ajuste Rápido W Fino ({settings.sensorMode === 'blue' ? `W ${activeW}` : `${settings.calibrationPct.toFixed(2)}%`})
-            </span>
-          </div>
-          <span className="font-mono text-[11px] text-[#B5B5B5]">
-            Base W {settings.wBaseValue}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-5 gap-1.5 font-mono">
-          <button
-            type="button"
-            onClick={() => adjustCalPct(-1)}
-            className="min-h-[42px] rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-extrabold text-[#C0C4C9] hover:text-white"
-          >
-            -1%
-          </button>
-          <button
-            type="button"
-            onClick={() => adjustCalPct(-0.1)}
-            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-[#1E1E22] text-sm font-black text-white hover:border-[#E10600]"
-          >
-            <Minus className="h-4 w-4" />
-          </button>
-          <div className="flex flex-col items-center justify-center rounded-lg border border-zinc-700 bg-black px-2 text-center tabular-nums">
-            <span className="text-sm font-black text-white">
-              {settings.sensorMode === 'blue' ? `W ${activeW}` : `${settings.calibrationPct.toFixed(2)}%`}
-            </span>
-            <span className="text-[9px] text-[#B5B5B5]">
-              {calibrationPctFromWValue(activeW, settings.wBaseValue).toFixed(1)}%
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => adjustCalPct(0.1)}
-            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-[#1E1E22] text-sm font-black text-white hover:border-[#E10600]"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => adjustCalPct(1)}
-            className="min-h-[42px] rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-extrabold text-[#C0C4C9] hover:text-white"
-          >
-            +1%
-          </button>
         </div>
       </section>
     </div>

@@ -270,22 +270,24 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         ? formatMinutesAsTime(resultDisplayMinutes, clock24hMode)
         : '0:00';
 
-  const numBtnClass =
-    'min-h-[46px] sm:min-h-[54px] rounded-xl border border-zinc-700/80 bg-[#F4F4F4] text-xl font-extrabold text-[#080B0D] shadow-sm transition-transform active:scale-[0.96] hover:bg-white';
-  const opBtnClass =
-    'min-h-[46px] sm:min-h-[54px] rounded-xl border border-zinc-700 bg-[#2A2D34] text-xl font-extrabold text-white shadow-sm transition-transform active:scale-[0.96] hover:bg-zinc-700';
+  const numBtnClass = isModal
+    ? 'min-h-[48px] sm:min-h-[56px] rounded-xl border border-zinc-700/80 bg-[#F4F4F4] text-xl font-extrabold text-[#080B0D] shadow-sm transition-transform active:scale-[0.96] hover:bg-white'
+    : 'min-h-[62px] sm:min-h-[72px] h-full rounded-xl border border-zinc-700/80 bg-[#F4F4F4] text-2xl sm:text-3xl font-black text-[#080B0D] shadow-sm transition-transform active:scale-[0.96] hover:bg-white';
+  const opBtnClass = isModal
+    ? 'min-h-[48px] sm:min-h-[56px] rounded-xl border border-zinc-700 bg-[#2A2D34] text-xl font-extrabold text-white shadow-sm transition-transform active:scale-[0.96] hover:bg-zinc-700'
+    : 'min-h-[62px] sm:min-h-[72px] h-full rounded-xl border border-zinc-700 bg-[#2A2D34] text-2xl sm:text-3xl font-black text-white shadow-sm transition-transform active:scale-[0.96] hover:bg-zinc-700';
 
   return (
     <div
-      className={`w-full overflow-hidden rounded-2xl border border-zinc-700/90 bg-[#111214] text-white shadow-2xl ${
-        isModal ? 'max-w-sm' : 'max-w-md mx-auto'
+      className={`w-full overflow-hidden rounded-2xl border border-zinc-700/90 bg-[#111214] text-white shadow-2xl flex flex-col ${
+        isModal ? 'max-w-sm' : 'max-w-lg mx-auto flex-1 min-h-[calc(100dvh-9.5rem)]'
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 bg-[#080B0D] px-3.5 py-2.5">
+      <div className="flex items-center justify-between border-b border-zinc-800 bg-[#080B0D] px-3.5 py-2.5 sm:px-4 sm:py-3">
         <div className="flex items-center gap-2">
           <Clock className="h-4 w-4 text-[#E10600]" />
-          <span className="font-['Barlow_Condensed'] text-base sm:text-lg font-extrabold tracking-wide uppercase">
+          <span className="font-['Barlow_Condensed'] text-lg sm:text-xl font-extrabold tracking-wide uppercase">
             Calculadora de Tempo
           </span>
         </div>
@@ -294,7 +296,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
           <button
             type="button"
             onClick={() => setClock24hMode((v) => !v)}
-            className={`rounded-md border px-2.5 py-1 font-mono text-[10px] font-bold transition-colors ${
+            className={`rounded-md border px-2.5 py-1 font-mono text-[10px] sm:text-xs font-bold transition-colors ${
               clock24hMode
                 ? 'border-sky-500/60 bg-sky-950/50 text-sky-300'
                 : 'border-zinc-700 bg-[#181A1F] text-[#C0C4C9]'
@@ -317,17 +319,23 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         </div>
       </div>
 
-      <div className="p-3 sm:p-3.5 space-y-2.5">
+      <div className="flex flex-1 flex-col p-3 sm:p-4 gap-3">
         {/* Two-line High-Contrast ATM Display */}
-        <div className="rounded-xl border border-zinc-800 bg-[#000000] px-3.5 py-2.5 text-right font-mono tabular-nums">
-          <div className="min-h-[18px] truncate text-xs font-semibold text-[#B5B5B5]">
+        <div
+          className={`rounded-xl border border-zinc-800 bg-[#000000] px-4 text-right font-mono tabular-nums flex flex-col justify-center ${
+            isModal ? 'py-2.5' : 'py-4 sm:py-5'
+          }`}
+        >
+          <div className="min-h-[20px] truncate text-xs sm:text-sm font-semibold text-[#B5B5B5]">
             {historyText || (isScalarMode ? 'Multiplicador/divisor' : 'Hora:Min')}
           </div>
           <div
-            className={`mt-0.5 truncate font-extrabold tracking-tight ${
+            className={`mt-1 truncate font-black tracking-tight ${
               errorMsg
                 ? 'text-xl text-red-400'
-                : 'text-3xl text-white sm:text-4xl'
+                : isModal
+                  ? 'text-3xl text-white sm:text-4xl'
+                  : 'text-4xl text-white sm:text-5xl'
             }`}
           >
             {mainDisplay}
@@ -335,11 +343,11 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         </div>
 
         {/* Exact 4x5 High-Contrast Keypad Grid */}
-        <div className="grid grid-cols-4 gap-1.5 font-mono">
+        <div className="grid flex-1 grid-cols-4 grid-rows-5 gap-2 font-mono">
           <button
             type="button"
             onClick={clearAll}
-            className="min-h-[46px] sm:min-h-[54px] rounded-xl border border-orange-500/40 bg-orange-500/20 text-lg font-extrabold text-orange-300 transition-transform active:scale-[0.96] hover:bg-orange-500/30"
+            className={`${isModal ? 'min-h-[48px] text-lg' : 'min-h-[62px] sm:min-h-[72px] text-2xl'} h-full rounded-xl border border-orange-500/40 bg-orange-500/20 font-black text-orange-300 transition-transform active:scale-[0.96] hover:bg-orange-500/30`}
           >
             C
           </button>
@@ -347,9 +355,9 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
             type="button"
             onClick={pressBackspace}
             aria-label="Apagar último dígito"
-            className="flex min-h-[46px] sm:min-h-[54px] items-center justify-center rounded-xl border border-zinc-700 bg-[#1E1E22] text-white transition-transform active:scale-[0.96] hover:bg-zinc-800"
+            className={`flex ${isModal ? 'min-h-[48px]' : 'min-h-[62px] sm:min-h-[72px]'} h-full items-center justify-center rounded-xl border border-zinc-700 bg-[#1E1E22] text-white transition-transform active:scale-[0.96] hover:bg-zinc-800`}
           >
-            <Delete className="h-5 w-5" />
+            <Delete className={isModal ? 'h-5 w-5' : 'h-6 w-6'} />
           </button>
           <button type="button" onClick={() => pressOperator('÷')} className={opBtnClass}>
             ÷
@@ -384,7 +392,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
             type="button"
             onClick={() => pressOperator('+')}
             aria-label="Somar horas"
-            className="min-h-[46px] sm:min-h-[54px] rounded-xl border-2 border-[#FF524D]/80 bg-[#E10600] text-2xl font-black text-white shadow-[0_6px_18px_-3px_rgba(225,6,0,0.65)] transition-transform active:scale-[0.95] hover:bg-[#FF1E17]"
+            className={`${isModal ? 'min-h-[48px] text-2xl' : 'min-h-[62px] sm:min-h-[72px] text-3xl'} h-full rounded-xl border-2 border-[#FF524D]/80 bg-[#E10600] font-black text-white shadow-[0_6px_18px_-3px_rgba(225,6,0,0.65)] transition-transform active:scale-[0.95] hover:bg-[#FF1E17]`}
           >
             +
           </button>
@@ -401,7 +409,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
           <button
             type="button"
             onClick={pressEquals}
-            className="row-span-2 flex items-center justify-center rounded-xl border border-emerald-400/50 bg-emerald-600 text-2xl font-extrabold text-white shadow-lg transition-transform active:scale-[0.97] hover:bg-emerald-500"
+            className={`row-span-2 flex h-full items-center justify-center rounded-xl border border-emerald-400/50 bg-emerald-600 ${isModal ? 'text-2xl' : 'text-3xl sm:text-4xl'} font-black text-white shadow-lg transition-transform active:scale-[0.97] hover:bg-emerald-500`}
           >
             =
           </button>
@@ -424,7 +432,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
 
 export const TimeCalculatorTab: React.FC = () => {
   return (
-    <section className="flex flex-col items-center justify-center py-1 sm:py-3">
+    <section className="flex w-full flex-col items-stretch justify-center py-0.5 sm:py-2">
       <TimeCalculatorPanel isModal={false} active />
     </section>
   );

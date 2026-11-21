@@ -197,6 +197,48 @@
   will-change: transform, opacity;
 }
 
+/* True inside-bounds elliptical radial fade so square image edges dissolve 100% before hitting box boundaries */
+.pitstop-hero-mask {
+  -webkit-mask-image: radial-gradient(
+    ellipse 46% 42% at 50% 50%,
+    rgba(0, 0, 0, 1) 34%,
+    rgba(0, 0, 0, 0.6) 64%,
+    rgba(0, 0, 0, 0) 98%
+  );
+  mask-image: radial-gradient(
+    ellipse 46% 42% at 50% 50%,
+    rgba(0, 0, 0, 1) 34%,
+    rgba(0, 0, 0, 0.6) 64%,
+    rgba(0, 0, 0, 0) 98%
+  );
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+@keyframes pitstopSloganMetallic {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.pitstop-slogan-text {
+  background: linear-gradient(
+    110deg,
+    rgba(161, 161, 170, 0.68) 0%,
+    rgba(228, 228, 231, 0.86) 38%,
+    rgba(225, 6, 0, 0.72) 52%,
+    rgba(161, 161, 170, 0.65) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: pitstopSloganMetallic 6.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

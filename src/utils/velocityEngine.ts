@@ -25,6 +25,8 @@ export interface VelocitySample {
   timestampMs: number;
   distKm: number;
   stageElapsedMs: number;
+  accelLongG?: number | null;
+  accelLatG?: number | null;
 }
 
 export interface VelocityRun {
@@ -285,8 +287,16 @@ export function verificarCruzamento(
 export function detectTrapCrossing(
   prev: { lat: number; lon: number; timestampMs: number },
   curr: { lat: number; lon: number; timestampMs: number },
-  trap: VelocityTrap
+  trap: VelocityTrap,
+  options?: { hdopAccuracyM?: number | null; autoSnap?: boolean }
 ): TrapCrossingResult | null {
+  const acc = options?.hdopAccuracyM;
+  const hdopBonus =
+    options?.autoSnap !== false && typeof acc === 'number' && Number.isFinite(acc) && acc > 6
+      ? Math.min(22, (acc - 6) * 0.65)
+      : 0;
+  const effectiveWidthM = Math.max(8, (Number(trap.widthM) || 25) + hdopBonus);
+
   const res = verificarCruzamento(
     { lat: prev.lat, lng: prev.lon, timestamp: prev.timestampMs },
     { lat: curr.lat, lng: curr.lon, timestamp: curr.timestampMs },
@@ -294,7 +304,7 @@ export function detectTrapCrossing(
       lat: trap.lat,
       lng: trap.lon,
       angulo: trap.bearingDeg,
-      larguraM: trap.widthM,
+      larguraM: effectiveWidthM,
       unidirecional: trap.unidirectional !== false,
     }
   );
@@ -1221,4 +1231,263 @@ export function createDemoSpecialStage(): {
   };
 
   return { track, baseSamples, simWaypoints: waypoints };
+}
+
+/**
+ * Calcula Força G longitudinal e lateral instantânea a partir de duas amostras GPS sequenciais.
+ */
+export function computeSampleGForces(
+  prev: VelocitySample | null,
+  curr: {
+    speedKmh: number;
+    headingDeg: number | null;
+    timestampMs: number;
+  }
+): { accelLongG: number; accelLatG: number } {
+  if (!prev) return { accelLongG: 0, accelLatG: 0 };
+  const dtSec = (curr.timestampMs - prev.timestampMs) / 1000;
+  if (dtSec < 0.05 || dtSec > 5) return { accelLongG: 0, accelLatG: 0 };
+
+  const v1 = prev.speedKmh / 3.6;
+  const v2 = curr.speedKmh / 3.6;
+  const rawLongG = (v2 - v1) / dtSec / 9.80665;
+  const accelLongG = Number(Math.max(-2.5, Math.min(2.5, rawLongG)).toFixed(2));
+
+  let accelLatG = 0;
+  if (prev.headingDeg !== null && curr.headingDeg !== null) {
+    let dHdg = ((curr.headingDeg - prev.headingDeg + 540) % 360) - 180;
+    if (Math.abs(dHdg) > 120) dHdg = 0;
+    const omegaRadPerSec = (dHdg * Math.PI) / 180 / dtSec;
+    const vAvg = (v1 + v2) / 2;
+    const rawLatG = (vAvg * omegaRadPerSec) / 9.80665;
+    accelLatG = Number(Math.max(-2.5, Math.min(2.5, rawLatG)).toFixed(2));
+  }
+
+  return { accelLongG, accelLatG };
+}
+
+/**
+ * Garante que todas as amostras de uma volta tenham accelLongG e accelLatG preenchidos.
+ */
+export function ensureTraceGForces(samples: VelocitySample[]): VelocitySample[] {
+  if (samples.length === 0) return samples;
+  return samples.map((s, idx) => {
+    if (typeof s.accelLongG === 'number' && typeof s.accelLatG === 'number') {
+      return s;
+    }
+    const prev = idx > 0 ? samples[idx - 1] : null;
+    const g = computeSampleGForces(prev, s);
+    return {
+      ...s,
+      accelLongG: typeof s.accelLongG === 'number' ? s.accelLongG : g.accelLongG,
+      accelLatG: typeof s.accelLatG === 'number' ? s.accelLatG : g.accelLatG,
+    };
+  });
+}
+
+/**
+ * Reconhece automaticamente o circuito/especial mais próximo dentro do raio em metros.
+ */
+export function autoDetectNearestTrack(
+  lat: number,
+  lon: number,
+  tracks: VelocityTrack[],
+  radiusM = 2500
+): { track: VelocityTrack; distanceM: number } | null {
+  let bestTrack: VelocityTrack | null = null;
+  let bestDist = Infinity;
+
+  for (const trk of tracks) {
+    for (const trap of trk.traps) {
+      const d = haversineMetersVel(lat, lon, trap.lat, trap.lon);
+      if (d <= radiusM && d < bestDist) {
+        bestDist = d;
+        bestTrack = trk;
+      }
+    }
+    if (trk.baseTrace && trk.baseTrace.length > 0) {
+      const step = Math.max(1, Math.floor(trk.baseTrace.length / 12));
+      for (let i = 0; i < trk.baseTrace.length; i += step) {
+        const pt = trk.baseTrace[i];
+        const d = haversineMetersVel(lat, lon, pt.lat, pt.lon);
+        if (d <= radiusM && d < bestDist) {
+          bestDist = d;
+          bestTrack = trk;
+        }
+      }
+    }
+  }
+
+  return bestTrack ? { track: bestTrack, distanceM: Math.round(bestDist) } : null;
+}
+
+export interface CornerComparisonMetric {
+  cornerIndex: number;
+  distKm: number;
+  lapABrakeStartM: number;
+  lapBBrakeStartM: number;
+  lapABrakeStartKmh: number;
+  lapAApexDistM: number;
+  lapBApexDistM: number;
+  lapABrakeDistM: number;
+  lapBBrakeDistM: number;
+  lapAApexKmh: number;
+  lapBApexKmh: number;
+  lapAExitKmh: number;
+  lapBExitKmh: number;
+  timeDeltaSec: number;
+  brakeShiftM: number;
+}
+
+export interface LapComparisonSummary {
+  lapANumber: number;
+  lapBNumber: number;
+  totalDeltaSec: number;
+  maxSpeedDeltaKmh: number;
+  avgSpeedDeltaKmh: number;
+  corners: CornerComparisonMetric[];
+}
+
+function interpolateSampleAtDist(
+  samples: VelocitySample[],
+  targetDistKm: number
+): VelocitySample | null {
+  if (samples.length === 0) return null;
+  if (targetDistKm <= samples[0].distKm) return samples[0];
+  for (let i = 1; i < samples.length; i += 1) {
+    const a = samples[i - 1];
+    const b = samples[i];
+    if (targetDistKm <= b.distKm) {
+      const span = b.distKm - a.distKm;
+      const frac = span > 1e-6 ? Math.max(0, Math.min(1, (targetDistKm - a.distKm) / span)) : 0;
+      return {
+        lat: a.lat + (b.lat - a.lat) * frac,
+        lon: a.lon + (b.lon - a.lon) * frac,
+        speedKmh: a.speedKmh + (b.speedKmh - a.speedKmh) * frac,
+        accuracyM: b.accuracyM,
+        headingDeg: b.headingDeg,
+        altitudeM: b.altitudeM,
+        timestampMs: Math.round(a.timestampMs + (b.timestampMs - a.timestampMs) * frac),
+        distKm: targetDistKm,
+        stageElapsedMs: Math.round(
+          a.stageElapsedMs + (b.stageElapsedMs - a.stageElapsedMs) * frac
+        ),
+      };
+    }
+  }
+  return samples[samples.length - 1];
+}
+
+function findBrakingStartKm(samples: VelocitySample[], apexIdx: number): { distKm: number; speedKmh: number } {
+  const apexDist = samples[apexIdx].distKm;
+  for (let i = apexIdx; i >= 1; i -= 1) {
+    const prev = samples[i - 1];
+    const curr = samples[i];
+    if (prev.speedKmh <= curr.speedKmh && apexDist - curr.distKm > 0.015) {
+      return { distKm: curr.distKm, speedKmh: curr.speedKmh };
+    }
+    if (apexDist - curr.distKm > 0.25) {
+      return { distKm: curr.distKm, speedKmh: curr.speedKmh };
+    }
+  }
+  const first = samples[0];
+  return { distKm: first?.distKm ?? apexDist, speedKmh: first?.speedKmh ?? samples[apexIdx].speedKmh };
+}
+
+/**
+ * Compara duas voltas (lapA vs referência lapB) detectando curvas/frenagens reais na telemetria GPS.
+ */
+export function computeLapComparisonSummary(
+  lapA: VelocityRun,
+  lapB: VelocityRun
+): LapComparisonSummary {
+  const refSamples = ensureTraceGForces(lapB.samples);
+  const tgtSamples = ensureTraceGForces(lapA.samples);
+
+  const corners: CornerComparisonMetric[] = [];
+  if (refSamples.length >= 4 && tgtSamples.length >= 4) {
+    const apexIndices: number[] = [];
+    for (let i = 1; i < refSamples.length - 1; i += 1) {
+      const prev = refSamples[i - 1].speedKmh;
+      const curr = refSamples[i].speedKmh;
+      const next = refSamples[i + 1].speedKmh;
+      if (curr <= prev && curr < next && curr < 130) {
+        const lastIdx = apexIndices[apexIndices.length - 1];
+        if (
+          lastIdx === undefined ||
+          refSamples[i].distKm - refSamples[lastIdx].distKm >= 0.1
+        ) {
+          apexIndices.push(i);
+        }
+      }
+    }
+
+    apexIndices.slice(0, 8).forEach((refApexIdx, idx) => {
+      const refApex = refSamples[refApexIdx];
+      const refBrake = findBrakingStartKm(refSamples, refApexIdx);
+      const refExitSample =
+        interpolateSampleAtDist(refSamples, refApex.distKm + 0.06) ??
+        refSamples[Math.min(refSamples.length - 1, refApexIdx + 1)];
+
+      let tgtApexIdx = 0;
+      let bestDistDiff = Infinity;
+      for (let j = 0; j < tgtSamples.length; j += 1) {
+        const diff = Math.abs(tgtSamples[j].distKm - refApex.distKm);
+        if (diff < bestDistDiff) {
+          bestDistDiff = diff;
+          tgtApexIdx = j;
+        }
+      }
+      const winStart = Math.max(0, tgtApexIdx - 2);
+      const winEnd = Math.min(tgtSamples.length - 1, tgtApexIdx + 2);
+      let minIdx = tgtApexIdx;
+      for (let j = winStart; j <= winEnd; j += 1) {
+        if (tgtSamples[j].speedKmh < tgtSamples[minIdx].speedKmh) minIdx = j;
+      }
+
+      const tgtApex = tgtSamples[minIdx];
+      const tgtBrake = findBrakingStartKm(tgtSamples, minIdx);
+      const tgtExitSample =
+        interpolateSampleAtDist(tgtSamples, tgtApex.distKm + 0.06) ??
+        tgtSamples[Math.min(tgtSamples.length - 1, minIdx + 1)];
+
+      const entryRef = interpolateSampleAtDist(refSamples, Math.max(0, refApex.distKm - 0.08));
+      const entryTgt = interpolateSampleAtDist(tgtSamples, Math.max(0, tgtApex.distKm - 0.08));
+      const sectorDurRefMs =
+        entryRef && refExitSample
+          ? refExitSample.stageElapsedMs - entryRef.stageElapsedMs
+          : 0;
+      const sectorDurTgtMs =
+        entryTgt && tgtExitSample
+          ? tgtExitSample.stageElapsedMs - entryTgt.stageElapsedMs
+          : 0;
+
+      corners.push({
+        cornerIndex: idx + 1,
+        distKm: Number(refApex.distKm.toFixed(2)),
+        lapABrakeStartM: Math.round(tgtBrake.distKm * 1000),
+        lapBBrakeStartM: Math.round(refBrake.distKm * 1000),
+        lapABrakeStartKmh: Math.round(tgtBrake.speedKmh),
+        lapAApexDistM: Math.round(tgtApex.distKm * 1000),
+        lapBApexDistM: Math.round(refApex.distKm * 1000),
+        lapABrakeDistM: Math.round((tgtApex.distKm - tgtBrake.distKm) * 1000),
+        lapBBrakeDistM: Math.round((refApex.distKm - refBrake.distKm) * 1000),
+        lapAApexKmh: Math.round(tgtApex.speedKmh),
+        lapBApexKmh: Math.round(refApex.speedKmh),
+        lapAExitKmh: Math.round(tgtExitSample.speedKmh),
+        lapBExitKmh: Math.round(refExitSample.speedKmh),
+        timeDeltaSec: Number(((sectorDurTgtMs - sectorDurRefMs) / 1000).toFixed(2)),
+        brakeShiftM: Math.round((tgtBrake.distKm - refBrake.distKm) * 1000),
+      });
+    });
+  }
+
+  return {
+    lapANumber: lapA.runNumber,
+    lapBNumber: lapB.runNumber,
+    totalDeltaSec: Number(((lapA.totalMs - lapB.totalMs) / 1000).toFixed(2)),
+    maxSpeedDeltaKmh: Math.round(lapA.maxSpeedKmh - lapB.maxSpeedKmh),
+    avgSpeedDeltaKmh: Math.round(lapA.avgSpeedKmh - lapB.avgSpeedKmh),
+    corners,
+  };
 }

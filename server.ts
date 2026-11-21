@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { WebSocket, WebSocketServer } from 'ws';
 
@@ -545,6 +546,106 @@ async function startServer(): Promise<void> {
       return;
     }
     res.json({ ok: true, snapshot: match });
+  });
+
+  app.post('/api/velocity/coach', async (req, res) => {
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+      res.status(503).json({
+        ok: false,
+        error:
+          'Coach por IA indisponível no momento: configure a variável GEMINI_API_KEY no ambiente do servidor.',
+      });
+      return;
+    }
+
+    const body = req.body as {
+      trackName?: string;
+      lapA?: {
+        runNumber: number;
+        totalMs: number;
+        avgSpeedKmh: number;
+        maxSpeedKmh: number;
+        distanceKm: number;
+      };
+      lapB?: {
+        runNumber: number;
+        totalMs: number;
+        avgSpeedKmh: number;
+        maxSpeedKmh: number;
+        distanceKm: number;
+      };
+      comparison?: {
+        totalDeltaSec: number;
+        maxSpeedDeltaKmh: number;
+        avgSpeedDeltaKmh: number;
+        corners?: Array<{
+          cornerIndex: number;
+          distKm: number;
+          lapAApexKmh: number;
+          lapBApexKmh: number;
+          lapAExitKmh: number;
+          lapBExitKmh: number;
+          timeDeltaSec: number;
+          brakeShiftM: number;
+        }>;
+      };
+    };
+
+    if (!body?.lapA || !body?.lapB || !body?.comparison) {
+      res.status(400).json({
+        ok: false,
+        error: 'Informe duas passagens válidas (Volta A e Volta B) para análise.',
+      });
+      return;
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const prompt = [
+        `Pista/Especial: ${String(body.trackName || 'Circuito').slice(0, 100)}`,
+        `Volta analisada (#${body.lapA.runNumber}): ${(body.lapA.totalMs / 1000).toFixed(2)}s · Vel Méd ${body.lapA.avgSpeedKmh} km/h · Vel Máx ${body.lapA.maxSpeedKmh} km/h`,
+        `Volta referência (#${body.lapB.runNumber}): ${(body.lapB.totalMs / 1000).toFixed(2)}s · Vel Méd ${body.lapB.avgSpeedKmh} km/h · Vel Máx ${body.lapB.maxSpeedKmh} km/h`,
+        `Delta total: ${body.comparison.totalDeltaSec >= 0 ? '+' : ''}${body.comparison.totalDeltaSec}s`,
+        `Curvas e zonas de frenagem detectadas no GPS: ${JSON.stringify(body.comparison.corners || [])}`,
+        'Gere 3 a 4 dicas diretas e objetivas em português do Brasil comparando ponto de frenagem (metros antes/depois), velocidade de ápice e saída de curva, citando números reais dos dados acima.',
+      ].join('\n');
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: prompt,
+        config: {
+          systemInstruction:
+            'Você é um engenheiro de pista e coach de pilotagem para rally e track-day. Seja conciso (máximo 140 palavras), direto em tópicos curtos, usando exclusivamente os números fornecidos.',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        },
+      });
+
+      const advice = (response.text || '').trim();
+      if (!advice) {
+        res.status(502).json({
+          ok: false,
+          error: 'O modelo não retornou análise de telemetria. Tente novamente.',
+        });
+        return;
+      }
+
+      res.json({ ok: true, advice });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Erro desconhecido';
+      res.status(502).json({
+        ok: false,
+        error: `Falha ao consultar Coach por IA: ${detail}`,
+      });
+    }
   });
 
   const isProd = process.env.NODE_ENV === 'production';
