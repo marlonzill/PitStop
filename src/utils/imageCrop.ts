@@ -6,8 +6,21 @@
  * at maximum readable size on any row background (white, yellow, blue, green, dark).
  */
 
+const MAX_CROP_CACHE_ENTRIES = 250;
 const obsRectCache = new Map<string, string>();
 const desSquareCache = new Map<string, string>();
+
+function setBoundedCache(cache: Map<string, string>, key: string, value: string): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= MAX_CROP_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+  cache.set(key, value);
+}
 
 function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -319,10 +332,9 @@ export async function extractObservationRectangle(src: string): Promise<string> 
     if (!ctx) return src;
     ctx.drawImage(img, 0, 0);
 
-    // Non-composite observation image: preserve exact aspect & scale while stripping light bg
     if (w < h * 1.9) {
       const cleaned = cleanCellPreserveScale(canvas, 0, 0, w, h) || src;
-      obsRectCache.set(src, cleaned);
+      setBoundedCache(obsRectCache, src, cleaned);
       return cleaned;
     }
 
@@ -356,7 +368,7 @@ export async function extractObservationRectangle(src: string): Promise<string> 
     const sh = Math.max(10, bottomY - topY);
 
     const cropped = cleanCellPreserveScale(canvas, sx, topY, sw, sh) || src;
-    obsRectCache.set(src, cropped);
+    setBoundedCache(obsRectCache, src, cropped);
     return cropped;
   } catch {
     return src;
@@ -383,7 +395,7 @@ export async function extractDesenhoSquare(src: string): Promise<string> {
 
     if (w < h * 1.9) {
       const cleaned = cropTightCleanCell(canvas, 0, 0, w, h, 3) || src;
-      desSquareCache.set(src, cleaned);
+      setBoundedCache(desSquareCache, src, cleaned);
       return cleaned;
     }
 
@@ -407,7 +419,7 @@ export async function extractDesenhoSquare(src: string): Promise<string> {
     const sh = Math.max(10, bottomY - topY);
 
     const cropped = cropTightCleanCell(canvas, sx, topY, sw, sh, 3) || src;
-    desSquareCache.set(src, cropped);
+    setBoundedCache(desSquareCache, src, cropped);
     return cropped;
   } catch {
     return src;

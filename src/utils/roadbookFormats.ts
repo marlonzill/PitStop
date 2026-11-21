@@ -2354,6 +2354,9 @@ async function parseZipContainer(
   if (depth > 2) {
     throw new Error(`Profundidade máxima de compactação ZIP excedida ao ler "${outerFileName}".`);
   }
+  if (buffer.byteLength > 60 * 1024 * 1024) {
+    throw new Error(`O arquivo "${outerFileName}" excede o limite de 60 MB.`);
+  }
 
   const zip = await JSZip.loadAsync(buffer);
   const allEntries = Object.values(zip.files).filter(
@@ -2362,6 +2365,9 @@ async function parseZipContainer(
 
   if (allEntries.length === 0) {
     throw new Error(`O arquivo ZIP/NBP "${outerFileName}" está vazio.`);
+  }
+  if (allEntries.length > 4000) {
+    throw new Error(`O arquivo "${outerFileName}" excede o limite de entradas internas.`);
   }
 
   // Pass 1: Extract embedded tulipa & observation images (cap raised to 2500 for dual-GIF T15Nav packages)
@@ -2376,14 +2382,20 @@ async function parseZipContainer(
 
   const dataEntries: JSZip.JSZipObject[] = [];
   let imgCount = 0;
+  let totalDecompressedBytes = 0;
+  const MAX_TOTAL_DECOMPRESSED_BYTES = 120 * 1024 * 1024;
 
   for (const entry of allEntries) {
     const ext = entry.name.split('.').pop()?.toLowerCase() ?? '';
     const mime = IMAGE_MIME_MAP[ext];
     if (mime) {
-      if (imgCount < 2500) {
+      if (imgCount < 2500 && totalDecompressedBytes < MAX_TOTAL_DECOMPRESSED_BYTES) {
         try {
           const bytes = await entry.async('uint8array');
+          totalDecompressedBytes += bytes.byteLength;
+          if (totalDecompressedBytes > MAX_TOTAL_DECOMPRESSED_BYTES) {
+            break;
+          }
           const dims = parseImageDimensionsFromBytes(bytes, ext);
           const b64 = uint8ToBase64(bytes);
           const dataUrl = `data:${mime};base64,${b64}`;
@@ -3426,12 +3438,16 @@ export async function inspectRoadbookFileStructure(
     `Arquivo: ${fileName} (${sizeKb} KB · assinatura ${sigHex || '--'})`,
   ];
 
+  if (buffer.byteLength > 60 * 1024 * 1024) {
+    return `Arquivo: ${fileName} excede o limite de 60 MB.`;
+  }
+
   if (isZipBuffer(buffer) && depth < 2) {
     try {
       const zip = await JSZip.loadAsync(buffer);
-      const entries = Object.values(zip.files).filter(
-        (e) => !e.dir && !e.name.startsWith('__MACOSX/')
-      );
+      const entries = Object.values(zip.files)
+        .filter((e) => !e.dir && !e.name.startsWith('__MACOSX/'))
+        .slice(0, 4000);
       lines.push(`Container: ZIP (${entries.length} arquivos internos)`);
       const imgEntries = entries.filter((e) =>
         Boolean(IMAGE_MIME_MAP[e.name.split('.').pop()?.toLowerCase() ?? ''])
@@ -3577,6 +3593,10 @@ export async function extractRoadbookDiagnosticDataTxt(
     out.push('=== AMOSTRA DOS DADOS SEM IMAGENS ===');
   }
 
+  if (buffer.byteLength > 60 * 1024 * 1024) {
+    return '(Arquivo excede o limite de 60 MB)';
+  }
+
   if (isZipBuffer(buffer) && depth < 2) {
     try {
       const zip = await JSZip.loadAsync(buffer);
@@ -3587,6 +3607,7 @@ export async function extractRoadbookDiagnosticDataTxt(
 
       for (const entry of entries.slice(0, 6)) {
         const innerBuf = await entry.async('arraybuffer');
+        if (innerBuf.byteLength > 30 * 1024 * 1024) continue;
         out.push(`\n>>> ENTRADA: ${entry.name} (${innerBuf.byteLength} bytes) <<<`);
         out.push(await extractRoadbookDiagnosticDataTxt(innerBuf, entry.name, depth + 1));
       }

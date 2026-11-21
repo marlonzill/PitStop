@@ -8,6 +8,9 @@ import {
   FileSpreadsheet,
   FileText,
   FolderUp,
+  KeyRound,
+  Lock,
+  LogOut,
   RefreshCw,
   Search,
   Share2,
@@ -17,10 +20,15 @@ import {
 } from 'lucide-react';
 import type { CompetitorResultFile, PassageRecord } from '../types/rally';
 import {
+  claimOrganizerPasscode,
   clearBaseResults,
   deleteBaseResult,
   fetchBaseResults,
+  getOrganizerAuthStatus,
+  loginOrganizerPasscode,
+  logoutOrganizer,
   publishPublicStandings,
+  type OrganizerAuthStatus,
 } from '../utils/baseApi';
 import { parseRoadbookTxt } from '../utils/rallyParser';
 import {
@@ -60,6 +68,13 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedPortalUrl, setCopiedPortalUrl] = useState(false);
+  const [authStatus, setAuthStatus] = useState<OrganizerAuthStatus | null>(null);
+  const [authOfflineMode, setAuthOfflineMode] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [passcodeInput, setPasscodeInput] = useState('');
+  const [passcodeConfirm, setPasscodeConfirm] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [submittingAuth, setSubmittingAuth] = useState(false);
 
   const portalUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/?apuracao=1` : '/?apuracao=1';
@@ -74,17 +89,83 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
           setSelectedId(serverResults[0].id);
         }
       }
-    } catch {
-      // Offline / static host fallback
+    } catch (err) {
+      if (err instanceof Error && err.message === 'UNAUTHORIZED') {
+        setAuthStatus((prev) =>
+          prev ? { ...prev, authenticated: false } : { configured: true, needsClaim: false, authenticated: false }
+        );
+      }
     } finally {
       setSyncingBase(false);
     }
   };
 
   useEffect(() => {
-    handleSyncBase();
+    let active = true;
+    const initAuth = async () => {
+      setAuthLoading(true);
+      try {
+        const status = await getOrganizerAuthStatus();
+        if (!active) return;
+        setAuthStatus(status);
+        setAuthOfflineMode(false);
+        if (status.authenticated) {
+          await handleSyncBase();
+        }
+      } catch {
+        if (!active) return;
+        // Static / offline host fallback allows importing local .txt files
+        setAuthOfflineMode(true);
+      } finally {
+        if (active) setAuthLoading(false);
+      }
+    };
+    initAuth();
+    return () => {
+      active = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleSubmitOrganizerAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    const trimmed = passcodeInput.trim();
+    if (trimmed.length < 6) {
+      setAuthError('A senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
+    if (authStatus?.needsClaim && trimmed !== passcodeConfirm.trim()) {
+      setAuthError('As duas senhas digitadas não coincidem.');
+      return;
+    }
+
+    setSubmittingAuth(true);
+    try {
+      if (authStatus?.needsClaim) {
+        await claimOrganizerPasscode(trimmed);
+      } else {
+        await loginOrganizerPasscode(trimmed);
+      }
+      setPasscodeInput('');
+      setPasscodeConfirm('');
+      setAuthStatus({ configured: true, needsClaim: false, authenticated: true });
+      await handleSyncBase();
+    } catch (err) {
+      setAuthError(
+        err instanceof Error ? err.message : 'Falha na autenticação da secretaria.'
+      );
+    } finally {
+      setSubmittingAuth(false);
+    }
+  };
+
+  const handleLockBackoffice = () => {
+    logoutOrganizer();
+    setAuthStatus((prev) =>
+      prev ? { ...prev, authenticated: false } : { configured: true, needsClaim: false, authenticated: false }
+    );
+  };
 
   const handleFilesSelected = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -115,7 +196,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
     setLoadingDemo(true);
     setUploadErrors([]);
     try {
-      const res = await fetch('/assets/aistudio/rally_escoteiros_merged_66a34567.txt');
+      const res = await fetch(`${import.meta.env.BASE_URL}assets/aistudio/rally_escoteiros_merged_66a34567.txt`);
       if (!res.ok) throw new Error('Planilha modelo não encontrada.');
       const roadbookText = await res.text();
       const roadbook = parseRoadbookTxt(roadbookText, 'rally_escoteiros_merged.txt');
@@ -289,6 +370,110 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
   const second = rankedSummaries[1] ?? null;
   const third = rankedSummaries[2] ?? null;
 
+  if (authLoading) {
+    return (
+      <div className="mx-auto max-w-md rounded-2xl border border-zinc-800 bg-[#111214] p-8 text-center text-[#C0C4C9] shadow-xl">
+        <Lock className="mx-auto h-8 w-8 animate-pulse text-[#E10600]" />
+        <p className="mt-3 text-sm font-semibold text-white">
+          Verificando acesso à Secretaria de Prova...
+        </p>
+      </div>
+    );
+  }
+
+  if (!authOfflineMode && authStatus && !authStatus.authenticated) {
+    return (
+      <div className="mx-auto max-w-md overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl">
+        <div aria-hidden="true" className="pitstop-racing-line h-[8px] w-full" />
+        <form onSubmit={handleSubmitOrganizerAuth} className="space-y-4 p-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#E10600]/40 bg-[#E10600]/15 text-[#E10600]">
+              <KeyRound className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold tracking-[0.18em] text-[#E10600] uppercase">
+                Secretaria de Prova · Acesso Protegido
+              </p>
+              <h2 className="font-['Barlow_Condensed'] text-2xl font-extrabold text-white">
+                {authStatus.needsClaim
+                  ? 'Definir Senha de Apuração'
+                  : 'Entrar na Apuração Oficial'}
+              </h2>
+            </div>
+          </div>
+
+          <p className="text-xs text-[#B5B5B5]">
+            {authStatus.needsClaim
+              ? 'Primeiro acesso detectado. Crie uma senha de administrador (mínimo 6 caracteres) para proteger os registros e a publicação de resultados.'
+              : 'Informe a senha de organização para consultar os arquivos recebidos, apagar registros ou publicar classificações.'}
+          </p>
+
+          <div className="space-y-2.5">
+            <div>
+              <label
+                htmlFor="org-passcode"
+                className="block text-[11px] font-semibold text-[#C0C4C9]"
+              >
+                Senha da Organização
+              </label>
+              <input
+                id="org-passcode"
+                type="password"
+                autoComplete={authStatus.needsClaim ? 'new-password' : 'current-password'}
+                value={passcodeInput}
+                onChange={(e) => setPasscodeInput(e.target.value)}
+                placeholder="Mínimo 6 caracteres"
+                className="mt-1 w-full min-h-[42px] rounded-xl border border-zinc-700 bg-[#080B0D] px-3 text-sm text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+              />
+            </div>
+
+            {authStatus.needsClaim && (
+              <div>
+                <label
+                  htmlFor="org-passcode-confirm"
+                  className="block text-[11px] font-semibold text-[#C0C4C9]"
+                >
+                  Confirmar Senha
+                </label>
+                <input
+                  id="org-passcode-confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={passcodeConfirm}
+                  onChange={(e) => setPasscodeConfirm(e.target.value)}
+                  placeholder="Repita a senha"
+                  className="mt-1 w-full min-h-[42px] rounded-xl border border-zinc-700 bg-[#080B0D] px-3 text-sm text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                />
+              </div>
+            )}
+          </div>
+
+          {authError && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+              <ShieldAlert className="h-4 w-4 shrink-0 text-[#FF2A2A]" />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submittingAuth}
+            className="pitstop-btn-red flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl text-sm font-extrabold text-white uppercase"
+          >
+            <Lock className="h-4 w-4" />
+            <span>
+              {submittingAuth
+                ? 'Validando...'
+                : authStatus.needsClaim
+                  ? 'Salvar Senha e Entrar'
+                  : 'Desbloquear Secretaria'}
+            </span>
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Top Import & Scoring Rule Bar */}
@@ -314,15 +499,17 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
-              <button
-                type="button"
-                onClick={handleSyncBase}
-                disabled={syncingBase}
-                className="pitstop-btn-red inline-flex min-h-[44px] items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-white transition-all whitespace-nowrap shrink-0"
-              >
-                <RefreshCw className={`h-4 w-4 ${syncingBase ? 'animate-spin' : ''}`} />
-                <span>{syncingBase ? 'Sincronizando...' : 'Atualizar da Base'}</span>
-              </button>
+              {!authOfflineMode && (
+                <button
+                  type="button"
+                  onClick={handleSyncBase}
+                  disabled={syncingBase}
+                  className="pitstop-btn-red inline-flex min-h-[44px] items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-white transition-all whitespace-nowrap shrink-0"
+                >
+                  <RefreshCw className={`h-4 w-4 ${syncingBase ? 'animate-spin' : ''}`} />
+                  <span>{syncingBase ? 'Sincronizando...' : 'Atualizar da Base'}</span>
+                </button>
+              )}
 
               <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-zinc-700 bg-[#1E1E22] px-4 py-2.5 text-sm font-bold text-white transition-all hover:bg-zinc-800 whitespace-nowrap shrink-0">
                 <FolderUp className="h-4 w-4 text-[#C0C4C9]" />
@@ -345,6 +532,18 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 <FileText className="h-4 w-4 text-[#C0C4C9]" />
                 <span>{loadingDemo ? 'Gerando...' : 'Simular 3 Carros'}</span>
               </button>
+
+              {!authOfflineMode && authStatus?.authenticated && (
+                <button
+                  type="button"
+                  onClick={handleLockBackoffice}
+                  title="Bloquear sessão da apuração"
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-[#080B0D] px-3 py-2.5 text-xs font-semibold text-[#C0C4C9] hover:text-white whitespace-nowrap shrink-0"
+                >
+                  <LogOut className="h-4 w-4 text-[#E10600]" />
+                  <span>Bloquear</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -526,14 +725,14 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
         </section>
       ) : (
         <>
-          {/* Destaques - Pódio (Motorsport Artwork Style) */}
+          {/* Destaques - Pódio */}
           {leader && (
             <section className="space-y-2.5">
               <div className="flex items-center justify-between px-1">
-                <h3 className="text-[11px] font-bold tracking-[0.2em] text-slate-400 uppercase">
+                <h3 className="text-[11px] font-bold tracking-[0.2em] text-zinc-400 uppercase">
                   Destaques - Pódio
                 </h3>
-                <span className="font-mono text-xs text-slate-500">
+                <span className="font-mono text-xs text-zinc-500">
                   Menor pontuação vence
                 </span>
               </div>
@@ -543,14 +742,14 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectedId(leader.result.id)}
-                  className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-red-500/40 bg-[#12161f] p-4 text-left text-white shadow-lg transition-transform hover:scale-[1.01]"
+                  className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-[#E10600]/45 bg-[#111214] p-4 text-left text-white shadow-lg transition-transform hover:scale-[1.01]"
                 >
                   <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-y-0 right-0 w-28 bg-rally-checkered opacity-25 [mask-image:linear-gradient(to_left,black,transparent)]"
                   />
                   <div className="relative flex items-center gap-3.5 min-w-0">
-                    <div className="rally-btn-red flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
+                    <div className="pitstop-btn-red flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
                       1º
                     </div>
                     <div className="min-w-0">
@@ -561,7 +760,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                       <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-white">
                         Carro #{leader.result.carNumber}
                       </div>
-                      <div className="truncate text-xs text-slate-400">
+                      <div className="truncate text-xs text-zinc-400">
                         {leader.result.crewName}
                       </div>
                     </div>
@@ -581,34 +780,34 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedId(second.result.id)}
-                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-slate-700/80 bg-[#12161f] p-4 text-left text-white shadow-lg transition-colors hover:border-orange-500/50"
+                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-zinc-700/80 bg-[#111214] p-4 text-left text-white shadow-lg transition-colors hover:border-[#E10600]/50"
                   >
                     <div
                       aria-hidden="true"
                       className="pointer-events-none absolute inset-y-0 right-0 w-24 bg-rally-checkered opacity-20 [mask-image:linear-gradient(to_left,black,transparent)]"
                     />
                     <div className="relative flex items-center gap-3.5 min-w-0">
-                      <div className="rally-btn-orange flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
+                      <div className="pitstop-btn-metal flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
                         2º
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-orange-400 uppercase">
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-[#C0C4C9] uppercase">
                           <Award className="h-3.5 w-3.5 shrink-0" />
                           <span>{second.recordedV}/{second.totalV} PCs V</span>
                         </div>
                         <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-white">
                           Carro #{second.result.carNumber}
                         </div>
-                        <div className="truncate text-xs text-slate-400">
+                        <div className="truncate text-xs text-zinc-400">
                           {second.result.crewName}
                         </div>
                       </div>
                     </div>
                     <div className="relative shrink-0 text-right">
-                      <div className="font-mono text-2xl font-bold text-slate-100 tabular-nums">
+                      <div className="font-mono text-2xl font-bold text-zinc-100 tabular-nums">
                         {second.finalTotalPoints}
                       </div>
-                      <div className="font-mono text-[11px] font-semibold text-orange-400 tabular-nums">
+                      <div className="font-mono text-[11px] font-semibold text-[#C0C4C9] tabular-nums">
                         +{second.finalTotalPoints - leader.finalTotalPoints} pts
                       </div>
                     </div>
@@ -620,14 +819,14 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedId(third.result.id)}
-                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-slate-700/80 bg-[#12161f] p-4 text-left text-white shadow-lg transition-colors hover:border-amber-500/50"
+                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-zinc-700/80 bg-[#111214] p-4 text-left text-white shadow-lg transition-colors hover:border-amber-500/50"
                   >
                     <div
                       aria-hidden="true"
                       className="pointer-events-none absolute inset-y-0 right-0 w-24 bg-rally-checkered opacity-20 [mask-image:linear-gradient(to_left,black,transparent)]"
                     />
                     <div className="relative flex items-center gap-3.5 min-w-0">
-                      <div className="rally-btn-amber flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-slate-950">
+                      <div className="rally-btn-amber flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-zinc-950">
                         3º
                       </div>
                       <div className="min-w-0">
@@ -638,13 +837,13 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                         <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-white">
                           Carro #{third.result.carNumber}
                         </div>
-                        <div className="truncate text-xs text-slate-400">
+                        <div className="truncate text-xs text-zinc-400">
                           {third.result.crewName}
                         </div>
                       </div>
                     </div>
                     <div className="relative shrink-0 text-right">
-                      <div className="font-mono text-2xl font-bold text-slate-100 tabular-nums">
+                      <div className="font-mono text-2xl font-bold text-zinc-100 tabular-nums">
                         {third.finalTotalPoints}
                       </div>
                       <div className="font-mono text-[11px] font-semibold text-amber-400 tabular-nums">
@@ -658,25 +857,25 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
           )}
 
           {/* Full-width General Leaderboard */}
-          <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#12161f] text-slate-100 shadow-lg">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-5 py-4">
+          <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] text-zinc-100 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
               <div>
                 <h3 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white">
                   Classificação Geral por Pontos ({rankedSummaries.length} competidores)
                 </h3>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-zinc-400">
                   Ordenado do menor para o maior perdedor de pontos · Clique em um carro para ver o boletim individual completo
                 </p>
               </div>
 
               <div className="relative w-full sm:w-60">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Filtrar carro ou dupla..."
-                  className="w-full min-h-[38px] rounded-lg border border-slate-700 bg-[#0a0d13] pl-9 pr-3 text-xs text-white placeholder:text-slate-500 focus:border-orange-500 focus:outline-none"
+                  className="w-full min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] pl-9 pr-3 text-xs text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
                 />
               </div>
             </div>
@@ -684,7 +883,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-left text-sm">
                 <thead>
-                  <tr className="border-b border-slate-800 bg-[#0a0d13] text-xs font-semibold text-slate-400">
+                  <tr className="border-b border-zinc-800 bg-[#080B0D] text-xs font-semibold text-zinc-400">
                     <th className="py-3 pl-5 pr-3">Posição</th>
                     <th className="px-3 py-3">Carro / Dupla</th>
                     <th className="px-3 py-3 text-right">PCs V</th>
@@ -696,7 +895,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                     <th className="py-3 pl-3 pr-5 text-right">Ações</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/80">
+                <tbody className="divide-y divide-zinc-800/80">
                   {filteredSummaries.map((s) => {
                     const rank = rankedSummaries.indexOf(s) + 1;
                     const isSelected = activeSummary?.result.id === s.result.id;
@@ -705,11 +904,11 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                         key={s.result.id}
                         onClick={() => setSelectedId(s.result.id)}
                         className={`cursor-pointer transition-colors ${
-                          isSelected ? 'bg-orange-500/12' : 'hover:bg-slate-800/45'
+                          isSelected ? 'bg-[#E10600]/15' : 'hover:bg-zinc-800/45'
                         }`}
                       >
                         <td className="py-3.5 pl-5 pr-3 font-mono text-sm font-bold text-white tabular-nums">
-                          <span className={rank === 1 ? 'text-amber-400' : 'text-slate-200'}>
+                          <span className={rank === 1 ? 'text-amber-400' : 'text-zinc-200'}>
                             {rank}º{rank === 1 ? ' (Vencedor)' : ''}
                           </span>
                         </td>
@@ -717,7 +916,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                           <div className="font-mono text-sm font-bold text-white">
                             #{s.result.carNumber}
                           </div>
-                          <div className="text-xs text-slate-400 truncate max-w-[200px]">
+                          <div className="text-xs text-zinc-400 truncate max-w-[200px]">
                             {s.result.crewName}
                           </div>
                           {eventFilter === 'ALL' && s.result.eventName && (
@@ -726,22 +925,22 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-xs text-slate-300 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-xs text-zinc-300 tabular-nums">
                           {s.recordedV}/{s.totalV}
                         </td>
                         <td className="px-3 py-3.5 text-right font-mono text-xs text-amber-400 tabular-nums">
                           -{s.earlySecondsTotal.toFixed(1)}s
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-xs text-slate-300 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-xs text-zinc-300 tabular-nums">
                           +{s.lateSecondsTotal.toFixed(1)}s
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-xs text-slate-200 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-xs text-zinc-200 tabular-nums">
                           {s.pointsFromV}
                         </td>
                         <td className="px-3 py-3.5 text-right font-mono text-xs text-red-400 tabular-nums">
                           {s.missedPenaltyPoints}
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-base font-bold text-orange-400 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-base font-bold text-[#FF2A2A] tabular-nums">
                           {s.finalTotalPoints}
                         </td>
                         <td className="py-3.5 pl-3 pr-5 text-right">
@@ -761,7 +960,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                 );
                               }}
                               title="Baixar boletim individual (.txt)"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white"
                             >
                               <Download className="h-3.5 w-3.5" />
                             </button>
@@ -773,7 +972,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                 onRemoveResult(s.result.id);
                               }}
                               aria-label={`Remover carro ${s.result.carNumber}`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-red-950/60 hover:text-red-400"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-red-950/60 hover:text-red-400"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
@@ -789,20 +988,20 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
 
           {/* Detailed Individual Breakdown */}
           {activeSummary && (
-            <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#12161f] text-slate-100 shadow-lg">
+            <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] text-zinc-100 shadow-lg">
               <div aria-hidden="true" className="pitstop-racing-line h-[4px] w-full" />
-              <div className="border-b border-slate-800 px-5 py-4 sm:px-6">
+              <div className="border-b border-zinc-800 px-5 py-4 sm:px-6">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="flex flex-wrap items-baseline gap-2.5">
                       <h3 className="font-['Barlow_Condensed'] text-2xl font-bold text-white">
                         Boletim Individual Detalhado — Carro #{activeSummary.result.carNumber}
                       </h3>
-                      <span className="font-mono text-xs font-bold text-orange-400">
+                      <span className="font-mono text-xs font-bold text-[#FF2A2A]">
                         {activeRank}º Lugar · {activeSummary.finalTotalPoints} pts totais
                       </span>
                     </div>
-                    <p className="mt-0.5 text-xs text-slate-400">
+                    <p className="mt-0.5 text-xs text-zinc-400">
                       Dupla: {activeSummary.result.crewName} · Largada{' '}
                       {activeSummary.result.startTimeStr} · Raio{' '}
                       {activeSummary.result.detectionRadiusM}m · D e N zerados (0 pts)
@@ -814,7 +1013,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                       aria-label="Selecionar competidor"
                       value={activeSummary.result.id}
                       onChange={(e) => setSelectedId(e.target.value)}
-                      className="min-h-[38px] rounded-lg border border-slate-700 bg-[#0a0d13] px-3 text-xs font-semibold text-slate-100 focus:border-orange-500 focus:outline-none"
+                      className="min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-semibold text-zinc-100 focus:border-[#E10600] focus:outline-none"
                     >
                       {rankedSummaries.map((s, idx) => (
                         <option key={s.result.id} value={s.result.id}>
@@ -836,7 +1035,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                           'text/plain;charset=utf-8'
                         )
                       }
-                      className="rally-btn-orange inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold text-white whitespace-nowrap shrink-0"
+                      className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold text-white whitespace-nowrap shrink-0"
                     >
                       <Download className="h-3.5 w-3.5" />
                       <span>Exportar Boletim Individual (.txt)</span>
@@ -845,23 +1044,23 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 divide-y divide-slate-800 lg:grid-cols-12 lg:divide-x lg:divide-y-0">
+              <div className="grid grid-cols-1 divide-y divide-zinc-800 lg:grid-cols-12 lg:divide-x lg:divide-y-0">
                 {/* Left 4 columns: Section Subtotals */}
                 <div className="p-5 lg:col-span-4">
-                  <h4 className="text-xs font-bold tracking-wider text-slate-400 uppercase">
+                  <h4 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">
                     Resumo por Seção da Planilha
                   </h4>
                   <div className="mt-3 overflow-x-auto">
                     <table className="w-full border-collapse text-left text-xs font-mono tabular-nums">
                       <thead>
-                        <tr className="border-b border-slate-800 text-slate-400">
+                        <tr className="border-b border-zinc-800 text-zinc-400">
                           <th className="py-2 pr-2">Seção</th>
                           <th className="px-2 py-2">Tip</th>
                           <th className="px-2 py-2 text-right">PCs</th>
                           <th className="py-2 pl-2 text-right">Pontos</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-800/70">
+                      <tbody className="divide-y divide-zinc-800/70">
                         {activeSections.map((sec, idx) => {
                           const isExempt = sec.type !== 'V';
                           return (
@@ -869,18 +1068,18 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                               <td className="py-2 pr-2 font-semibold text-white">
                                 {sec.section ?? '-'}
                               </td>
-                              <td className="px-2 py-2 text-slate-300">
+                              <td className="px-2 py-2 text-zinc-300">
                                 {sec.type || '-'}
                               </td>
-                              <td className="px-2 py-2 text-right text-slate-400">
+                              <td className="px-2 py-2 text-right text-zinc-400">
                                 {sec.recordedCount}/{sec.totalTulipas}
                               </td>
                               <td
                                 className={`py-2 pl-2 text-right font-semibold ${
                                   isExempt
-                                    ? 'text-slate-500'
+                                    ? 'text-zinc-500'
                                     : sec.points > 0
-                                      ? 'text-orange-400'
+                                      ? 'text-[#FF2A2A]'
                                       : 'text-emerald-400'
                                 }`}
                               >
@@ -897,11 +1096,11 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 {/* Right 8 columns: Tulipa-by-Tulipa Passage Log */}
                 <div className="p-5 lg:col-span-8">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <h4 className="text-xs font-bold tracking-wider text-slate-400 uppercase">
+                    <h4 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">
                       Passagens Tulipa a Tulipa ({filteredPassages.length} registros)
                     </h4>
 
-                    <div className="flex flex-wrap gap-1 rounded-lg border border-slate-800 bg-[#0a0d13] p-1">
+                    <div className="flex flex-wrap gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
                       {(
                         [
                           ['V', 'Trechos V'],
@@ -917,8 +1116,8 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                           onClick={() => setDetailFilter(key)}
                           className={`min-h-[30px] rounded-md px-2.5 text-xs font-semibold transition-all whitespace-nowrap ${
                             detailFilter === key
-                              ? 'rally-btn-orange text-white'
-                              : 'text-slate-400 hover:text-white'
+                              ? 'pitstop-btn-red text-white'
+                              : 'text-zinc-400 hover:text-white'
                           }`}
                         >
                           {label}
@@ -927,10 +1126,10 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                     </div>
                   </div>
 
-                  <div className="mt-3 max-h-[480px] overflow-auto rounded-xl border border-slate-800 bg-[#0a0d13]">
+                  <div className="mt-3 max-h-[480px] overflow-auto rounded-xl border border-zinc-800 bg-[#080B0D]">
                     <table className="w-full border-collapse text-left text-xs">
-                      <thead className="sticky top-0 bg-[#12161f] text-slate-400">
-                        <tr className="border-b border-slate-800">
+                      <thead className="sticky top-0 bg-[#111214] text-zinc-400">
+                        <tr className="border-b border-zinc-800">
                           <th className="py-2.5 pl-3 pr-2">Tul</th>
                           <th className="px-2 py-2.5">Sec</th>
                           <th className="px-2 py-2.5">Tip</th>
@@ -941,12 +1140,12 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                           <th className="py-2.5 pl-2 pr-3 text-right">Pts</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-800/70 font-mono tabular-nums">
+                      <tbody className="divide-y divide-zinc-800/70 font-mono tabular-nums">
                         {filteredPassages.length === 0 ? (
                           <tr>
                             <td
                               colSpan={8}
-                              className="px-4 py-8 text-center font-sans text-xs text-slate-500"
+                              className="px-4 py-8 text-center font-sans text-xs text-zinc-500"
                             >
                               Nenhuma tulipa encontrada neste filtro.
                             </td>
@@ -958,32 +1157,32 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                             return (
                               <tr
                                 key={p.tulipa}
-                                className={isMissedV ? 'bg-red-950/35' : 'hover:bg-slate-800/35'}
+                                className={isMissedV ? 'bg-red-950/35' : 'hover:bg-zinc-800/35'}
                               >
                                 <td className="py-2 pl-3 pr-2 font-semibold text-white">
                                   {p.tulipa}
                                 </td>
-                                <td className="px-2 py-2 text-slate-400">
+                                <td className="px-2 py-2 text-zinc-400">
                                   {p.section ?? '-'}
                                 </td>
-                                <td className="px-2 py-2 font-semibold text-slate-300">
+                                <td className="px-2 py-2 font-semibold text-zinc-300">
                                   {p.type || '-'}
                                 </td>
-                                <td className="px-2 py-2 text-slate-400">
+                                <td className="px-2 py-2 text-zinc-400">
                                   {p.idealHoraStr || '--'}
                                 </td>
-                                <td className="px-2 py-2 text-slate-200">
+                                <td className="px-2 py-2 text-zinc-200">
                                   {p.realHoraStr || '--'}
                                 </td>
                                 <td
                                   className={`px-2 py-2 text-right ${
                                     isExempt
-                                      ? 'text-slate-500'
+                                      ? 'text-zinc-500'
                                       : isMissedV
                                         ? 'font-semibold text-red-400'
                                         : p.diffSec !== null && p.diffSec < 0
                                           ? 'text-amber-400'
-                                          : 'text-slate-200'
+                                          : 'text-zinc-200'
                                   }`}
                                 >
                                   {isMissedV
@@ -992,7 +1191,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                       ? `${p.diffSec >= 0 ? '+' : ''}${p.diffSec.toFixed(1)}s`
                                       : '--'}
                                 </td>
-                                <td className="px-2 py-2 text-right text-slate-400">
+                                <td className="px-2 py-2 text-right text-zinc-400">
                                   {p.minDistanceM !== null
                                     ? `${p.minDistanceM.toFixed(0)}m`
                                     : '--'}
@@ -1000,9 +1199,9 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                 <td
                                   className={`py-2 pl-2 pr-3 text-right font-semibold ${
                                     isExempt
-                                      ? 'text-slate-500'
+                                      ? 'text-zinc-500'
                                       : p.points > 0
-                                        ? 'text-orange-400'
+                                        ? 'text-[#FF2A2A]'
                                         : 'text-emerald-400'
                                   }`}
                                 >

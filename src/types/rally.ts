@@ -157,8 +157,6 @@ export type ActiveTab =
   | 'inicial'
   | 'navegacao'
   | 'velocidade'
-  | 'hodometro'
-  | 'competidor'
   | 'calculadora'
   | 'configuracoes'
   | 'apuracao';

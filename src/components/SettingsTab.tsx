@@ -11,18 +11,22 @@ import {
   BatteryLow,
   BatteryMedium,
   BatteryWarning,
+  Bell,
   Bluetooth,
   Camera,
   Check,
   CheckCircle2,
   ChevronRight,
   Clock,
+  Compass,
   Copy,
   Database,
   Download,
+  ExternalLink,
   Eye,
   FileSearch,
   FileText,
+  HardDrive,
   Keyboard,
   Link2,
   Lock,
@@ -33,6 +37,7 @@ import {
   Ruler,
   Satellite,
   Server,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   Smartphone,
@@ -40,6 +45,7 @@ import {
   Upload,
   UploadCloud,
   Volume2,
+  Wifi,
 } from 'lucide-react';
 import type { SettingsSubMenu } from '../App';
 import type { ParsedRoadbook } from '../types/rally';
@@ -52,19 +58,28 @@ import {
 import {
   type AlertStyle,
   calibrationPctFromWValue,
+  getDefaultNavSettings,
   getDefaultPilotDisplay,
   getDefaultShortcuts,
   type HighlightTheme,
+  type PitStopNavSettings,
   type ScreenOrientationLock,
   type ShortcutBindings,
   useNavSettings,
   wValueFromCalibrationPct,
 } from '../utils/navSettings';
 import {
+  type BondedBluetoothDevice,
   connectPairingRoom,
   generatePairingRoomCode,
+  generatePairingRoomPin,
+  isNativeBluetoothSppAvailable,
+  listBondedBluetoothDevices,
   normalizeRoomCode,
+  normalizeRoomPin,
   type PairingPresenceState,
+  type PairingTransportMode,
+  playPairingBell,
 } from '../utils/pairingClient';
 import {
   checkAllPermissionsStatus,
@@ -84,6 +99,13 @@ import {
   saveConvertedRoadbook,
   setLastActiveRoadbookId,
 } from '../utils/roadbookStorage';
+import {
+  loadVelocityDatabase,
+  persistVelocityRuns,
+  persistVelocityTracks,
+} from '../utils/velocityStorage';
+import type { VelocityTrack } from '../utils/velocityEngine';
+import { CompetitorCollector } from './CompetitorCollector';
 import { GoProBlePanel } from './GoProBlePanel';
 
 interface SettingsTabProps {
@@ -251,10 +273,25 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [showStructureReport, setShowStructureReport] = useState(false);
   const [copiedReport, setCopiedReport] = useState(false);
 
+  // Backup & Offline storage summary state
+  const [velocityStats, setVelocityStats] = useState<{ tracksCount: number; runsCount: number }>({
+    tracksCount: 0,
+    runsCount: 0,
+  });
+  const [backupFeedback, setBackupFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const [confirmResetDefaults, setConfirmResetDefaults] = useState(false);
+
   const refreshSavedRoadbooks = useCallback(async () => {
-    const list = await listSavedRoadbooks();
+    const [list, velDb] = await Promise.all([
+      listSavedRoadbooks(),
+      loadVelocityDatabase().catch(() => ({ tracks: [], runs: [] })),
+    ]);
     setSavedRoadbooks(list);
     setActiveRoadbookId(getLastActiveRoadbookId());
+    setVelocityStats({
+      tracksCount: velDb.tracks.length,
+      runsCount: velDb.runs.length,
+    });
   }, []);
 
   useEffect(() => {
@@ -348,7 +385,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     setRbSuccess(null);
     setLoadingSample(true);
     try {
-      const res = await fetch('/assets/aistudio/rally_escoteiros_merged_66a34567.txt');
+      const res = await fetch(`${import.meta.env.BASE_URL}assets/aistudio/rally_escoteiros_merged_66a34567.txt`);
       if (!res.ok) throw new Error('Planilha modelo não encontrada.');
       const buffer = await res.arrayBuffer();
       const parsed = await parseNavigationBuffer(buffer, 'rally_escoteiros_merged.txt');
@@ -462,6 +499,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     transport: 'none',
   });
   const [btStatusMsg, setBtStatusMsg] = useState<string | null>(null);
+  const [bondedBtList, setBondedBtList] = useState<BondedBluetoothDevice[]>([]);
+  const [loadingBtList, setLoadingBtList] = useState(false);
+  const [copiedPilotLink, setCopiedPilotLink] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const wakeLockSentinelRef = useRef<{ release: () => Promise<void> } | null>(null);
 
@@ -615,12 +655,22 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     }
     const conn = connectPairingRoom({
       roomCode: settings.pairing.roomCode,
+      roomPin: settings.pairing.roomPin,
       role: settings.pairing.role,
+      transportMode: settings.pairing.transportMode,
+      bluetoothDevices: settings.pairing.bluetoothDevices,
       onTelemetry: () => {},
       onPresence: (p) => setPairingPresence(p),
     });
     return () => conn.close();
-  }, [settings.pairing.enabled, settings.pairing.role, settings.pairing.roomCode]);
+  }, [
+    settings.pairing.enabled,
+    settings.pairing.role,
+    settings.pairing.roomCode,
+    settings.pairing.roomPin,
+    settings.pairing.transportMode,
+    settings.pairing.bluetoothDevices,
+  ]);
 
   // Global key listener when capturing a shortcut binding
   useEffect(() => {
@@ -647,6 +697,26 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
   const handleSelectBluetoothDevice = async () => {
     setBtStatusMsg(null);
+    if (isNativeBluetoothSppAvailable()) {
+      setLoadingBtList(true);
+      try {
+        const devices = await listBondedBluetoothDevices();
+        setBondedBtList(devices);
+        if (devices.length === 0) {
+          setBtStatusMsg('Nenhum celular pareado. Pareie o Piloto nos Ajustes > Bluetooth do Android.');
+        } else {
+          setBtStatusMsg(`${devices.length} aparelho(s) encontrado(s). Toque para selecionar até 3 Pilotos.`);
+        }
+      } catch (err) {
+        setBtStatusMsg(
+          err instanceof Error ? err.message : 'Erro ao listar dispositivos Bluetooth.'
+        );
+      } finally {
+        setLoadingBtList(false);
+      }
+      return;
+    }
+
     const nav = navigator as NavigatorWithBattery;
     if (nav.bluetooth && typeof nav.bluetooth.requestDevice === 'function') {
       try {
@@ -664,9 +734,49 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         }
       }
     }
-    setBtStatusMsg(
-      'No celular Android/iOS, pareie os aparelhos em Ajustes > Bluetooth com "Vínculo Bluetooth (Tethering)" ativo e informe o mesmo Código da Dupla acima.'
-    );
+    setBtStatusMsg('Na Web, use Hotspot Wi-Fi ou o link ?piloto=SALA para conectar.');
+  };
+
+  const handleToggleBondedBtDevice = (dev: BondedBluetoothDevice) => {
+    const current = settings.pairing.bluetoothDevices || [];
+    const exists = current.some((d) => d.address === dev.address);
+    const next = exists
+      ? current.filter((d) => d.address !== dev.address)
+      : [...current, dev].slice(-3);
+    updateSettings({
+      pairing: {
+        ...settings.pairing,
+        bluetoothDevices: next,
+        bluetoothDeviceName: next.map((d) => d.name).join(', '),
+      },
+    });
+  };
+
+  const handleCopyPilotLink = async () => {
+    if (typeof window === 'undefined') return;
+    const room = normalizeRoomCode(settings.pairing.roomCode) || 'PS-4821';
+    const pin = normalizeRoomPin(settings.pairing.roomPin || '');
+    const pinSuffix = pin ? `&pin=${encodeURIComponent(pin)}` : '';
+    const url = `${window.location.origin}/?piloto=${encodeURIComponent(room)}${pinSuffix}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedPilotLink(true);
+      window.setTimeout(() => setCopiedPilotLink(false), 2000);
+    } catch {
+      setBtStatusMsg(`Link do Piloto: ${url}`);
+    }
+  };
+
+  const handleOpenPilotDisplay = () => {
+    updateSettings({
+      pairing: {
+        ...settings.pairing,
+        enabled: true,
+        role: 'pilot',
+      },
+    });
+    playPairingBell();
+    onOpenNavigation?.();
   };
 
   const handleToggleWakeLock = async () => {
@@ -876,10 +986,121 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     return <BatteryFull className="h-4 w-4 text-emerald-400" />;
   };
 
+  const handleExportBackup = async () => {
+    setBackupFeedback(null);
+    try {
+      const velDb = await loadVelocityDatabase();
+      const payload = {
+        app: 'PitStop-Sports',
+        exportedAt: new Date().toISOString(),
+        settings,
+        velocityTracks: velDb.tracks,
+        roadbookIds: savedRoadbooks.map((r) => ({ id: r.id, eventName: r.eventName, fileName: r.fileName })),
+      };
+      const json = JSON.stringify(payload, null, 2);
+      const fileName = `pitstop_backup_${new Date().toISOString().slice(0, 10)}.json`;
+
+      if (Capacitor.isNativePlatform()) {
+        try {
+          await Filesystem.writeFile({
+            path: fileName,
+            data: json,
+            directory: Directory.Documents,
+            encoding: Encoding.UTF8,
+          });
+          setBackupFeedback({
+            ok: true,
+            message: `Backup salvo na pasta Documentos como ${fileName}.`,
+          });
+          return;
+        } catch {
+          // Fall through to browser download
+        }
+      }
+
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setBackupFeedback({
+        ok: true,
+        message: `Backup exportado (${velDb.tracks.length} pista(s) e ajustes de navegação).`,
+      });
+    } catch {
+      setBackupFeedback({ ok: false, message: 'Não foi possível gerar o backup.' });
+    }
+  };
+
+  const handleImportBackup = async (file: File) => {
+    setBackupFeedback(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as {
+        settings?: Partial<PitStopNavSettings>;
+        velocityTracks?: VelocityTrack[];
+      };
+      let restoredParts = 0;
+      if (parsed.settings && typeof parsed.settings === 'object') {
+        updateSettings(parsed.settings);
+        restoredParts += 1;
+      }
+      if (Array.isArray(parsed.velocityTracks)) {
+        const existing = await loadVelocityDatabase();
+        const existingIds = new Set(existing.tracks.map((t) => t.id));
+        const merged = [
+          ...existing.tracks,
+          ...parsed.velocityTracks.filter((t) => t && t.id && !existingIds.has(t.id)),
+        ];
+        await persistVelocityTracks(merged);
+        window.dispatchEvent(new CustomEvent('pitstop:velocity-db-updated'));
+        restoredParts += 1;
+      }
+      await refreshSavedRoadbooks();
+      if (restoredParts === 0) {
+        throw new Error('Arquivo JSON sem ajustes ou pistas válidas.');
+      }
+      setBackupFeedback({
+        ok: true,
+        message: 'Backup restaurado com sucesso!',
+      });
+    } catch (err) {
+      setBackupFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Arquivo de backup inválido.',
+      });
+    }
+  };
+
+  const handleClearVelocityRuns = async () => {
+    await persistVelocityRuns([]);
+    window.dispatchEvent(new CustomEvent('pitstop:velocity-db-updated'));
+    await refreshSavedRoadbooks();
+    setBackupFeedback({
+      ok: true,
+      message: 'Histórico de passagens de velocidade limpo (pistas e marcos preservados).',
+    });
+  };
+
+  const handleResetDefaultSettings = () => {
+    const defaults = getDefaultNavSettings();
+    updateSettings(defaults);
+    setConfirmResetDefaults(false);
+    setBackupFeedback({
+      ok: true,
+      message: 'Ajustes de navegação e aferição restaurados para o padrão.',
+    });
+  };
+
   const activeRoadbookItem = savedRoadbooks.find((r) => r.id === activeRoadbookId) ?? null;
   const pilotActiveCount = Object.values(settings.pilotDisplay).filter(Boolean).length;
 
   const menuTitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
+    collector: 'Coletor & Envio para Admin',
     roadbooks: 'Planilhas & Livros de Bordo',
     clock: 'Ajuste de Hora (Manual / Automática)',
     pairing: 'Pareamento Navegador ↔ Piloto',
@@ -887,35 +1108,36 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     calibration: 'Aferição do Hodômetro & W Fino',
     alerts: 'Alertas, Road Book & Atalhos',
     gopro: 'Câmeras GoPro (Bluetooth BLE)',
+    backup: 'Backup & Dados Offline',
     system: 'Sistema, Tela, GPS & Permissões',
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4 text-[#F4F4F4]">
+    <div className="mx-auto max-w-4xl space-y-3 text-[#F4F4F4]">
       {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
-        <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
+        <div className="flex items-center gap-2">
           {activeMenu !== 'hub' && (
             <button
               type="button"
               onClick={() => navigateMenu('hub')}
-              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#111214] px-3 text-xs font-bold text-[#F4F4F4] hover:border-zinc-500"
+              className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#111214] px-2.5 text-xs font-bold text-[#F4F4F4] hover:border-zinc-500"
             >
               <ArrowLeft className="h-4 w-4 text-[#E10600]" />
               <span>Menus</span>
             </button>
           )}
           <div>
-            <p className="font-mono text-[10px] font-bold tracking-[0.2em] text-[#E10600] uppercase">
-              Configurações PitStop-Sports
+            <p className="font-mono text-[10px] font-bold tracking-[0.18em] text-[#E10600] uppercase">
+              Configurações
             </p>
-            <h1 className="font-['Barlow_Condensed'] text-2xl font-extrabold italic tracking-wide text-white uppercase sm:text-3xl">
-              {activeMenu === 'hub' ? 'Central de Configurações' : menuTitleMap[activeMenu]}
+            <h1 className="font-['Barlow_Condensed'] text-xl font-extrabold italic tracking-wide text-white uppercase sm:text-2xl">
+              {activeMenu === 'hub' ? 'Central de Ajustes' : menuTitleMap[activeMenu]}
             </h1>
           </div>
         </div>
         <span className="font-mono text-xs font-semibold text-[#C0C4C9] tabular-nums">
-          Hora: {formatClockOnly(nowMs + settings.clockOffsetMs)}
+          {formatClockOnly(nowMs + settings.clockOffsetMs)}
         </span>
       </div>
 
@@ -930,6 +1152,15 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               subtitle: activeRoadbookItem
                 ? `Ativa: ${activeRoadbookItem.eventName} (${savedRoadbooks.length} salvas)`
                 : `${savedRoadbooks.length} planilha(s) offline · Importar .NBP / .TXT`,
+            },
+            {
+              id: 'collector' as const,
+              icon: Compass,
+              title: 'Coletor & Envio para Admin',
+              subtitle:
+                pendingQueue.length > 0
+                  ? `${pendingQueue.length} coleta(s) na fila offline aguardando envio`
+                  : 'Coleta GPS silenciosa da prova e envio à Base / Admin',
             },
             {
               id: 'clock' as const,
@@ -974,6 +1205,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               icon: Camera,
               title: 'Câmeras GoPro (Bluetooth BLE)',
               subtitle: `Multi-câmera até 7 GoPro · Auto-REC ${settings.goproAutoRecOnStart ? 'Ligado' : 'Desligado'}`,
+            },
+            {
+              id: 'backup' as const,
+              icon: HardDrive,
+              title: 'Backup & Dados Offline',
+              subtitle: `${savedRoadbooks.length} planilhas · ${velocityStats.tracksCount} pistas · Exportar / Restaurar`,
             },
             {
               id: 'system' as const,
@@ -1256,19 +1493,19 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
       {/* SUBMENU 2: PAREAMENTO NAVEGADOR <-> PILOTO (MESTRE -> ESCRAVO) */}
       {activeMenu === 'pairing' && (
-        <div className="space-y-4">
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 sm:p-5 space-y-4">
+        <div className="space-y-3">
+          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 sm:p-4 space-y-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
-                  Espelhamento Mestre → Escravo
+                <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase sm:text-xl">
+                  Droid Piloto · Mestre → Escravo
                 </h2>
-                <p className="mt-0.5 text-xs text-[#B5B5B5]">
-                  O celular <strong className="text-white">Navegador (Mestre)</strong> transmite hodômetro, velocidade, TNAV, barra de cores, desenhos, notas e alertas em tempo real para o celular <strong className="text-white">Piloto (Escravo)</strong>.
+                <p className="text-[11px] text-[#B5B5B5]">
+                  Navegador (Mestre) envia hodômetro, PMM, TNAV e alertas para 1 ou 2+ celulares Piloto.
                 </p>
               </div>
 
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-2 text-xs font-bold text-white">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-1.5 text-xs font-bold text-white">
                 <input
                   type="checkbox"
                   checked={settings.pairing.enabled}
@@ -1279,41 +1516,41 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   }
                   className="h-4 w-4 accent-[#E10600]"
                 />
-                <span>{settings.pairing.enabled ? 'Pareamento Ativo' : 'Ativar Pareamento'}</span>
+                <span>{settings.pairing.enabled ? 'Ativo' : 'Desligado'}</span>
               </label>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
               <div>
-                <span className="block text-[11px] font-semibold text-[#C0C4C9] uppercase">
-                  Papel deste Aparelho
+                <span className="block text-[10px] font-semibold text-[#C0C4C9] uppercase">
+                  Papel do Aparelho
                 </span>
-                <div className="mt-1.5 grid grid-cols-2 gap-1.5 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+                <div className="mt-1 grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
                   <button
                     type="button"
                     onClick={() =>
                       updateSettings({ pairing: { ...settings.pairing, role: 'navigator' } })
                     }
-                    className={`min-h-[38px] rounded-md text-xs font-bold whitespace-nowrap ${
+                    className={`min-h-[36px] rounded-md text-xs font-bold whitespace-nowrap ${
                       settings.pairing.role === 'navigator'
                         ? 'bg-[#E10600] text-white'
                         : 'text-[#B5B5B5]'
                     }`}
                   >
-                    Navegador (Mestre)
+                    Navegador
                   </button>
                   <button
                     type="button"
                     onClick={() =>
                       updateSettings({ pairing: { ...settings.pairing, role: 'pilot' } })
                     }
-                    className={`min-h-[38px] rounded-md text-xs font-bold whitespace-nowrap ${
+                    className={`min-h-[36px] rounded-md text-xs font-bold whitespace-nowrap ${
                       settings.pairing.role === 'pilot'
                         ? 'bg-[#E10600] text-white'
                         : 'text-[#B5B5B5]'
                     }`}
                   >
-                    Piloto (Escravo)
+                    Piloto
                   </button>
                 </div>
               </div>
@@ -1321,11 +1558,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div>
                 <label
                   htmlFor="pairing-room-code"
-                  className="block text-[11px] font-semibold text-[#C0C4C9] uppercase"
+                  className="block text-[10px] font-semibold text-[#C0C4C9] uppercase"
                 >
-                  Código da Sala / Dupla
+                  Código da Sala &amp; PIN
                 </label>
-                <div className="mt-1.5 flex gap-1.5">
+                <div className="mt-1 flex gap-1.5">
                   <input
                     id="pairing-room-code"
                     type="text"
@@ -1339,25 +1576,45 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       })
                     }
                     placeholder="PS-4821"
-                    className="flex-1 min-h-[42px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3 font-mono text-sm font-black tracking-wider text-white uppercase focus:border-[#E10600] focus:outline-none"
+                    className="w-24 sm:w-28 min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-sm font-black tracking-wider text-white uppercase focus:border-[#E10600] focus:outline-none"
+                  />
+                  <input
+                    id="pairing-room-pin"
+                    type="text"
+                    aria-label="PIN de segurança da sala"
+                    value={settings.pairing.roomPin || ''}
+                    onChange={(e) =>
+                      updateSettings({
+                        pairing: {
+                          ...settings.pairing,
+                          roomPin: normalizeRoomPin(e.target.value),
+                        },
+                      })
+                    }
+                    placeholder="PIN"
+                    className="flex-1 min-w-[74px] min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-sm font-black tracking-wider text-emerald-300 uppercase focus:border-[#E10600] focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={() =>
                       updateSettings({
-                        pairing: { ...settings.pairing, roomCode: generatePairingRoomCode() },
+                        pairing: {
+                          ...settings.pairing,
+                          roomCode: generatePairingRoomCode(),
+                          roomPin: generatePairingRoomPin(),
+                        },
                       })
                     }
-                    className="pitstop-btn-metal min-h-[42px] rounded-lg px-3 text-xs font-bold whitespace-nowrap shrink-0"
+                    className="pitstop-btn-metal min-h-[38px] rounded-lg px-2.5 text-xs font-bold whitespace-nowrap shrink-0"
                   >
-                    Novo Código
+                    Gerar
                   </button>
                 </div>
               </div>
 
-              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3 flex flex-col justify-between">
+              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] px-3 py-2 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-[#B5B5B5]">Sincronização</span>
+                  <span className="font-semibold text-[#B5B5B5]">Status</span>
                   <span
                     className={`font-mono font-bold ${
                       !settings.pairing.enabled
@@ -1370,49 +1627,146 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     }`}
                   >
                     {!settings.pairing.enabled
-                      ? 'Desligado'
+                      ? 'Off'
                       : pairingPresence.status === 'connected'
-                        ? `Online (${pairingPresence.transport.toUpperCase()})`
+                        ? pairingPresence.transport === 'bt_spp'
+                          ? 'BT SPP'
+                          : pairingPresence.transport === 'local'
+                            ? 'Local'
+                            : 'Wi-Fi WS'
                         : pairingPresence.status === 'connecting'
                           ? 'Conectando...'
-                          : 'Sem rede'}
+                          : 'Aguardando'}
                   </span>
                 </div>
                 <div className="mt-1 font-mono text-[11px] text-[#C0C4C9] tabular-nums">
-                  Mestre (Nav): {pairingPresence.navigators} · Escravo (Piloto): {pairingPresence.pilots}
+                  Mestre: {pairingPresence.navigators} · Pilotos: {pairingPresence.pilots}
                 </div>
               </div>
             </div>
 
-            {/* Bluetooth Pairing Picker & Screen Wake Lock */}
-            <div className="grid grid-cols-1 gap-3 border-t border-zinc-800 pt-4 sm:grid-cols-2">
-              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3.5 space-y-2">
+            {/* Transport Selector + Quick Pilot Launcher */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-3">
+              <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-1 text-[11px] font-bold">
+                {(
+                  [
+                    { id: 'auto', label: 'Auto' },
+                    { id: 'bluetooth_spp', label: 'BT Clássico' },
+                    { id: 'wifi_ws', label: 'Wi-Fi / Web' },
+                  ] as { id: PairingTransportMode; label: string }[]
+                ).map((modeOpt) => (
+                  <button
+                    key={modeOpt.id}
+                    type="button"
+                    onClick={() =>
+                      updateSettings({
+                        pairing: { ...settings.pairing, transportMode: modeOpt.id },
+                      })
+                    }
+                    className={`min-h-[32px] rounded-md px-2.5 transition-colors whitespace-nowrap ${
+                      settings.pairing.transportMode === modeOpt.id
+                        ? 'bg-[#E10600] text-white'
+                        : 'text-[#B5B5B5] hover:text-white'
+                    }`}
+                  >
+                    {modeOpt.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => playPairingBell()}
+                  className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-bold whitespace-nowrap"
+                >
+                  <Bell className="h-3.5 w-3.5 text-amber-300" />
+                  <span>Testar Sinetinha</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyPilotLink}
+                  className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-bold whitespace-nowrap"
+                >
+                  {copiedPilotLink ? (
+                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  ) : (
+                    <Share2 className="h-3.5 w-3.5 text-sky-400" />
+                  )}
+                  <span>{copiedPilotLink ? 'Copiado!' : 'Copiar Link Piloto'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenPilotDisplay}
+                  className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white whitespace-nowrap"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>Abrir Visor Droid Piloto</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Bluetooth Pairing Picker (Native SPP Multi-Pilot + Wake Lock) */}
+            <div className="grid grid-cols-1 gap-2.5 border-t border-zinc-800 pt-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <Bluetooth className="h-4 w-4 text-[#E10600]" />
                     <span className="text-xs font-bold text-white uppercase">
-                      Dispositivo Bluetooth
+                      {isNativeBluetoothSppAvailable()
+                        ? 'Pilotos Bluetooth (SPP)'
+                        : 'Bluetooth / Wi-Fi'}
                     </span>
                   </div>
                   <button
                     type="button"
+                    disabled={loadingBtList}
                     onClick={handleSelectBluetoothDevice}
-                    className="pitstop-btn-metal rounded-lg px-3 py-1.5 text-xs font-bold whitespace-nowrap"
+                    className="pitstop-btn-metal rounded-lg px-2.5 py-1 text-xs font-bold whitespace-nowrap"
                   >
-                    Buscar Bluetooth
+                    {loadingBtList ? 'Buscando...' : 'Listar Pareados'}
                   </button>
                 </div>
-                <p className="font-mono text-xs text-[#C0C4C9]">
-                  {settings.pairing.bluetoothDeviceName
-                    ? `Pareado: ${settings.pairing.bluetoothDeviceName}`
-                    : 'Nenhum dispositivo Bluetooth selecionado'}
-                </p>
+
+                {bondedBtList.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {bondedBtList.map((dev) => {
+                      const selected = (settings.pairing.bluetoothDevices || []).some(
+                        (d) => d.address === dev.address
+                      );
+                      return (
+                        <button
+                          key={dev.address}
+                          type="button"
+                          onClick={() => handleToggleBondedBtDevice(dev)}
+                          className={`rounded-md border px-2.5 py-1 font-mono text-[11px] font-bold transition-colors ${
+                            selected
+                              ? 'border-emerald-400 bg-emerald-950/50 text-emerald-300'
+                              : 'border-zinc-700 bg-[#111214] text-[#C0C4C9]'
+                          }`}
+                        >
+                          {selected ? '✓ ' : '+ '}
+                          {dev.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="font-mono text-[11px] text-[#C0C4C9]">
+                    {(settings.pairing.bluetoothDevices || []).length > 0
+                      ? `Alvos: ${settings.pairing.bluetoothDevices.map((d) => d.name).join(', ')}`
+                      : settings.pairing.bluetoothDeviceName
+                        ? `Selecionado: ${settings.pairing.bluetoothDeviceName}`
+                        : 'Nenhum aparelho Bluetooth selecionado'}
+                  </p>
+                )}
+
                 {btStatusMsg && <p className="text-[11px] text-amber-300">{btStatusMsg}</p>}
               </div>
 
-              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3.5 flex flex-col justify-between gap-2">
+              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3 flex flex-col justify-between gap-2">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <Smartphone className="h-4 w-4 text-[#E10600]" />
                     <span className="text-xs font-bold text-white uppercase">
                       Tela Sempre Ativa
@@ -1421,27 +1775,24 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <button
                     type="button"
                     onClick={handleToggleWakeLock}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-bold ${
+                    className={`rounded-lg px-2.5 py-1 text-xs font-bold ${
                       wakeLockActive ? 'bg-emerald-600 text-white' : 'pitstop-btn-metal'
                     }`}
                   >
-                    {wakeLockActive ? 'Ativa (WakeLock)' : 'Manter Acesa'}
+                    {wakeLockActive ? 'Ativa' : 'Manter Acesa'}
                   </button>
                 </div>
                 <p className="text-[11px] text-[#B5B5B5]">
-                  Evita que a tela do Piloto ou Navegador apague no painel durante a etapa.
+                  Impede que o painel do Piloto ou Navegador apague durante a prova.
                 </p>
               </div>
             </div>
 
-            {/* Setup checklist for Android / iOS + Bluetooth vs BLE note */}
-            <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3.5 text-xs text-[#C0C4C9] space-y-1.5">
-              <p className="font-bold text-white uppercase tracking-wide text-[11px]">
-                Bluetooth vs Wi-Fi Hotspot (Pareamento Direto):
-              </p>
-              <p>1. <strong className="text-white">Bluetooth Clássico vs BLE:</strong> No navegador/WebView não há RFCOMM Clássico direto entre celulares; para sincronia offline sem internet no carro, ligue o <strong className="text-white">Vínculo Bluetooth (Tethering)</strong> ou <strong className="text-white">Hotspot Wi-Fi</strong> no celular do Navegador (Mestre) e conecte o Piloto.</p>
-              <p>2. Em ambos os aparelhos, libere <strong className="text-white">Localização (&ldquo;Permitir o tempo todo&rdquo;)</strong> e <strong className="text-white">Dispositivos Próximos</strong>.</p>
-              <p>3. Defina o mesmo <strong className="text-white">Código da Sala</strong> nos dois celulares: o Mestre controla a planilha e o Escravo exibe os dados e bipes em tempo real sem alterar a regularidade.</p>
+            <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-3 py-2 text-[11px] text-[#C0C4C9]">
+              <Wifi className="h-3.5 w-3.5 shrink-0 text-[#E10600]" />
+              <span>
+                No APK Android, <strong className="text-white">Bluetooth Clássico SPP</strong> conecta direto 1 ou 2 Pilotos sem internet; no navegador use Hotspot Wi-Fi + mesma Sala.
+              </span>
             </div>
           </section>
         </div>
@@ -2052,7 +2403,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   ? 'RELÓGIO AUTOMÁTICO ATIVO'
                   : `MODO ${clockMode === 'auto' ? 'GPS' : 'MANUAL'} · DESVIO ${settings.clockOffsetMs >= 0 ? '+' : ''}${(settings.clockOffsetMs / 1000).toFixed(1)}s`}
               </p>
-              <div className="mt-1 font-mono text-5xl font-black tracking-tight text-white tabular-nums sm:text-6xl">
+              <div className="mt-1 font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
                 {formatClockOnly(nowMs + settings.clockOffsetMs)}
               </div>
             </div>
@@ -2396,6 +2747,185 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 </button>
               </div>
             )}
+          </section>
+        </div>
+      )}
+
+      {/* SUBMENU 9: COLETOR & ENVIO PARA ADMIN */}
+      {activeMenu === 'collector' && (
+        <div className="space-y-4">
+          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 sm:p-4 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Server className="h-4 w-4 shrink-0 text-[#E10600]" />
+                <div className="min-w-0">
+                  <p className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase leading-tight">
+                    Envio Direto para Base / Admin
+                  </p>
+                  <p className="text-[11px] text-[#B5B5B5] truncate">
+                    Colete a passagem dos PCs por GPS e envie direto ao organizador.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTestBaseConnection}
+                  disabled={healthState.checking}
+                  className="pitstop-btn-metal inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 text-xs font-bold whitespace-nowrap"
+                >
+                  <Server className="h-3.5 w-3.5 text-[#E10600]" />
+                  <span>{healthState.checking ? 'Verificando...' : 'Testar Base'}</span>
+                </button>
+                {onOpenApuracao && (
+                  <button
+                    type="button"
+                    onClick={onOpenApuracao}
+                    className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white uppercase whitespace-nowrap"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span>Portal Admin</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {healthState.message && (
+              <p
+                className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs ${
+                  healthState.ok
+                    ? 'border-emerald-500/30 bg-emerald-950/25 text-emerald-400'
+                    : 'border-amber-500/30 bg-amber-950/25 text-amber-300'
+                }`}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                <span>{healthState.message}</span>
+              </p>
+            )}
+          </section>
+
+          <CompetitorCollector />
+        </div>
+      )}
+
+      {/* SUBMENU 10: BACKUP & DADOS OFFLINE */}
+      {activeMenu === 'backup' && (
+        <div className="space-y-4">
+          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-4">
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-4 w-4 text-[#E10600]" />
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+                Resumo de Armazenamento Offline
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 font-mono tabular-nums">
+              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
+                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Planilhas</p>
+                <p className="mt-1 text-2xl font-black text-white">{savedRoadbooks.length}</p>
+              </div>
+              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
+                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Pistas / SS</p>
+                <p className="mt-1 text-2xl font-black text-white">{velocityStats.tracksCount}</p>
+              </div>
+              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
+                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Passagens</p>
+                <p className="mt-1 text-2xl font-black text-amber-300">{velocityStats.runsCount}</p>
+              </div>
+              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
+                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Fila Admin</p>
+                <p className="mt-1 text-2xl font-black text-[#E10600]">{pendingQueue.length}</p>
+              </div>
+            </div>
+
+            {backupFeedback && (
+              <div
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold ${
+                  backupFeedback.ok
+                    ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300'
+                    : 'border-red-500/40 bg-red-950/30 text-red-300'
+                }`}
+              >
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                <span>{backupFeedback.message}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={handleExportBackup}
+                className="pitstop-btn-red inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold text-white uppercase tracking-wide"
+              >
+                <Download className="h-4 w-4" />
+                <span>Exportar Backup (.JSON)</span>
+              </button>
+
+              <label className="pitstop-btn-metal inline-flex min-h-[46px] cursor-pointer items-center justify-center gap-2 rounded-xl px-4 text-xs font-bold uppercase tracking-wide">
+                <Upload className="h-4 w-4 text-[#E10600]" />
+                <span>Restaurar Backup (.JSON)</span>
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleImportBackup(f);
+                    e.currentTarget.value = '';
+                  }}
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
+            <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase">
+              Limpeza &amp; Manutenção
+            </h3>
+
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={handleClearVelocityRuns}
+                disabled={velocityStats.runsCount === 0}
+                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-[#080B0D] px-4 text-xs font-bold text-[#C0C4C9] hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-40"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>Limpar Passagens de Velocidade</span>
+              </button>
+
+              {!confirmResetDefaults ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetDefaults(true)}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-[#080B0D] px-4 text-xs font-bold text-[#C0C4C9] hover:border-red-500/60 hover:text-red-300"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  <span>Restaurar Ajustes Padrão</span>
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-950/25 px-3 py-1.5">
+                  <span className="flex-1 text-xs font-semibold text-red-200">
+                    Confirmar reset?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleResetDefaultSettings}
+                    className="rounded-lg bg-[#E10600] px-3 py-1.5 text-xs font-extrabold text-white"
+                  >
+                    Sim
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmResetDefaults(false)}
+                    className="rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 py-1.5 text-xs text-[#C0C4C9]"
+                  >
+                    Não
+                  </button>
+                </div>
+              )}
+            </div>
           </section>
         </div>
       )}

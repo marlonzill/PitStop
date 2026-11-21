@@ -203,42 +203,62 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
     setHasTypedAfterOp(false);
   };
 
+  const keyHandlersRef = React.useRef({
+    pressDigit,
+    pressBackspace,
+    pressOperator,
+    pressEquals,
+    clearAll,
+    onClose,
+  });
+  keyHandlersRef.current = {
+    pressDigit,
+    pressBackspace,
+    pressOperator,
+    pressEquals,
+    clearAll,
+    onClose,
+  };
+
   useEffect(() => {
     if (!active) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && onClose) {
-        onClose();
+      const tag = (document.activeElement?.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const h = keyHandlersRef.current;
+      if (e.key === 'Escape' && h.onClose) {
+        h.onClose();
         return;
       }
       if (/^[0-9]$/.test(e.key)) {
         e.preventDefault();
-        pressDigit(e.key);
+        h.pressDigit(e.key);
       } else if (e.key === 'Backspace') {
         e.preventDefault();
-        pressBackspace();
+        h.pressBackspace();
       } else if (e.key === '+') {
         e.preventDefault();
-        pressOperator('+');
+        h.pressOperator('+');
       } else if (e.key === '-') {
         e.preventDefault();
-        pressOperator('-');
+        h.pressOperator('-');
       } else if (e.key === '*') {
         e.preventDefault();
-        pressOperator('×');
+        h.pressOperator('×');
       } else if (e.key === '/') {
         e.preventDefault();
-        pressOperator('÷');
+        h.pressOperator('÷');
       } else if (e.key === 'Enter' || e.key === '=') {
         e.preventDefault();
-        pressEquals();
+        h.pressEquals();
       } else if (e.key.toLowerCase() === 'c') {
         e.preventDefault();
-        clearAll();
+        h.clearAll();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  });
+  }, [active]);
 
   const mainDisplay = errorMsg
     ? errorMsg
@@ -251,9 +271,9 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         : '0:00';
 
   const numBtnClass =
-    'min-h-[54px] sm:min-h-[62px] rounded-xl border border-zinc-700/80 bg-[#F4F4F4] text-2xl font-extrabold text-[#080B0D] shadow-sm transition-transform active:scale-[0.96] hover:bg-white';
+    'min-h-[46px] sm:min-h-[54px] rounded-xl border border-zinc-700/80 bg-[#F4F4F4] text-xl font-extrabold text-[#080B0D] shadow-sm transition-transform active:scale-[0.96] hover:bg-white';
   const opBtnClass =
-    'min-h-[54px] sm:min-h-[62px] rounded-xl border border-zinc-700 bg-[#2A2D34] text-2xl font-extrabold text-white shadow-sm transition-transform active:scale-[0.96] hover:bg-zinc-700';
+    'min-h-[46px] sm:min-h-[54px] rounded-xl border border-zinc-700 bg-[#2A2D34] text-xl font-extrabold text-white shadow-sm transition-transform active:scale-[0.96] hover:bg-zinc-700';
 
   return (
     <div
@@ -262,10 +282,10 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 bg-[#080B0D] px-4 py-3">
+      <div className="flex items-center justify-between border-b border-zinc-800 bg-[#080B0D] px-3.5 py-2.5">
         <div className="flex items-center gap-2">
           <Clock className="h-4 w-4 text-[#E10600]" />
-          <span className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide uppercase">
+          <span className="font-['Barlow_Condensed'] text-base sm:text-lg font-extrabold tracking-wide uppercase">
             Calculadora de Tempo
           </span>
         </div>
@@ -297,17 +317,17 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         </div>
       </div>
 
-      <div className="p-3.5 sm:p-4 space-y-3">
+      <div className="p-3 sm:p-3.5 space-y-2.5">
         {/* Two-line High-Contrast ATM Display */}
-        <div className="rounded-xl border border-zinc-800 bg-[#000000] px-4 py-3 text-right font-mono tabular-nums">
-          <div className="min-h-[20px] truncate text-sm font-semibold text-[#B5B5B5]">
-            {historyText || (isScalarMode ? 'Digite o multiplicador/divisor' : 'Horas & Minutos (digite corrido)')}
+        <div className="rounded-xl border border-zinc-800 bg-[#000000] px-3.5 py-2.5 text-right font-mono tabular-nums">
+          <div className="min-h-[18px] truncate text-xs font-semibold text-[#B5B5B5]">
+            {historyText || (isScalarMode ? 'Multiplicador/divisor' : 'Hora:Min')}
           </div>
           <div
-            className={`mt-1 truncate font-extrabold tracking-tight ${
+            className={`mt-0.5 truncate font-extrabold tracking-tight ${
               errorMsg
-                ? 'text-2xl text-red-400'
-                : 'text-4xl text-white sm:text-5xl'
+                ? 'text-xl text-red-400'
+                : 'text-3xl text-white sm:text-4xl'
             }`}
           >
             {mainDisplay}
@@ -315,11 +335,11 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         </div>
 
         {/* Exact 4x5 High-Contrast Keypad Grid */}
-        <div className="grid grid-cols-4 gap-2 font-mono">
+        <div className="grid grid-cols-4 gap-1.5 font-mono">
           <button
             type="button"
             onClick={clearAll}
-            className="min-h-[54px] sm:min-h-[62px] rounded-xl border border-orange-500/40 bg-orange-500/20 text-xl font-extrabold text-orange-300 transition-transform active:scale-[0.96] hover:bg-orange-500/30"
+            className="min-h-[46px] sm:min-h-[54px] rounded-xl border border-orange-500/40 bg-orange-500/20 text-lg font-extrabold text-orange-300 transition-transform active:scale-[0.96] hover:bg-orange-500/30"
           >
             C
           </button>
@@ -327,9 +347,9 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
             type="button"
             onClick={pressBackspace}
             aria-label="Apagar último dígito"
-            className="flex min-h-[54px] sm:min-h-[62px] items-center justify-center rounded-xl border border-zinc-700 bg-[#1E1E22] text-white transition-transform active:scale-[0.96] hover:bg-zinc-800"
+            className="flex min-h-[46px] sm:min-h-[54px] items-center justify-center rounded-xl border border-zinc-700 bg-[#1E1E22] text-white transition-transform active:scale-[0.96] hover:bg-zinc-800"
           >
-            <Delete className="h-6 w-6" />
+            <Delete className="h-5 w-5" />
           </button>
           <button type="button" onClick={() => pressOperator('÷')} className={opBtnClass}>
             ÷
@@ -364,7 +384,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
             type="button"
             onClick={() => pressOperator('+')}
             aria-label="Somar horas"
-            className="min-h-[54px] sm:min-h-[62px] rounded-xl border-2 border-[#FF524D]/80 bg-[#E10600] text-3xl font-black text-white shadow-[0_6px_18px_-3px_rgba(225,6,0,0.65)] transition-transform active:scale-[0.95] hover:bg-[#FF1E17]"
+            className="min-h-[46px] sm:min-h-[54px] rounded-xl border-2 border-[#FF524D]/80 bg-[#E10600] text-2xl font-black text-white shadow-[0_6px_18px_-3px_rgba(225,6,0,0.65)] transition-transform active:scale-[0.95] hover:bg-[#FF1E17]"
           >
             +
           </button>
@@ -381,7 +401,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
           <button
             type="button"
             onClick={pressEquals}
-            className="row-span-2 flex items-center justify-center rounded-xl border border-emerald-400/50 bg-emerald-600 text-3xl font-extrabold text-white shadow-lg transition-transform active:scale-[0.97] hover:bg-emerald-500"
+            className="row-span-2 flex items-center justify-center rounded-xl border border-emerald-400/50 bg-emerald-600 text-2xl font-extrabold text-white shadow-lg transition-transform active:scale-[0.97] hover:bg-emerald-500"
           >
             =
           </button>

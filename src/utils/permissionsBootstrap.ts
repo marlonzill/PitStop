@@ -163,10 +163,10 @@ export function bootstrapFirstRunPermissions(): void {
     // Ignore storage error
   }
 
-  // Request Location + Storage + Microphone silently in order after initial paint
+  // Request Location + Storage silently after initial paint (microphone is requested only on user gesture)
   window.setTimeout(() => {
     requestMissingPermissions({
-      includeMicrophonePrompt: Capacitor.isNativePlatform(),
+      includeMicrophonePrompt: false,
     }).catch(() => {});
   }, 600);
 }

@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
+import * as turf from '@turf/turf';
 
-export type TrapKind = 'start' | 'split' | 'finish';
+export type TrapKind = 'start' | 'split' | 'finish' | 'start_finish';
 export type TrackMode = 'point-to-point' | 'circuit';
 
 export interface VelocityTrap {
@@ -10,7 +11,8 @@ export interface VelocityTrap {
   lat: number;
   lon: number;
   bearingDeg: number; // 0..360 direction of travel perpendicular to the gate line
-  widthM: number; // Configurable 20m..50m gate width
+  widthM: number; // Configurable gate width in meters (default 25m)
+  unidirectional?: boolean; // Default true (accepts crossing within < 60 deg of bearingDeg)
 }
 
 export interface VelocitySample {
@@ -116,79 +118,200 @@ export function bearingBetweenDeg(
   return Math.round(deg);
 }
 
+export interface MarcoGpsPonto {
+  lat: number;
+  lng: number;
+  timestamp: number;
+}
+
+export interface MarcoDef {
+  lat: number;
+  lng: number;
+  angulo: number; // 0..360°
+  larguraM: number; // padrão 25m
+  unidirecional?: boolean; // padrão true
+}
+
+export interface CruzamentoMarcoResult {
+  cruzou: boolean;
+  timestampCruzamento: number;
+  fatorInterpolacao: number;
+  pontoIntersecao: [number, number]; // [lng, lat]
+  diferencaAngularDeg: number;
+}
+
+export function normalizeAngle360(deg: number): number {
+  if (!Number.isFinite(deg)) return 0;
+  return ((deg % 360) + 360) % 360;
+}
+
 export function angleDiffDeg(a: number, b: number): number {
-  const diff = ((a - b + 540) % 360) - 180;
+  const diff = ((normalizeAngle360(a) - normalizeAngle360(b) + 540) % 360) - 180;
   return Math.abs(diff);
+}
+
+/**
+ * Constroi o segmento transversal LineString([P1, P2]) do Marco em metros via @turf/turf
+ * com P1 em (angulo - 90°) e P2 em (angulo + 90°) a largura/2 de distância do centro.
+ */
+export function buildMarcoGateLineString(
+  lat: number,
+  lng: number,
+  anguloDeg: number,
+  larguraM = 25
+) {
+  const halfWidth = Math.max(2, Number.isFinite(larguraM) ? larguraM : 25) / 2;
+  const center = turf.point([lng, lat]);
+  const p1 = turf.destination(center, halfWidth, anguloDeg - 90, { units: 'meters' });
+  const p2 = turf.destination(center, halfWidth, anguloDeg + 90, { units: 'meters' });
+  return turf.lineString([p1.geometry.coordinates, p2.geometry.coordinates]);
+}
+
+/**
+ * Constroi a haste e a ponta da seta perpendicular apontando para `anguloDeg` a partir do centro.
+ */
+export function buildMarcoArrowGeometry(
+  lat: number,
+  lng: number,
+  anguloDeg: number,
+  larguraM = 25
+) {
+  const safeWidth = Math.max(5, Number.isFinite(larguraM) ? larguraM : 25);
+  const arrowLen = Math.max(14, safeWidth * 0.72);
+  const barbLen = Math.max(5, safeWidth * 0.24);
+  const center = turf.point([lng, lat]);
+  const tip = turf.destination(center, arrowLen, anguloDeg, { units: 'meters' });
+  const leftWing = turf.destination(tip, barbLen, anguloDeg + 142, { units: 'meters' });
+  const rightWing = turf.destination(tip, barbLen, anguloDeg - 142, { units: 'meters' });
+
+  return {
+    shaftCoords: [center.geometry.coordinates, tip.geometry.coordinates] as [
+      [number, number],
+      [number, number],
+    ],
+    headCoords: [
+      leftWing.geometry.coordinates,
+      tip.geometry.coordinates,
+      rightWing.geometry.coordinates,
+    ] as [[number, number], [number, number], [number, number]],
+  };
+}
+
+/**
+ * Motor de Detecção de Cruzamento estilo RaceChrono usando @turf/turf:
+ * - Cria segmento de deslocamento LineString([pontoAnterior, pontoAtual])
+ * - Verifica interseção com o portão transversal via turf.lineIntersect()
+ * - Valida direção (< 60° em relação a marco.angulo) quando unidirecional === true
+ * - Interpola timestamp exato (ms) usando d1 / dTotal
+ */
+export function verificarCruzamento(
+  pontoAnterior: MarcoGpsPonto,
+  pontoAtual: MarcoGpsPonto,
+  marco: MarcoDef
+): CruzamentoMarcoResult | null {
+  if (
+    !Number.isFinite(pontoAnterior.lat) ||
+    !Number.isFinite(pontoAnterior.lng) ||
+    !Number.isFinite(pontoAtual.lat) ||
+    !Number.isFinite(pontoAtual.lng)
+  ) {
+    return null;
+  }
+  if (pontoAnterior.lat === pontoAtual.lat && pontoAnterior.lng === pontoAtual.lng) {
+    return null;
+  }
+
+  const ptAnterior = turf.point([pontoAnterior.lng, pontoAnterior.lat]);
+  const ptAtual = turf.point([pontoAtual.lng, pontoAtual.lat]);
+  const deslocamento = turf.lineString([
+    [pontoAnterior.lng, pontoAnterior.lat],
+    [pontoAtual.lng, pontoAtual.lat],
+  ]);
+
+  const linhaMarco = buildMarcoGateLineString(
+    marco.lat,
+    marco.lng,
+    marco.angulo,
+    marco.larguraM
+  );
+
+  const intersecoes = turf.lineIntersect(deslocamento, linhaMarco);
+  if (!intersecoes.features.length) {
+    return null;
+  }
+
+  const rumoVeiculo = normalizeAngle360(turf.bearing(ptAnterior, ptAtual));
+  const anguloMarco = normalizeAngle360(marco.angulo);
+  const diferencaAngularDeg = angleDiffDeg(rumoVeiculo, anguloMarco);
+
+  if (marco.unidirecional !== false && diferencaAngularDeg >= 60) {
+    return null;
+  }
+
+  let closestFeature = intersecoes.features[0];
+  let d1 = turf.distance(ptAnterior, closestFeature, { units: 'meters' });
+  for (let i = 1; i < intersecoes.features.length; i += 1) {
+    const cand = intersecoes.features[i];
+    const candDist = turf.distance(ptAnterior, cand, { units: 'meters' });
+    if (candDist < d1) {
+      d1 = candDist;
+      closestFeature = cand;
+    }
+  }
+
+  const dTotal = turf.distance(ptAnterior, ptAtual, { units: 'meters' });
+  const fatorInterpolacao =
+    dTotal > 1e-6 ? Math.max(0, Math.min(1, d1 / dTotal)) : 0;
+  const timestampCruzamento = Math.round(
+    pontoAnterior.timestamp +
+      fatorInterpolacao * (pontoAtual.timestamp - pontoAnterior.timestamp)
+  );
+
+  const coords = closestFeature.geometry.coordinates;
+  return {
+    cruzou: true,
+    timestampCruzamento,
+    fatorInterpolacao,
+    pontoIntersecao: [coords[0], coords[1]],
+    diferencaAngularDeg,
+  };
 }
 
 /**
  * Vector segment intersection between vehicle movement (prev -> curr)
  * and a virtual Trap gate centered at (trap.lat, trap.lon) with perpendicular width `trap.widthM`
- * and travel direction `trap.bearingDeg`.
+ * and travel direction `trap.bearingDeg`, powered by `@turf/turf`.
  */
 export function detectTrapCrossing(
   prev: { lat: number; lon: number; timestampMs: number },
   curr: { lat: number; lon: number; timestampMs: number },
   trap: VelocityTrap
 ): TrapCrossingResult | null {
-  if (prev.lat === curr.lat && prev.lon === curr.lon) return null;
+  const res = verificarCruzamento(
+    { lat: prev.lat, lng: prev.lon, timestamp: prev.timestampMs },
+    { lat: curr.lat, lng: curr.lon, timestamp: curr.timestampMs },
+    {
+      lat: trap.lat,
+      lng: trap.lon,
+      angulo: trap.bearingDeg,
+      larguraM: trap.widthM,
+      unidirecional: trap.unidirectional !== false,
+    }
+  );
+  if (!res) return null;
 
-  const metersPerLat = 111320;
-  const metersPerLon = 111320 * Math.cos((trap.lat * Math.PI) / 180);
-
-  const toLocalXY = (lat: number, lon: number) => ({
-    x: (lon - trap.lon) * metersPerLon,
-    y: (lat - trap.lat) * metersPerLat,
-  });
-
-  const a = toLocalXY(prev.lat, prev.lon);
-  const b = toLocalXY(curr.lat, curr.lon);
-
-  const rad = (trap.bearingDeg * Math.PI) / 180;
-  // Unit vector along trap travel direction (0 deg = North/+y, 90 deg = East/+x)
-  const fx = Math.sin(rad);
-  const fy = Math.cos(rad);
-  // Unit vector perpendicular to travel direction (along the gate line)
-  const px = Math.cos(rad);
-  const py = -Math.sin(rad);
-
-  const aForward = a.x * fx + a.y * fy;
-  const bForward = b.x * fx + b.y * fy;
-
-  // Must cross from behind (<= 0) to ahead (> 0) or strictly across forward=0
-  if (!(aForward <= 0 && bForward > 0)) {
-    return null;
-  }
-
-  const denom = bForward - aForward;
-  if (Math.abs(denom) < 1e-6) return null;
-  const t = Math.max(0, Math.min(1, -aForward / denom));
-
-  const crossX = a.x + t * (b.x - a.x);
-  const crossY = a.y + t * (b.y - a.y);
-  const lateralOffsetM = crossX * px + crossY * py;
-  const halfWidth = Math.max(5, trap.widthM / 2);
-
-  if (Math.abs(lateralOffsetM) > halfWidth) {
-    return null;
-  }
-
-  const moveBearing = bearingBetweenDeg(prev.lat, prev.lon, curr.lat, curr.lon);
-  const headingDiffDeg = angleDiffDeg(moveBearing, trap.bearingDeg);
-  if (headingDiffDeg > 75) {
-    return null;
-  }
-
-  const crossTimestampMs = Math.round(
-    prev.timestampMs + t * (curr.timestampMs - prev.timestampMs)
+  const lateralOffsetM = turf.distance(
+    turf.point([trap.lon, trap.lat]),
+    turf.point(res.pontoIntersecao),
+    { units: 'meters' }
   );
 
   return {
     crossed: true,
-    t,
-    crossTimestampMs,
+    t: res.fatorInterpolacao,
+    crossTimestampMs: res.timestampCruzamento,
     lateralOffsetM,
-    headingDiffDeg,
+    headingDiffDeg: res.diferencaAngularDeg,
   };
 }
 
@@ -223,10 +346,97 @@ export function computePredictiveDeltaSec(
 }
 
 export function getOrderedTrackTraps(track: VelocityTrack): VelocityTrap[] {
-  const start = track.traps.filter((t) => t.kind === 'start');
+  const start = track.traps.filter((t) => t.kind === 'start' || t.kind === 'start_finish');
   const splits = track.traps.filter((t) => t.kind === 'split');
   const finish = track.traps.filter((t) => t.kind === 'finish');
   return [...start, ...splits, ...finish];
+}
+
+export function recalculateRunsForTrack(
+  track: VelocityTrack,
+  runs: VelocityRun[]
+): VelocityRun[] {
+  const ordered = getOrderedTrackTraps(track);
+  const startTrap = ordered.find((t) => t.kind === 'start' || t.kind === 'start_finish');
+  const finishTrap =
+    ordered.find((t) => t.kind === 'finish') ??
+    (startTrap?.kind === 'start_finish' ? startTrap : undefined);
+
+  if (!startTrap || !finishTrap) return runs;
+
+  return runs.map((run) => {
+    if (run.trackId !== track.id || run.samples.length < 2) return run;
+
+    let startMs: number | null = null;
+    let finishMs: number | null = null;
+    const splits: Record<string, number> = {};
+
+    for (let i = 1; i < run.samples.length; i += 1) {
+      const prev = run.samples[i - 1];
+      const curr = run.samples[i];
+
+      if (startMs === null) {
+        const startHit = detectTrapCrossing(prev, curr, startTrap);
+        if (startHit) {
+          startMs = startHit.crossTimestampMs;
+          continue;
+        }
+      }
+
+      if (startMs === null) continue;
+
+      for (const sp of ordered) {
+        if (sp.kind !== 'split' || splits[sp.id] !== undefined) continue;
+        const spHit = detectTrapCrossing(prev, curr, sp);
+        if (spHit && spHit.crossTimestampMs >= startMs) {
+          splits[sp.id] = spHit.crossTimestampMs - startMs;
+        }
+      }
+
+      const finHit = detectTrapCrossing(prev, curr, finishTrap);
+      const minLapMs = finishTrap.id === startTrap.id ? 6000 : 100;
+      if (finHit && finHit.crossTimestampMs - startMs >= minLapMs) {
+        finishMs = finHit.crossTimestampMs;
+        splits[finishTrap.id] = finishMs - startMs;
+        break;
+      }
+    }
+
+    // Fallback: if run already started from index 0 and crosses Splits/Finish
+    if (startMs === null && run.samples.length >= 2) {
+      const fallbackStart = run.samples[0].timestampMs;
+      for (let i = 1; i < run.samples.length; i += 1) {
+        const prev = run.samples[i - 1];
+        const curr = run.samples[i];
+        for (const sp of ordered) {
+          if (sp.kind !== 'split' || splits[sp.id] !== undefined) continue;
+          const spHit = detectTrapCrossing(prev, curr, sp);
+          if (spHit && spHit.crossTimestampMs >= fallbackStart) {
+            splits[sp.id] = spHit.crossTimestampMs - fallbackStart;
+          }
+        }
+        const finHit = detectTrapCrossing(prev, curr, finishTrap);
+        if (finHit && finHit.crossTimestampMs - fallbackStart >= 1000) {
+          startMs = fallbackStart;
+          finishMs = finHit.crossTimestampMs;
+          splits[finishTrap.id] = finishMs - startMs;
+          break;
+        }
+      }
+    }
+
+    if (startMs !== null && finishMs !== null && finishMs > startMs) {
+      return {
+        ...run,
+        startedAtMs: startMs,
+        finishedAtMs: finishMs,
+        totalMs: finishMs - startMs,
+        splitTimesMs: splits,
+      };
+    }
+
+    return run;
+  });
 }
 
 export function computeOptimalStage(
@@ -251,9 +461,14 @@ export function computeOptimalStage(
   const lastRun = trackRuns[trackRuns.length - 1];
 
   const ordered = getOrderedTrackTraps(track);
-  const startTrap = ordered.find((t) => t.kind === 'start');
-  const finishTrap = ordered.find((t) => t.kind === 'finish');
-  const checkpoints = ordered.filter((t) => t.kind === 'split' || t.kind === 'finish');
+  const startTrap = ordered.find((t) => t.kind === 'start' || t.kind === 'start_finish');
+  const finishTrap =
+    ordered.find((t) => t.kind === 'finish') ??
+    (startTrap?.kind === 'start_finish' ? startTrap : undefined);
+  const checkpoints = [
+    ...ordered.filter((t) => t.kind === 'split' || t.kind === 'finish'),
+    ...(finishTrap?.kind === 'start_finish' ? [finishTrap] : []),
+  ];
 
   const sectors: SectorOptimalEntry[] = [];
   if (startTrap && finishTrap && checkpoints.length > 0) {
@@ -261,12 +476,12 @@ export function computeOptimalStage(
     checkpoints.forEach((cp, idx) => {
       let bestSectorMs: number | null = null;
       let bestSectorRunNum: number | null = null;
+      const isFinalCp = cp.kind === 'finish' || cp.kind === 'start_finish';
 
       for (const r of trackRuns) {
-        const endT =
-          cp.kind === 'finish'
-            ? r.splitTimesMs[cp.id] ?? r.totalMs
-            : r.splitTimesMs[cp.id];
+        const endT = isFinalCp
+          ? r.splitTimesMs[cp.id] ?? r.totalMs
+          : r.splitTimesMs[cp.id];
         const startT = prevTrapId === startTrap.id ? 0 : r.splitTimesMs[prevTrapId];
         if (
           typeof endT === 'number' &&
@@ -283,7 +498,7 @@ export function computeOptimalStage(
 
       sectors.push({
         sectorIndex: idx + 1,
-        label: cp.kind === 'finish' ? `S${idx + 1} (Chegada)` : `S${idx + 1} (${cp.name})`,
+        label: isFinalCp ? `S${idx + 1} (Chegada)` : `S${idx + 1} (${cp.name})`,
         fromTrapId: prevTrapId,
         toTrapId: cp.id,
         bestMs: bestSectorMs,
@@ -398,6 +613,7 @@ export function exportTrackGeoJson(track: VelocityTrack, trace: VelocitySample[]
         trapKind: trap.kind,
         bearingDeg: trap.bearingDeg,
         widthM: trap.widthM,
+        unidirectional: trap.unidirectional !== false,
       },
       geometry: {
         type: 'Point',
@@ -426,7 +642,9 @@ export function exportTrackGpx(track: VelocityTrack, trace: VelocitySample[]): s
       (t) =>
         `  <wpt lat="${t.lat.toFixed(6)}" lon="${t.lon.toFixed(6)}">\n    <name>${escapeXml(
           t.name
-        )}</name>\n    <type>${t.kind}|${t.bearingDeg}|${t.widthM}</type>\n  </wpt>`
+        )}</name>\n    <type>${t.kind}|${t.bearingDeg}|${t.widthM}|${
+          t.unidirectional !== false ? 1 : 0
+        }</type>\n  </wpt>`
     )
     .join('\n');
 
@@ -501,7 +719,9 @@ export function parseGpxOrGeoJsonToTrack(
         const lat = Number(g.coordinates[1]);
         const rawKind = String(props.trapKind || props.kind || 'split');
         const kind: TrapKind =
-          rawKind === 'start' || rawKind === 'finish' ? rawKind : 'split';
+          rawKind === 'start' || rawKind === 'finish' || rawKind === 'start_finish'
+            ? rawKind
+            : 'split';
         traps.push({
           id: String(props.id || `trap_${traps.length + 1}_${now}`),
           name: String(props.name || `${kind.toUpperCase()} ${traps.length + 1}`),
@@ -509,7 +729,8 @@ export function parseGpxOrGeoJsonToTrack(
           lat,
           lon,
           bearingDeg: Number(props.bearingDeg) || 0,
-          widthM: Number(props.widthM) || 30,
+          widthM: Number(props.widthM) || 25,
+          unidirectional: props.unidirectional !== false,
         });
       }
     }
@@ -517,7 +738,7 @@ export function parseGpxOrGeoJsonToTrack(
     return {
       id: `trk_${now}`,
       name: String(parsed.name || cleanName),
-      mode: 'point-to-point',
+      mode: traps.some((t) => t.kind === 'start_finish') ? 'circuit' : 'point-to-point',
       traps,
       createdAtMs: now,
       referenceDistanceKm:
@@ -561,7 +782,9 @@ export function parseGpxOrGeoJsonToTrack(
     const typeParts = (wpt.querySelector('type')?.textContent || '').split('|');
     const rawKind = typeParts[0];
     const kind: TrapKind =
-      rawKind === 'start' || rawKind === 'finish' ? rawKind : 'split';
+      rawKind === 'start' || rawKind === 'finish' || rawKind === 'start_finish'
+        ? rawKind
+        : 'split';
     traps.push({
       id: `trap_${idx + 1}_${now}`,
       name,
@@ -569,7 +792,8 @@ export function parseGpxOrGeoJsonToTrack(
       lat,
       lon,
       bearingDeg: Number(typeParts[1]) || 0,
-      widthM: Number(typeParts[2]) || 30,
+      widthM: Number(typeParts[2]) || 25,
+      unidirectional: typeParts[3] !== '0',
     });
   });
 
@@ -586,7 +810,8 @@ export function parseGpxOrGeoJsonToTrack(
         lat: first.lat,
         lon: first.lon,
         bearingDeg: bearingBetweenDeg(first.lat, first.lon, second.lat, second.lon),
-        widthM: 30,
+        widthM: 25,
+        unidirectional: true,
       },
       {
         id: `trap_finish_${now}`,
@@ -595,7 +820,8 @@ export function parseGpxOrGeoJsonToTrack(
         lat: last.lat,
         lon: last.lon,
         bearingDeg: bearingBetweenDeg(lastPrev.lat, lastPrev.lon, last.lat, last.lon),
-        widthM: 30,
+        widthM: 25,
+        unidirectional: true,
       }
     );
   }
@@ -825,6 +1051,14 @@ export function parseKmlToTrack(kmlXml: string, fileName: string): VelocityTrack
  * Unified Especial Track Importer supporting .KML, .KMZ, .GPX and .GeoJSON/.JSON
  */
 export async function parseTrackFileToTrack(file: File): Promise<VelocityTrack> {
+  const MAX_TRACK_FILE_BYTES = 50 * 1024 * 1024;
+  const MAX_KMZ_ENTRIES = 500;
+  const MAX_KML_XML_BYTES = 25 * 1024 * 1024;
+
+  if (file.size > MAX_TRACK_FILE_BYTES) {
+    throw new Error('Arquivo de pista excede o limite máximo de 50 MB.');
+  }
+
   const lowerName = file.name.toLowerCase();
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
@@ -832,7 +1066,11 @@ export async function parseTrackFileToTrack(file: File): Promise<VelocityTrack> 
 
   if (lowerName.endsWith('.kmz') || looksLikeZip) {
     const zip = await JSZip.loadAsync(buf);
-    const kmlEntries = Object.keys(zip.files).filter(
+    const allNames = Object.keys(zip.files);
+    if (allNames.length > MAX_KMZ_ENTRIES) {
+      throw new Error('Arquivo .KMZ excede o limite de entradas internas permitidas.');
+    }
+    const kmlEntries = allNames.filter(
       (k) => !zip.files[k].dir && k.toLowerCase().endsWith('.kml')
     );
     if (kmlEntries.length === 0) {
@@ -840,7 +1078,11 @@ export async function parseTrackFileToTrack(file: File): Promise<VelocityTrack> 
     }
     const preferred =
       kmlEntries.find((k) => k.toLowerCase().endsWith('doc.kml')) ?? kmlEntries[0];
-    const kmlText = await zip.files[preferred].async('string');
+    const rawKmlBytes = await zip.files[preferred].async('uint8array');
+    if (rawKmlBytes.byteLength > MAX_KML_XML_BYTES) {
+      throw new Error('Conteúdo KML descompactado excede o limite seguro (25 MB).');
+    }
+    const kmlText = new TextDecoder('utf-8').decode(rawKmlBytes);
     return parseKmlToTrack(kmlText, file.name);
   }
 

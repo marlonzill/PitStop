@@ -71,6 +71,7 @@ interface LiveBleSession {
   cmdReq: BleCharacteristicLike;
   setReq: BleCharacteristicLike;
   qryReq: BleCharacteristicLike;
+  parseQueryResponse: (ev: Event) => void;
 }
 
 const liveSessions = new Map<string, LiveBleSession>();
@@ -212,7 +213,7 @@ export async function scanAndConnectGoProBle(
     onTelemetryUpdate(camId, { connected: false, reconnecting: true });
   });
 
-  liveSessions.set(camId, { device, cmdReq, setReq, qryReq });
+  liveSessions.set(camId, { device, cmdReq, setReq, qryReq, parseQueryResponse });
 
   // Initial status poll & keepalive
   writeBleCharacteristic(qryReq, encodeStatusQueryPacket()).catch(() => {});
@@ -259,7 +260,21 @@ export async function sendGoProWakeOrReconnect(
   const sess = liveSessions.get(camId);
   if (!sess?.device.gatt) return;
   if (!sess.device.gatt.connected) {
-    await sess.device.gatt.connect();
+    const server = await sess.device.gatt.connect();
+    const service = await server.getPrimaryService(GOPRO_SERVICE_UUID);
+    sess.cmdReq = await service.getCharacteristic(GOPRO_CMD_REQ_UUID);
+    const cmdRsp = await service.getCharacteristic(GOPRO_CMD_RSP_UUID);
+    sess.setReq = await service.getCharacteristic(GOPRO_SET_REQ_UUID);
+    sess.qryReq = await service.getCharacteristic(GOPRO_QRY_REQ_UUID);
+    const qryRsp = await service.getCharacteristic(GOPRO_QRY_RSP_UUID);
+    try {
+      await cmdRsp.startNotifications?.();
+      await qryRsp.startNotifications?.();
+      qryRsp.removeEventListener('characteristicvaluechanged', sess.parseQueryResponse);
+      qryRsp.addEventListener('characteristicvaluechanged', sess.parseQueryResponse);
+    } catch {
+      // Ignore optional notification errors
+    }
   }
   await writeBleCharacteristic(sess.cmdReq, encodeKeepAlivePacket());
   await writeBleCharacteristic(sess.qryReq, encodeStatusQueryPacket());

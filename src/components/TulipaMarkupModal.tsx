@@ -482,13 +482,13 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 backdrop-blur-xs">
-      <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl border border-slate-700 bg-[#0d131f] text-slate-100 shadow-2xl">
-        <div aria-hidden="true" className="h-1.5 w-full rally-track-stripe" />
+      <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl">
+        <div aria-hidden="true" className="pitstop-racing-line h-[6px] w-full" />
         <div className="p-4 sm:p-5">
           {/* Header */}
-          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div className="flex items-center justify-between gap-2 border-b border-zinc-800 pb-3">
             <div>
-              <span className="text-[10px] font-bold tracking-widest text-sky-400 uppercase">
+              <span className="text-[10px] font-bold tracking-widest text-[#E10600] uppercase">
                 Marcar Roubo / Levantamento
               </span>
               <h3 className="font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
@@ -498,7 +498,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-800 bg-slate-900 text-slate-400 hover:text-white"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 bg-[#080B0D] text-zinc-400 hover:text-white"
               aria-label="Fechar marcações"
             >
               <X className="h-5 w-5" />
@@ -513,8 +513,8 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                 onClick={() => setTool('pen')}
                 className={`inline-flex min-h-[34px] items-center gap-1 rounded-lg px-2.5 text-xs font-semibold ${
                   tool === 'pen'
-                    ? 'bg-sky-600 text-white'
-                    : 'border border-slate-700 bg-slate-900 text-slate-300'
+                    ? 'bg-[#E10600] text-white'
+                    : 'border border-zinc-700 bg-[#080B0D] text-zinc-300'
                 }`}
               >
                 <PenTool className="h-3.5 w-3.5" />
@@ -525,8 +525,8 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                 onClick={() => setTool('highlighter')}
                 className={`inline-flex min-h-[34px] items-center gap-1 rounded-lg px-2.5 text-xs font-semibold ${
                   tool === 'highlighter'
-                    ? 'bg-yellow-400 text-slate-950'
-                    : 'border border-slate-700 bg-slate-900 text-slate-300'
+                    ? 'bg-yellow-400 text-zinc-950'
+                    : 'border border-zinc-700 bg-[#080B0D] text-zinc-300'
                 }`}
               >
                 <Highlighter className="h-3.5 w-3.5" />
@@ -537,8 +537,8 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                 onClick={() => setTool('arrow')}
                 className={`inline-flex min-h-[34px] items-center gap-1 rounded-lg px-2.5 text-xs font-semibold ${
                   tool === 'arrow'
-                    ? 'bg-sky-600 text-white'
-                    : 'border border-slate-700 bg-slate-900 text-slate-300'
+                    ? 'bg-[#E10600] text-white'
+                    : 'border border-zinc-700 bg-[#080B0D] text-zinc-300'
                 }`}
               >
                 <ArrowUpRight className="h-3.5 w-3.5" />
@@ -546,7 +546,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
               </button>
 
               {tool !== 'highlighter' && (
-                <div className="ml-1 flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-950 px-2 py-1">
+                <div className="ml-1 flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-[#080B0D] px-2 py-1">
                   {(['#dc2626', '#0284c7', '#0f172a'] as const).map((c) => (
                     <button
                       key={c}
@@ -554,7 +554,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                       onClick={() => setPenColor(c)}
                       aria-label={`Cor ${c}`}
                       className={`h-5 w-5 rounded-full border-2 ${
-                        penColor === c ? 'border-white scale-110' : 'border-slate-600'
+                        penColor === c ? 'border-white scale-110' : 'border-zinc-600'
                       }`}
                       style={{ backgroundColor: c }}
                     />
@@ -567,7 +567,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
               <button
                 type="button"
                 onClick={handleUndo}
-                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span>Desfazer</span>
@@ -575,7 +575,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
               <button
                 type="button"
                 onClick={handleClearCanvas}
-                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 text-xs font-semibold text-red-300 hover:bg-slate-800"
+                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-semibold text-red-300 hover:bg-zinc-800"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 <span>Limpar</span>
@@ -584,7 +584,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
           </div>
 
           {/* Drawing Canvas over Tulipa Preview */}
-          <div className="relative mt-3 overflow-hidden rounded-xl border-2 border-slate-700 bg-white text-slate-950">
+          <div className="relative mt-3 overflow-hidden rounded-xl border-2 border-zinc-700 bg-white text-slate-950">
             <div className="pointer-events-none flex min-h-[168px] items-center gap-3 p-3 select-none">
               <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-slate-50 p-1">
                 {croppedDesenho ? (
@@ -635,7 +635,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                   key={tag}
                   type="button"
                   onClick={() => toggleQuickTag(tag)}
-                  className="rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1 font-mono text-[11px] font-bold text-amber-300 hover:border-sky-500 hover:text-white"
+                  className="rounded-md border border-zinc-700 bg-[#080B0D] px-2.5 py-1 font-mono text-[11px] font-bold text-amber-300 hover:border-[#E10600] hover:text-white"
                 >
                   + {tag}
                 </button>
@@ -646,15 +646,15 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
               placeholder="Anotação de roubo, pegadinha ou referência visual..."
-              className="w-full rounded-xl border border-slate-700 bg-[#070b12] px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+              className="w-full rounded-xl border border-zinc-700 bg-[#080B0D] px-3 py-2 text-xs text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
             />
           </div>
 
           {/* Voice Recorder */}
-          <div className="mt-4 rounded-xl border border-slate-800 bg-[#070b12] p-3">
+          <div className="mt-4 rounded-xl border border-zinc-800 bg-[#080B0D] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-                <Mic className={`h-4 w-4 ${isRecording ? 'animate-pulse text-red-500' : 'text-sky-400'}`} />
+              <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+                <Mic className={`h-4 w-4 ${isRecording ? 'animate-pulse text-red-500' : 'text-[#E10600]'}`} />
                 <span>
                   {isRecording
                     ? `Gravando áudio... 00:${String(recordSec).padStart(2, '0')}`
@@ -667,7 +667,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                   <button
                     type="button"
                     onClick={startRecording}
-                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-red-600 px-3 text-xs font-bold text-white hover:bg-red-500"
+                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-[#E10600] px-3 text-xs font-bold text-white hover:bg-[#FF1E17]"
                   >
                     <Mic className="h-3.5 w-3.5" />
                     <span>{audioDataUrl ? 'Regravar Áudio' : 'Gravar Áudio'}</span>
@@ -676,7 +676,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                   <button
                     type="button"
                     onClick={stopRecording}
-                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-amber-400 px-3 text-xs font-extrabold text-slate-950"
+                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-amber-400 px-3 text-xs font-extrabold text-zinc-950"
                   >
                     <Square className="h-3.5 w-3.5 fill-current" />
                     <span>Parar</span>
@@ -690,7 +690,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                       setAudioDataUrl(undefined);
                       setAudioDurationSec(undefined);
                     }}
-                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 text-xs font-semibold text-red-400 hover:bg-slate-800"
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-semibold text-red-400 hover:bg-zinc-800"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     <span>Excluir</span>
@@ -707,7 +707,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
               <div className="mt-2.5 flex items-center gap-3">
                 <audio controls src={audioDataUrl} className="h-9 flex-1" />
                 {audioDurationSec ? (
-                  <span className="font-mono text-xs text-slate-400">
+                  <span className="font-mono text-xs text-zinc-400">
                     {audioDurationSec}s
                   </span>
                 ) : null}
@@ -716,7 +716,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
           </div>
 
           {/* Footer Buttons */}
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-4">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-4">
             <button
               type="button"
               disabled={saving}
@@ -731,7 +731,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="min-h-[40px] rounded-xl border border-slate-700 bg-slate-900 px-4 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                className="min-h-[40px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-4 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
               >
                 Cancelar
               </button>
@@ -739,7 +739,7 @@ export const TulipaMarkupModal: React.FC<TulipaMarkupModalProps> = ({
                 type="button"
                 disabled={saving}
                 onClick={handleSave}
-                className="pitstop-btn-blue inline-flex min-h-[40px] items-center gap-1.5 rounded-xl px-5 text-xs font-extrabold tracking-wide text-white uppercase"
+                className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-1.5 rounded-xl px-5 text-xs font-extrabold tracking-wide text-white uppercase"
               >
                 <Save className="h-3.5 w-3.5" />
                 <span>{saving ? 'Salvando...' : 'Salvar Marcação'}</span>

@@ -23,7 +23,6 @@ export default defineConfig(() => {
           'pwa-512x512.png',
           'pwa-maskable-512x512.png',
           'pitstop-hero-3333.webp',
-          'pitstop-flag-streak.webp',
         ],
         manifest: {
           id: basePath,

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { generatePairingRoomCode, normalizeRoomCode, type PairingRole } from './pairingClient';
+import {
+  generatePairingRoomCode,
+  generatePairingRoomPin,
+  normalizeRoomCode,
+  normalizeRoomPin,
+  type BondedBluetoothDevice,
+  type PairingRole,
+  type PairingTransportMode,
+} from './pairingClient';
 
 export type HighlightTheme = 'yellow' | 'blue' | 'green';
 export type SensorMode = 'gps' | 'blue';
@@ -34,6 +42,9 @@ export interface PairingSettings {
   enabled: boolean;
   role: PairingRole;
   roomCode: string;
+  roomPin: string;
+  transportMode: PairingTransportMode;
+  bluetoothDevices: BondedBluetoothDevice[];
   bluetoothDeviceName?: string;
 }
 
@@ -139,6 +150,9 @@ export function getDefaultNavSettings(): PitStopNavSettings {
       enabled: false,
       role: 'navigator',
       roomCode: generatePairingRoomCode(),
+      roomPin: generatePairingRoomPin(),
+      transportMode: 'auto',
+      bluetoothDevices: [],
     },
     wPasses: [],
     baseServerUrl: '',
@@ -160,6 +174,17 @@ export function getNavSettings(): PitStopNavSettings {
       parsed.alertStyle === 'vibration'
         ? parsed.alertStyle
         : 'voice';
+    const transportMode: PairingTransportMode =
+      parsed.pairing?.transportMode === 'bluetooth_spp' ||
+      parsed.pairing?.transportMode === 'wifi_ws'
+        ? parsed.pairing.transportMode
+        : 'auto';
+    const rawDevices = Array.isArray(parsed.pairing?.bluetoothDevices)
+      ? parsed.pairing!.bluetoothDevices.filter(
+          (d): d is BondedBluetoothDevice =>
+            Boolean(d && typeof d.address === 'string' && d.address.trim())
+        )
+      : [];
     return {
       ...defaults,
       ...parsed,
@@ -184,6 +209,10 @@ export function getNavSettings(): PitStopNavSettings {
         role: parsed.pairing?.role === 'pilot' ? 'pilot' : 'navigator',
         roomCode:
           normalizeRoomCode(parsed.pairing?.roomCode || '') || defaults.pairing.roomCode,
+        roomPin:
+          normalizeRoomPin(parsed.pairing?.roomPin || '') || defaults.pairing.roomPin,
+        transportMode,
+        bluetoothDevices: rawDevices.slice(0, 3),
         bluetoothDeviceName: parsed.pairing?.bluetoothDeviceName || '',
       },
       wPasses: Array.isArray(parsed.wPasses) ? parsed.wPasses.slice(0, 6) : [],

@@ -1,7 +1,8 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { WebSocket, WebSocketServer } from 'ws';
 
@@ -30,15 +31,21 @@ interface StoredStanding {
 }
 
 interface BaseDatabase {
+  organizerPassHash?: string;
   submissions: StoredSubmission[];
   publishedStandings: StoredStanding[];
 }
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT_DIR = process.cwd();
-const DATA_DIR = path.join(ROOT_DIR, 'data');
-const TXT_DIR = path.join(DATA_DIR, 'txts');
-const DB_FILE = path.join(DATA_DIR, 'pitstop_base.json');
+const DATA_DIR = path.resolve(ROOT_DIR, 'data');
+const TXT_DIR = path.resolve(DATA_DIR, 'txts');
+const DB_FILE = path.resolve(DATA_DIR, 'pitstop_base.json');
+
+const ENV_ORGANIZER_PASSCODE = (process.env.ORGANIZER_PASSCODE || '').trim();
+const SESSION_SECRET =
+  (process.env.SESSION_SECRET || '').trim() || crypto.randomBytes(32).toString('hex');
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 function ensureDataDirs(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -58,6 +65,10 @@ function readDb(): BaseDatabase {
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<BaseDatabase>;
     return {
+      organizerPassHash:
+        typeof parsed.organizerPassHash === 'string' && parsed.organizerPassHash.includes(':')
+          ? parsed.organizerPassHash
+          : undefined,
       submissions: Array.isArray(parsed.submissions) ? parsed.submissions : [],
       publishedStandings: Array.isArray(parsed.publishedStandings)
         ? parsed.publishedStandings
@@ -68,9 +79,152 @@ function readDb(): BaseDatabase {
   }
 }
 
-function writeDb(db: BaseDatabase): void {
-  ensureDataDirs();
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+let dbWriteChain: Promise<void> = Promise.resolve();
+
+function writeDbQueued(mutator: (db: BaseDatabase) => BaseDatabase | void): Promise<BaseDatabase> {
+  const run = dbWriteChain.then(() => {
+    const db = readDb();
+    const result = mutator(db) || db;
+    ensureDataDirs();
+    const tmpFile = `${DB_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(result, null, 2), 'utf-8');
+    fs.renameSync(tmpFile, DB_FILE);
+    return result;
+  });
+  dbWriteChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+function hashPasscodeScrypt(passcode: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(passcode, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyPasscodeScrypt(passcode: string, storedHash: string): boolean {
+  const [salt, expectedHex] = storedHash.split(':');
+  if (!salt || !expectedHex) return false;
+  try {
+    const expectedBuf = Buffer.from(expectedHex, 'hex');
+    const actualBuf = crypto.scryptSync(passcode, salt, expectedBuf.length);
+    return (
+      actualBuf.length === expectedBuf.length &&
+      crypto.timingSafeEqual(actualBuf, expectedBuf)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function verifyEnvPasscode(candidate: string, configured: string): boolean {
+  const a = crypto.createHash('sha256').update(candidate).digest();
+  const b = crypto.createHash('sha256').update(configured).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+function signOrganizerToken(): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      role: 'organizer',
+      exp: Date.now() + SESSION_TTL_MS,
+      jti: crypto.randomBytes(8).toString('hex'),
+    })
+  ).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifyOrganizerToken(token: string | null | undefined): boolean {
+  if (!token || typeof token !== 'string') return false;
+  const parts = token.split('.');
+  if (parts.length !== 2) return false;
+  const [payload, sig] = parts;
+  if (!payload || !sig) return false;
+  try {
+    const expectedSig = crypto
+      .createHmac('sha256', SESSION_SECRET)
+      .update(payload)
+      .digest('base64url');
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expectedSig);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return false;
+    }
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as {
+      role?: string;
+      exp?: number;
+    };
+    return decoded.role === 'organizer' && typeof decoded.exp === 'number' && decoded.exp > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function extractBearerToken(req: Request): string | null {
+  const auth = req.headers.authorization;
+  if (!auth || typeof auth !== 'string') return null;
+  if (!auth.startsWith('Bearer ')) return null;
+  return auth.slice(7).trim() || null;
+}
+
+function isAllowedOrigin(origin: string, req: Request): boolean {
+  if (!origin) return false;
+  try {
+    const parsed = new URL(origin);
+    const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    if (hostHeader && parsed.host.toLowerCase() === hostHeader) {
+      return true;
+    }
+    const appUrl = (process.env.APP_URL || '').trim();
+    if (appUrl && appUrl !== 'MY_APP_URL') {
+      try {
+        const appOrigin = new URL(appUrl).origin.toLowerCase();
+        if (parsed.origin.toLowerCase() === appOrigin) return true;
+      } catch {
+        // Ignore malformed APP_URL
+      }
+    }
+    if (
+      origin === 'capacitor://localhost' ||
+      origin === 'https://localhost' ||
+      origin === 'http://localhost' ||
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '127.0.0.1'
+    ) {
+      return true;
+    }
+    // Private LAN IPs for local rally telemetry server over Wi-Fi hotspot
+    const h = parsed.hostname;
+    if (
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(h) ||
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h)
+    ) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function resolveSafeTxtPath(fileName: string): string | null {
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '');
+  if (!safeName) return null;
+  const resolved = path.resolve(TXT_DIR, safeName);
+  if (!resolved.startsWith(TXT_DIR + path.sep)) {
+    return null;
+  }
+  return resolved;
 }
 
 function sanitizeSlugPart(val: string): string {
@@ -83,16 +237,33 @@ function sanitizeSlugPart(val: string): string {
     .slice(0, 32);
 }
 
+function requireOrganizerAuth(req: Request, res: Response, next: NextFunction): void {
+  const token = extractBearerToken(req);
+  if (!verifyOrganizerToken(token)) {
+    res.status(401).json({
+      ok: false,
+      error: 'Acesso restrito ao organizador. Informe a senha de apuração.',
+    });
+    return;
+  }
+  next();
+}
+
 async function startServer(): Promise<void> {
   const app = express();
+  app.set('trust proxy', 1);
 
-  // Open CORS for Capacitor APK (`https://localhost`) and local Wi-Fi devices sending GPS data
+  // Origin-validated CORS for Web host, Capacitor APK, and local Wi-Fi rally devices
   app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (origin && isAllowedOrigin(origin, req)) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Vary', 'Origin');
+    }
     res.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
     if (req.method === 'OPTIONS') {
-      res.status(204).end();
+      res.status(origin && !isAllowedOrigin(origin, req) ? 403 : 204).end();
       return;
     }
     next();
@@ -110,12 +281,90 @@ async function startServer(): Promise<void> {
     });
   });
 
-  app.get('/api/results', (_req, res) => {
+  app.get('/api/auth/status', (req, res) => {
+    const db = readDb();
+    const configured = Boolean(ENV_ORGANIZER_PASSCODE || db.organizerPassHash);
+    const needsClaim = !ENV_ORGANIZER_PASSCODE && !db.organizerPassHash;
+    const authenticated = verifyOrganizerToken(extractBearerToken(req));
+    res.json({ ok: true, configured, needsClaim, authenticated });
+  });
+
+  app.post('/api/auth/claim', async (req, res) => {
+    const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode.trim() : '';
+    if (passcode.length < 4 || passcode.length > 128) {
+      res.status(400).json({
+        ok: false,
+        error: 'Defina uma senha de apuração com pelo menos 4 caracteres.',
+      });
+      return;
+    }
+    if (ENV_ORGANIZER_PASSCODE) {
+      res.status(409).json({
+        ok: false,
+        error: 'Senha de apuração já configurada no servidor.',
+      });
+      return;
+    }
+    try {
+      let alreadyClaimed = false;
+      await writeDbQueued((db) => {
+        if (db.organizerPassHash) {
+          alreadyClaimed = true;
+          return db;
+        }
+        db.organizerPassHash = hashPasscodeScrypt(passcode);
+        return db;
+      });
+      if (alreadyClaimed) {
+        res.status(409).json({
+          ok: false,
+          error: 'A senha de apuração já foi definida anteriormente.',
+        });
+        return;
+      }
+      const token = signOrganizerToken();
+      res.status(201).json({ ok: true, token });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Falha ao salvar senha no servidor.' });
+    }
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode.trim() : '';
+    if (!passcode) {
+      res.status(400).json({ ok: false, error: 'Informe a senha de apuração.' });
+      return;
+    }
+    const db = readDb();
+    if (ENV_ORGANIZER_PASSCODE) {
+      if (!verifyEnvPasscode(passcode, ENV_ORGANIZER_PASSCODE)) {
+        res.status(401).json({ ok: false, error: 'Senha de apuração incorreta.' });
+        return;
+      }
+      res.json({ ok: true, token: signOrganizerToken() });
+      return;
+    }
+    if (!db.organizerPassHash) {
+      res.status(409).json({
+        ok: false,
+        needsClaim: true,
+        error: 'Nenhuma senha cadastrada ainda. Crie a senha inicial.',
+      });
+      return;
+    }
+    if (!verifyPasscodeScrypt(passcode, db.organizerPassHash)) {
+      res.status(401).json({ ok: false, error: 'Senha de apuração incorreta.' });
+      return;
+    }
+    res.json({ ok: true, token: signOrganizerToken() });
+  });
+
+  app.get('/api/results', requireOrganizerAuth, (_req, res) => {
     const db = readDb();
     res.json({ ok: true, results: db.submissions });
   });
 
-  app.post('/api/results', (req, res) => {
+  app.post('/api/results', async (req, res) => {
     const body = req.body as Partial<StoredSubmission> | undefined;
     if (!body || !body.carNumber || !Array.isArray(body.passages)) {
       res.status(400).json({
@@ -125,51 +374,78 @@ async function startServer(): Promise<void> {
       return;
     }
 
-    const carNumClean = String(body.carNumber).trim();
-    const eventClean = String(body.eventName || 'Prova PitStop Sports').trim();
-    const id =
-      body.id && String(body.id).trim()
-        ? String(body.id).trim()
-        : `car_${carNumClean.replace(/[^a-zA-Z0-9_-]/g, '')}_${Date.now()}`;
+    const carNumClean = String(body.carNumber).trim().slice(0, 24);
+    const eventClean = String(body.eventName || 'Prova PitStop Sports')
+      .trim()
+      .slice(0, 120);
+    if (!carNumClean) {
+      res.status(400).json({ ok: false, error: 'Número do carro inválido.' });
+      return;
+    }
+    if (body.passages.length > 5000) {
+      res.status(400).json({ ok: false, error: 'Quantidade de passagens excede o limite.' });
+      return;
+    }
+
+    const safeCarSlug = carNumClean.replace(/[^a-zA-Z0-9_-]/g, '') || 'carro';
+    const rawId = typeof body.id === 'string' ? body.id.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) : '';
+    const id = rawId || `car_${safeCarSlug}_${Date.now()}`;
     const fileName =
       body.fileName && String(body.fileName).trim()
-        ? String(body.fileName).trim()
-        : `resultado_carro_${carNumClean.replace(/[^a-zA-Z0-9_-]/g, '')}.txt`;
+        ? String(body.fileName).trim().slice(0, 120)
+        : `resultado_carro_${safeCarSlug}.txt`;
+
+    const radiusRaw = Number(body.detectionRadiusM);
+    const detectionRadiusM =
+      Number.isFinite(radiusRaw) && radiusRaw > 0 ? Math.min(500, Math.max(5, radiusRaw)) : 30;
 
     const submission: StoredSubmission = {
       id,
       fileName,
       eventName: eventClean,
       carNumber: carNumClean,
-      crewName: String(body.crewName || '').trim(),
-      raceDate: String(body.raceDate || '').trim(),
-      startTimeStr: String(body.startTimeStr || '').trim(),
-      detectionRadiusM: Number(body.detectionRadiusM) || 30,
-      recordedAt: String(body.recordedAt || new Date().toISOString()),
+      crewName: String(body.crewName || '').trim().slice(0, 120),
+      raceDate: String(body.raceDate || '').trim().slice(0, 32),
+      startTimeStr: String(body.startTimeStr || '').trim().slice(0, 32),
+      detectionRadiusM,
+      recordedAt: String(body.recordedAt || new Date().toISOString()).slice(0, 40),
       passages: body.passages,
-      rawTxt: typeof body.rawTxt === 'string' ? body.rawTxt : undefined,
+      rawTxt: typeof body.rawTxt === 'string' ? body.rawTxt.slice(0, 2 * 1024 * 1024) : undefined,
     };
 
-    const db = readDb();
-    const existingIdx = db.submissions.findIndex(
-      (x) =>
-        x.id === submission.id ||
-        (x.carNumber === submission.carNumber &&
-          x.eventName === submission.eventName &&
-          x.startTimeStr === submission.startTimeStr)
-    );
-    if (existingIdx >= 0) {
-      db.submissions[existingIdx] = submission;
-    } else {
-      db.submissions.unshift(submission);
-    }
-    writeDb(db);
+    const nextDb = await writeDbQueued((db) => {
+      const existingByIdIdx = db.submissions.findIndex((x) => x.id === submission.id);
+      if (existingByIdIdx >= 0) {
+        const existing = db.submissions[existingByIdIdx];
+        if (existing.carNumber === submission.carNumber && existing.eventName === submission.eventName) {
+          db.submissions[existingByIdIdx] = submission;
+        } else {
+          submission.id = `car_${safeCarSlug}_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
+          db.submissions.unshift(submission);
+        }
+      } else {
+        const existingByKeyIdx = db.submissions.findIndex(
+          (x) =>
+            x.carNumber === submission.carNumber &&
+            x.eventName === submission.eventName &&
+            x.startTimeStr === submission.startTimeStr
+        );
+        if (existingByKeyIdx >= 0) {
+          db.submissions[existingByKeyIdx] = submission;
+        } else {
+          db.submissions.unshift(submission);
+        }
+      }
+      return db;
+    });
 
     if (submission.rawTxt) {
       try {
         ensureDataDirs();
-        const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-        fs.writeFileSync(path.join(TXT_DIR, safeName), submission.rawTxt, 'utf-8');
+        const txtTarget = resolveSafeTxtPath(fileName);
+        if (txtTarget) {
+          fs.writeFileSync(txtTarget, submission.rawTxt, 'utf-8');
+        }
       } catch {
         // Non-fatal if txt mirror fails
       }
@@ -178,35 +454,62 @@ async function startServer(): Promise<void> {
     res.status(201).json({
       ok: true,
       id: submission.id,
-      count: db.submissions.length,
+      count: nextDb.submissions.length,
     });
   });
 
-  app.delete('/api/results/:id', (req, res) => {
-    const db = readDb();
-    const before = db.submissions.length;
-    db.submissions = db.submissions.filter((s) => s.id !== req.params.id);
-    if (db.submissions.length !== before) {
-      writeDb(db);
+  app.delete('/api/results/:id', requireOrganizerAuth, async (req, res) => {
+    let removedFiles: string[] = [];
+    const nextDb = await writeDbQueued((db) => {
+      const targetId = req.params.id;
+      const toRemove = db.submissions.filter((s) => s.id === targetId);
+      removedFiles = toRemove.map((s) => s.fileName).filter(Boolean);
+      db.submissions = db.submissions.filter((s) => s.id !== targetId);
+      return db;
+    });
+    for (const fname of removedFiles) {
+      const txtTarget = resolveSafeTxtPath(fname);
+      if (txtTarget && fs.existsSync(txtTarget)) {
+        try {
+          fs.unlinkSync(txtTarget);
+        } catch {
+          // Ignore txt unlink error
+        }
+      }
     }
-    res.json({ ok: true, count: db.submissions.length });
+    res.json({ ok: true, count: nextDb.submissions.length });
   });
 
-  app.delete('/api/results', (_req, res) => {
-    const db = readDb();
-    db.submissions = [];
-    writeDb(db);
+  app.delete('/api/results', requireOrganizerAuth, async (_req, res) => {
+    let removedFiles: string[] = [];
+    await writeDbQueued((db) => {
+      removedFiles = db.submissions.map((s) => s.fileName).filter(Boolean);
+      db.submissions = [];
+      return db;
+    });
+    for (const fname of removedFiles) {
+      const txtTarget = resolveSafeTxtPath(fname);
+      if (txtTarget && fs.existsSync(txtTarget)) {
+        try {
+          fs.unlinkSync(txtTarget);
+        } catch {
+          // Ignore txt unlink error
+        }
+      }
+    }
     res.json({ ok: true, count: 0 });
   });
 
-  app.post('/api/public-standings', (req, res) => {
+  app.post('/api/public-standings', requireOrganizerAuth, async (req, res) => {
     const body = req.body as Partial<StoredStanding> | undefined;
     if (!body || !Array.isArray(body.rows)) {
       res.status(400).json({ ok: false, error: 'Tabela de classificação inválida.' });
       return;
     }
 
-    const eventName = String(body.eventName || 'Classificação Oficial PitStop Sports').trim();
+    const eventName = String(body.eventName || 'Classificação Oficial PitStop Sports')
+      .trim()
+      .slice(0, 120);
     const slug = `${sanitizeSlugPart(eventName) || 'prova'}-${Date.now().toString(36).slice(-5)}`;
 
     const snapshot: StoredStanding = {
@@ -214,17 +517,18 @@ async function startServer(): Promise<void> {
       eventName,
       createdAt: new Date().toISOString(),
       missedPenaltyPts: Number(body.missedPenaltyPts) || 600,
-      rows: body.rows,
-      txtReport: String(body.txtReport || ''),
-      csvReport: String(body.csvReport || ''),
+      rows: body.rows.slice(0, 1000),
+      txtReport: String(body.txtReport || '').slice(0, 1024 * 1024),
+      csvReport: String(body.csvReport || '').slice(0, 1024 * 1024),
     };
 
-    const db = readDb();
-    db.publishedStandings.unshift(snapshot);
-    if (db.publishedStandings.length > 50) {
-      db.publishedStandings = db.publishedStandings.slice(0, 50);
-    }
-    writeDb(db);
+    await writeDbQueued((db) => {
+      db.publishedStandings.unshift(snapshot);
+      if (db.publishedStandings.length > 50) {
+        db.publishedStandings = db.publishedStandings.slice(0, 50);
+      }
+      return db;
+    });
 
     res.status(201).json({
       ok: true,
@@ -330,12 +634,40 @@ export class ErrorOverlay {
   const httpServer = http.createServer(app);
 
   // Real-time Navigator -> Pilot pairing WebSocket on /ws/pair
+  const MAX_ROOMS = 200;
+  const MAX_CLIENTS_PER_ROOM = 8;
+
   interface PairRoom {
+    pin: string;
     clients: Map<WebSocket, 'navigator' | 'pilot'>;
     lastTelemetryJson: string | null;
   }
   const pairRooms = new Map<string, PairRoom>();
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws/pair' });
+  const socketAlive = new WeakMap<WebSocket, boolean>();
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: '/ws/pair',
+    maxPayload: 512 * 1024,
+  });
+
+  const heartbeatInterval = setInterval(() => {
+    for (const client of wss.clients) {
+      if (socketAlive.get(client) === false) {
+        client.terminate();
+        continue;
+      }
+      socketAlive.set(client, false);
+      try {
+        client.ping();
+      } catch {
+        client.terminate();
+      }
+    }
+  }, 25000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
 
   const broadcastPresence = (roomId: string, room: PairRoom) => {
     let navigators = 0;
@@ -364,13 +696,36 @@ export class ErrorOverlay {
       .toUpperCase()
       .replace(/[^A-Z0-9-]/g, '')
       .slice(0, 12);
+    const pinParam = (reqUrl.searchParams.get('pin') || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 12);
     const roleParam = reqUrl.searchParams.get('role') === 'pilot' ? 'pilot' : 'navigator';
 
     let room = pairRooms.get(roomId);
     if (!room) {
-      room = { clients: new Map(), lastTelemetryJson: null };
+      if (pairRooms.size >= MAX_ROOMS) {
+        ws.close(4003, 'Limite de salas atingido.');
+        return;
+      }
+      room = { pin: pinParam, clients: new Map(), lastTelemetryJson: null };
       pairRooms.set(roomId, room);
+    } else {
+      if (room.pin && pinParam !== room.pin) {
+        ws.close(4001, 'PIN da sala inválido.');
+        return;
+      }
+      if (room.clients.size >= MAX_CLIENTS_PER_ROOM) {
+        ws.close(4003, 'Sala cheia.');
+        return;
+      }
     }
+
+    socketAlive.set(ws, true);
+    ws.on('pong', () => {
+      socketAlive.set(ws, true);
+    });
 
     room.clients.set(ws, roleParam);
     broadcastPresence(roomId, room);
@@ -380,18 +735,30 @@ export class ErrorOverlay {
     }
 
     ws.on('message', (rawData) => {
-      if (roleParam !== 'navigator') return;
       const text = rawData.toString();
       if (text.length > 512 * 1024) return;
       try {
         const parsed = JSON.parse(text) as { type?: string };
+        const currentRole = room?.clients.get(ws);
+        if (!currentRole || !room) return;
+        if (currentRole === 'pilot') {
+          if (parsed.type === 'pilot:hello') {
+            broadcastPresence(roomId, room);
+            if (room.lastTelemetryJson && ws.readyState === WebSocket.OPEN) {
+              ws.send(room.lastTelemetryJson);
+            }
+          }
+          return;
+        }
         if (parsed.type === 'nav:telemetry') {
-          room!.lastTelemetryJson = text;
-          for (const [peer, peerRole] of room!.clients.entries()) {
+          room.lastTelemetryJson = text;
+          for (const [peer, peerRole] of room.clients.entries()) {
             if (peerRole === 'pilot' && peer.readyState === WebSocket.OPEN) {
               peer.send(text);
             }
           }
+        } else if (parsed.type === 'nav:ping') {
+          broadcastPresence(roomId, room);
         }
       } catch {
         // Ignore malformed telemetry payload

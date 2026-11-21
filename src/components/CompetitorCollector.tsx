@@ -414,7 +414,7 @@ export const CompetitorCollector: React.FC = () => {
     setParseError(null);
     setLoadingSample(true);
     try {
-      const res = await fetch('/assets/aistudio/rally_escoteiros_merged_66a34567.txt');
+      const res = await fetch(`${import.meta.env.BASE_URL}assets/aistudio/rally_escoteiros_merged_66a34567.txt`);
       if (!res.ok) throw new Error('Arquivo modelo não encontrado.');
       const text = await res.text();
       const parsed = enrichRoadbookForNavigation(

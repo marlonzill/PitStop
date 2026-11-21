@@ -60,8 +60,8 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
 
   if (loading) {
     return (
-      <div className="mx-auto max-w-4xl rounded-2xl border border-slate-800 bg-[#101622] p-10 text-center text-slate-300">
-        <Loader2 className="mx-auto h-8 w-8 animate-spin text-sky-400" />
+      <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-800 bg-[#111214] p-10 text-center text-[#C0C4C9]">
+        <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#E10600]" />
         <p className="mt-3 text-sm font-medium">Carregando classificação oficial...</p>
       </div>
     );
@@ -69,12 +69,12 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
 
   if (error || !snapshot) {
     return (
-      <div className="mx-auto max-w-2xl rounded-2xl border border-red-800/60 bg-[#101622] p-8 text-center text-slate-200">
-        <ShieldAlert className="mx-auto h-9 w-9 text-red-400" />
+      <div className="mx-auto max-w-2xl rounded-2xl border border-red-800/60 bg-[#111214] p-8 text-center text-zinc-200">
+        <ShieldAlert className="mx-auto h-9 w-9 text-[#FF2A2A]" />
         <h2 className="mt-3 font-['Barlow_Condensed'] text-2xl font-bold text-white">
           Resultado não encontrado
         </h2>
-        <p className="mt-1.5 text-sm text-slate-400">
+        <p className="mt-1.5 text-sm text-zinc-400">
           {error || 'Verifique se o link compartilhado está completo ou peça um novo link à organização PitStop Sports.'}
         </p>
       </div>
@@ -120,9 +120,9 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
                     'text/plain;charset=utf-8'
                   )
                 }
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3.5 text-xs font-semibold text-slate-100 hover:bg-slate-800"
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-[#1E1E22] px-3.5 text-xs font-semibold text-zinc-100 hover:bg-zinc-800"
               >
-                <Download className="h-4 w-4 text-sky-400" />
+                <Download className="h-4 w-4 text-[#C0C4C9]" />
                 <span>Baixar TXT</span>
               </button>
             )}
@@ -136,7 +136,7 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
                     'text/csv;charset=utf-8'
                   )
                 }
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3.5 text-xs font-semibold text-slate-100 hover:bg-slate-800"
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-[#1E1E22] px-3.5 text-xs font-semibold text-zinc-100 hover:bg-zinc-800"
               >
                 <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
                 <span>Planilha CSV</span>
@@ -153,22 +153,22 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
             return (
               <div
                 key={`${row.carNumber}-${row.position}`}
-                className={`rounded-2xl border p-4 bg-[#101622] ${
+                className={`rounded-2xl border p-4 bg-[#111214] ${
                   idx === 0
-                    ? 'border-red-500/50'
+                    ? 'border-[#E10600]/55'
                     : idx === 1
-                      ? 'border-sky-500/40'
-                      : 'border-slate-700'
+                      ? 'border-zinc-500/50'
+                      : 'border-zinc-700'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <span
                     className={`inline-flex h-10 w-10 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-xl font-extrabold italic text-white ${
                       idx === 0
-                        ? 'rally-btn-red'
+                        ? 'pitstop-btn-red'
                         : idx === 1
-                          ? 'pitstop-btn-blue'
-                          : 'rally-btn-amber text-slate-950'
+                          ? 'pitstop-btn-metal'
+                          : 'rally-btn-amber text-zinc-950'
                     }`}
                   >
                     {row.position}º
@@ -177,22 +177,22 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
                     <div className="font-mono text-2xl font-extrabold text-white tabular-nums">
                       {row.finalTotalPoints}
                     </div>
-                    <div className="text-[10px] font-bold tracking-wider text-sky-400 uppercase">
+                    <div className="text-[10px] font-bold tracking-wider text-[#FF2A2A] uppercase">
                       pontos perdidos
                     </div>
                   </div>
                 </div>
                 <div className="mt-3">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#C0C4C9]">
                     {idx === 0 ? (
                       <Trophy className="h-3.5 w-3.5 text-amber-400" />
                     ) : (
-                      <Award className="h-3.5 w-3.5 text-sky-400" />
+                      <Award className="h-3.5 w-3.5 text-[#C0C4C9]" />
                     )}
                     <span>Carro #{row.carNumber}</span>
                   </div>
                   <p className="truncate text-sm font-semibold text-white">{row.crewName}</p>
-                  <p className="mt-0.5 font-mono text-[11px] text-slate-400">
+                  <p className="mt-0.5 font-mono text-[11px] text-zinc-400">
                     PCs: {row.recordedV}/{row.totalV} · Adiant: -{row.earlySecondsTotal.toFixed(1)}s · Atras: +{row.lateSecondsTotal.toFixed(1)}s
                   </p>
                 </div>
@@ -202,8 +202,8 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
         </section>
       )}
 
-      <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#101622] shadow-xl">
-        <div className="border-b border-slate-800 px-5 py-3.5">
+      <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] shadow-xl">
+        <div className="border-b border-zinc-800 px-5 py-3.5">
           <h2 className="font-['Barlow_Condensed'] text-xl font-bold text-white">
             Tabela Geral de Classificação
           </h2>
@@ -211,7 +211,7 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-800 bg-[#080c14] text-xs font-semibold text-slate-400">
+              <tr className="border-b border-zinc-800 bg-[#080B0D] text-xs font-semibold text-zinc-400">
                 <th className="py-3 pl-5 pr-3">Pos</th>
                 <th className="px-3 py-3">Carro / Dupla</th>
                 <th className="px-3 py-3 text-right">PCs V</th>
@@ -222,9 +222,9 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
                 <th className="py-3 pl-3 pr-5 text-right">Total Pontos</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/80 font-mono tabular-nums">
+            <tbody className="divide-y divide-zinc-800/80 font-mono tabular-nums">
               {snapshot.rows.map((row) => (
-                <tr key={`${row.position}-${row.carNumber}`} className="hover:bg-slate-800/35">
+                <tr key={`${row.position}-${row.carNumber}`} className="hover:bg-zinc-800/35">
                   <td className="py-3 pl-5 pr-3 font-bold text-white">
                     {row.position}º
                   </td>
@@ -232,9 +232,9 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
                     <div className="font-mono text-sm font-bold text-white">
                       #{row.carNumber}
                     </div>
-                    <div className="text-xs text-slate-400">{row.crewName}</div>
+                    <div className="text-xs text-zinc-400">{row.crewName}</div>
                   </td>
-                  <td className="px-3 py-3 text-right text-xs text-slate-300">
+                  <td className="px-3 py-3 text-right text-xs text-zinc-300">
                     {row.recordedV}/{row.totalV}
                   </td>
                   <td className="px-3 py-3 text-right text-xs text-emerald-400">
@@ -243,13 +243,13 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
                   <td className="px-3 py-3 text-right text-xs text-red-400">
                     +{row.lateSecondsTotal.toFixed(1)}s
                   </td>
-                  <td className="px-3 py-3 text-right text-xs text-slate-200">
+                  <td className="px-3 py-3 text-right text-xs text-zinc-200">
                     {row.pointsFromV ?? Math.max(0, row.finalTotalPoints - row.missedV * snapshot.missedPenaltyPts)}
                   </td>
                   <td className="px-3 py-3 text-right text-xs text-red-400">
                     {row.missedPenaltyPoints ?? row.missedV * snapshot.missedPenaltyPts}
                   </td>
-                  <td className="py-3 pl-3 pr-5 text-right text-base font-bold text-sky-400">
+                  <td className="py-3 pl-3 pr-5 text-right text-base font-bold text-[#FF2A2A]">
                     {row.finalTotalPoints}
                   </td>
                 </tr>
@@ -259,12 +259,12 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
         </div>
       </section>
 
-      <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-slate-400">
+      <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-zinc-400">
         <a
           href="https://www.instagram.com/pitstop.sports/"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 hover:text-sky-400"
+          className="inline-flex items-center gap-1 hover:text-[#FF2A2A]"
         >
           <span>Instagram @pitstop.sports</span>
           <ExternalLink className="h-3 w-3" />
@@ -274,7 +274,7 @@ export const PublicStandingsView: React.FC<PublicStandingsViewProps> = ({ slug }
           href="https://pitstopere.wixsite.com/news"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 hover:text-sky-400"
+          className="inline-flex items-center gap-1 hover:text-[#FF2A2A]"
         >
           <span>Portal PitStop News</span>
           <ExternalLink className="h-3 w-3" />

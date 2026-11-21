@@ -7,6 +7,35 @@ import { getNavSettings } from './navSettings';
 
 const PENDING_UPLOADS_KEY = 'pitstop_pending_uploads_v1';
 
+// Organizer Bearer token kept strictly in JS memory (never localStorage/sessionStorage)
+let organizerBearerToken: string | null = null;
+
+export function setOrganizerToken(token: string | null): void {
+  organizerBearerToken = token ? token.trim() : null;
+}
+
+export function getOrganizerToken(): string | null {
+  return organizerBearerToken;
+}
+
+export function logoutOrganizer(): void {
+  organizerBearerToken = null;
+}
+
+function getOrganizerAuthHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...(extra || {}) };
+  if (organizerBearerToken) {
+    headers.Authorization = `Bearer ${organizerBearerToken}`;
+  }
+  return headers;
+}
+
+export interface OrganizerAuthStatus {
+  configured: boolean;
+  needsClaim: boolean;
+  authenticated: boolean;
+}
+
 export interface PendingSubmissionPayload extends CompetitorResultFile {
   rawTxt?: string;
 }
@@ -19,6 +48,60 @@ export function resolveApiBaseUrl(overrideUrl?: string): string {
     return '';
   }
   return raw.replace(/\/+$/, '');
+}
+
+export async function getOrganizerAuthStatus(overrideUrl?: string): Promise<OrganizerAuthStatus> {
+  const base = resolveApiBaseUrl(overrideUrl);
+  const res = await fetch(`${base}/api/auth/status`, {
+    method: 'GET',
+    cache: 'no-store',
+    headers: getOrganizerAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Servidor respondeu com HTTP ${res.status}`);
+  }
+  const data = (await res.json()) as Partial<OrganizerAuthStatus>;
+  return {
+    configured: Boolean(data.configured),
+    needsClaim: Boolean(data.needsClaim),
+    authenticated: Boolean(data.authenticated),
+  };
+}
+
+export async function claimOrganizerPasscode(
+  passcode: string,
+  overrideUrl?: string
+): Promise<string> {
+  const base = resolveApiBaseUrl(overrideUrl);
+  const res = await fetch(`${base}/api/auth/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passcode }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+  if (!res.ok || !data.token) {
+    throw new Error(data.error || `Falha ao configurar senha (HTTP ${res.status}).`);
+  }
+  organizerBearerToken = data.token;
+  return data.token;
+}
+
+export async function loginOrganizerPasscode(
+  passcode: string,
+  overrideUrl?: string
+): Promise<string> {
+  const base = resolveApiBaseUrl(overrideUrl);
+  const res = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passcode }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+  if (!res.ok || !data.token) {
+    throw new Error(data.error || `Senha incorreta (HTTP ${res.status}).`);
+  }
+  organizerBearerToken = data.token;
+  return data.token;
 }
 
 export async function checkBaseServerHealth(overrideUrl?: string): Promise<{
@@ -112,7 +195,14 @@ export async function submitCollectorResultToBase(
 
 export async function fetchBaseResults(overrideUrl?: string): Promise<CompetitorResultFile[]> {
   const base = resolveApiBaseUrl(overrideUrl);
-  const res = await fetch(`${base}/api/results`, { cache: 'no-store' });
+  const res = await fetch(`${base}/api/results`, {
+    cache: 'no-store',
+    headers: getOrganizerAuthHeaders(),
+  });
+  if (res.status === 401) {
+    organizerBearerToken = null;
+    throw new Error('UNAUTHORIZED');
+  }
   if (!res.ok) {
     throw new Error(`Falha ao buscar registros da base (HTTP ${res.status})`);
   }
@@ -122,14 +212,26 @@ export async function fetchBaseResults(overrideUrl?: string): Promise<Competitor
 
 export async function deleteBaseResult(id: string, overrideUrl?: string): Promise<void> {
   const base = resolveApiBaseUrl(overrideUrl);
-  await fetch(`${base}/api/results/${encodeURIComponent(id)}`, {
+  const res = await fetch(`${base}/api/results/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+    headers: getOrganizerAuthHeaders(),
   });
+  if (res.status === 401) {
+    organizerBearerToken = null;
+    throw new Error('UNAUTHORIZED');
+  }
 }
 
 export async function clearBaseResults(overrideUrl?: string): Promise<void> {
   const base = resolveApiBaseUrl(overrideUrl);
-  await fetch(`${base}/api/results`, { method: 'DELETE' });
+  const res = await fetch(`${base}/api/results`, {
+    method: 'DELETE',
+    headers: getOrganizerAuthHeaders(),
+  });
+  if (res.status === 401) {
+    organizerBearerToken = null;
+    throw new Error('UNAUTHORIZED');
+  }
 }
 
 export async function publishPublicStandings(
@@ -145,9 +247,13 @@ export async function publishPublicStandings(
   const base = resolveApiBaseUrl(overrideUrl);
   const res = await fetch(`${base}/api/public-standings`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getOrganizerAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   });
+  if (res.status === 401) {
+    organizerBearerToken = null;
+    throw new Error('Sessão de apuração expirada. Faça login novamente.');
+  }
   if (!res.ok) {
     throw new Error(`Não foi possível publicar a classificação (HTTP ${res.status}).`);
   }

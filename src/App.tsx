@@ -1,9 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { Calculator, Compass, Flag, Gauge, Home, Route, Settings } from 'lucide-react';
-import { CompetitorCollector } from './components/CompetitorCollector';
+import { Calculator, Flag, Home, Route, Settings } from 'lucide-react';
 import { InitialStatusTab } from './components/InitialStatusTab';
 import { NavigationCockpit } from './components/NavigationCockpit';
-import { OdometerCockpit } from './components/OdometerCockpit';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PitStopLogo } from './components/PitStopLogo';
 import { PublicStandingsView } from './components/PublicStandingsView';
@@ -11,7 +9,8 @@ import { SettingsTab } from './components/SettingsTab';
 import { TimeCalculatorTab } from './components/TimeCalculatorModal';
 import { VelocityCockpit } from './components/VelocityCockpit';
 import type { ActiveTab, CompetitorResultFile } from './types/rally';
-import { useNavSettings } from './utils/navSettings';
+import { updateNavSettings, useNavSettings } from './utils/navSettings';
+import { normalizeRoomCode, normalizeRoomPin } from './utils/pairingClient';
 import { bootstrapFirstRunPermissions } from './utils/permissionsBootstrap';
 
 const isCompetitorEnv = import.meta.env.VITE_APP_TARGET === 'competitor';
@@ -46,6 +45,7 @@ const OrganizerBackoffice = isCompetitorEnv
 
 export type SettingsSubMenu =
   | 'hub'
+  | 'collector'
   | 'roadbooks'
   | 'pairing'
   | 'pilot'
@@ -53,6 +53,7 @@ export type SettingsSubMenu =
   | 'alerts'
   | 'clock'
   | 'gopro'
+  | 'backup'
   | 'system';
 
 export default function App() {
@@ -60,13 +61,47 @@ export default function App() {
   const [{ isApuracao, publicResultSlug }, setRouteState] = useState(() =>
     readUrlRoute()
   );
-  const [activeTab, setActiveTab] = useState<ActiveTab>('inicial');
+  const [activeTab, setActiveTabState] = useState<ActiveTab>('inicial');
+  const [visitedTabs, setVisitedTabs] = useState<Set<ActiveTab>>(() => new Set(['inicial']));
   const [settingsMenu, setSettingsMenu] = useState<SettingsSubMenu>('hub');
   const [backofficeResults, setBackofficeResults] = useState<CompetitorResultFile[]>([]);
 
-  // Request Location, Storage, and Microphone permissions cleanly on first launch
+  const setActiveTab = (tab: ActiveTab) => {
+    setActiveTabState(tab);
+    setVisitedTabs((prev) => {
+      if (prev.has(tab)) return prev;
+      const next = new Set(prev);
+      next.add(tab);
+      return next;
+    });
+  };
+
+  // Request Location and Storage permissions cleanly on first launch
   useEffect(() => {
     bootstrapFirstRunPermissions();
+  }, []);
+
+  // Auto-open Droid Piloto screen when launched via ?piloto=ROOM&pin=PIN
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const pilotoParam = params.get('piloto');
+    const pinParam = params.get('pin');
+    if (pilotoParam) {
+      const normalized = normalizeRoomCode(pilotoParam);
+      const normalizedPin = pinParam ? normalizeRoomPin(pinParam) : '';
+      updateNavSettings((prev) => ({
+        ...prev,
+        pairing: {
+          ...prev.pairing,
+          enabled: true,
+          role: 'pilot',
+          roomCode: normalized || prev.pairing.roomCode,
+          roomPin: normalizedPin || prev.pairing.roomPin,
+        },
+      }));
+      setActiveTab('navegacao');
+    }
   }, []);
 
   // Apply screen orientation preference whenever available on mobile browsers / WebView
@@ -167,106 +202,84 @@ export default function App() {
               />
             </a>
 
-            {/* 7 Ordered Tabs: 4+3 wrap on narrow portrait mobile, 1 single row on landscape/desktop */}
+            {/* 5 Ordered Tabs: compact single-row icon bar on smartphones, icon + text on desktop */}
             {!isApuracao && !publicResultSlug ? (
               <nav
                 aria-label="Menu principal"
-                className="grid flex-1 grid-cols-4 gap-1 rounded-lg border border-zinc-800 bg-[#111214] p-1 sm:grid-cols-7 sm:flex-none sm:items-center lg:gap-1"
+                className="flex flex-1 items-center justify-between gap-0.5 rounded-lg border border-zinc-800 bg-[#111214] p-0.5 lg:flex-none lg:gap-1"
               >
                 <button
                   type="button"
                   onClick={() => setActiveTab('inicial')}
-                  className={`inline-flex min-h-[38px] items-center justify-center gap-1 rounded-md px-1.5 sm:px-2 lg:px-3 text-[11px] sm:text-xs lg:text-sm font-bold transition-colors whitespace-nowrap ${
+                  aria-label="Início"
+                  title="Início"
+                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'inicial'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
-                  <Home className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
-                  <span>Início</span>
+                  <Home className="h-4 w-4 shrink-0" />
+                  <span className="hidden lg:inline">Início</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setActiveTab('navegacao')}
-                  className={`inline-flex min-h-[38px] items-center justify-center gap-1 rounded-md px-1.5 sm:px-2 lg:px-3 text-[11px] sm:text-xs lg:text-sm font-bold transition-colors whitespace-nowrap ${
+                  aria-label="Regularidade"
+                  title="Regularidade"
+                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'navegacao'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
-                  <Route className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
-                  <span className="lg:hidden">Regul.</span>
+                  <Route className="h-4 w-4 shrink-0" />
                   <span className="hidden lg:inline">Regularidade</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setActiveTab('velocidade')}
-                  className={`inline-flex min-h-[38px] items-center justify-center gap-1 rounded-md px-1.5 sm:px-2 lg:px-3 text-[11px] sm:text-xs lg:text-sm font-bold transition-colors whitespace-nowrap ${
+                  aria-label="Velocidade"
+                  title="Velocidade"
+                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'velocidade'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
-                  <Flag className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
-                  <span className="lg:hidden">Veloc.</span>
+                  <Flag className="h-4 w-4 shrink-0" />
                   <span className="hidden lg:inline">Velocidade</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setActiveTab('hodometro')}
-                  className={`inline-flex min-h-[38px] items-center justify-center gap-1 rounded-md px-1.5 sm:px-2 lg:px-3 text-[11px] sm:text-xs lg:text-sm font-bold transition-colors whitespace-nowrap ${
-                    activeTab === 'hodometro'
-                      ? 'pitstop-btn-red text-white'
-                      : 'text-[#B5B5B5] hover:text-white'
-                  }`}
-                >
-                  <Gauge className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
-                  <span className="lg:hidden">Hodo.</span>
-                  <span className="hidden lg:inline">Hodômetro</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('competidor')}
-                  className={`inline-flex min-h-[38px] items-center justify-center gap-1 rounded-md px-1.5 sm:px-2 lg:px-3 text-[11px] sm:text-xs lg:text-sm font-bold transition-colors whitespace-nowrap ${
-                    activeTab === 'competidor'
-                      ? 'pitstop-btn-red text-white'
-                      : 'text-[#B5B5B5] hover:text-white'
-                  }`}
-                >
-                  <Compass className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
-                  <span className="lg:hidden">Colet.</span>
-                  <span className="hidden lg:inline">Coletor</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={() => setActiveTab('calculadora')}
-                  className={`inline-flex min-h-[38px] items-center justify-center gap-1 rounded-md px-1.5 sm:px-2 lg:px-3 text-[11px] sm:text-xs lg:text-sm font-bold transition-colors whitespace-nowrap ${
+                  aria-label="Calculadora"
+                  title="Calculadora"
+                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'calculadora'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
-                  <Calculator className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
-                  <span className="lg:hidden">Calc.</span>
+                  <Calculator className="h-4 w-4 shrink-0" />
                   <span className="hidden lg:inline">Calculadora</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => openSettingsSection('hub')}
-                  className={`col-span-2 sm:col-span-1 inline-flex min-h-[38px] items-center justify-center gap-1 rounded-md px-1.5 sm:px-2 lg:px-3 text-[11px] sm:text-xs lg:text-sm font-bold transition-colors whitespace-nowrap ${
+                  aria-label="Configurações"
+                  title="Configurações"
+                  className={`flex-1 lg:flex-none inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md px-1.5 sm:px-2.5 text-xs font-bold transition-colors whitespace-nowrap ${
                     activeTab === 'configuracoes'
                       ? 'pitstop-btn-red text-white'
                       : 'text-[#B5B5B5] hover:text-white'
                   }`}
                 >
-                  <Settings className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
-                  <span className="lg:hidden">Config.</span>
+                  <Settings className="h-4 w-4 shrink-0" />
                   <span className="hidden lg:inline">Configurações</span>
                 </button>
               </nav>
@@ -314,30 +327,36 @@ export default function App() {
           </Suspense>
         ) : (
           <>
-            {activeTab === 'inicial' && (
+            <div className={activeTab === 'inicial' ? '' : 'hidden'}>
               <InitialStatusTab
                 onNavigate={(tab) => {
                   if (tab === 'configuracoes') openSettingsSection('hub');
                   else setActiveTab(tab);
                 }}
               />
+            </div>
+            {visitedTabs.has('navegacao') && (
+              <div className={activeTab === 'navegacao' ? '' : 'hidden'}>
+                <NavigationCockpit
+                  onOpenRoadbookSettings={() => openSettingsSection('roadbooks')}
+                />
+              </div>
             )}
-            {activeTab === 'navegacao' && (
-              <NavigationCockpit
-                onOpenRoadbookSettings={() => openSettingsSection('roadbooks')}
-              />
+            {visitedTabs.has('velocidade') && (
+              <div className={activeTab === 'velocidade' ? '' : 'hidden'}>
+                <VelocityCockpit isActive={activeTab === 'velocidade'} />
+              </div>
             )}
-            {activeTab === 'velocidade' && <VelocityCockpit />}
-            {activeTab === 'hodometro' && <OdometerCockpit />}
-            {activeTab === 'competidor' && <CompetitorCollector />}
             {activeTab === 'calculadora' && <TimeCalculatorTab />}
-            {activeTab === 'configuracoes' && (
-              <SettingsTab
-                initialMenu={settingsMenu}
-                onMenuChange={setSettingsMenu}
-                onOpenNavigation={() => setActiveTab('navegacao')}
-                onOpenApuracao={!isCompetitorEnv ? openApuracaoPortal : undefined}
-              />
+            {visitedTabs.has('configuracoes') && (
+              <div className={activeTab === 'configuracoes' ? '' : 'hidden'}>
+                <SettingsTab
+                  initialMenu={settingsMenu}
+                  onMenuChange={setSettingsMenu}
+                  onOpenNavigation={() => setActiveTab('navegacao')}
+                  onOpenApuracao={!isCompetitorEnv ? openApuracaoPortal : undefined}
+                />
+              </div>
             )}
           </>
         )}

@@ -1,39 +1,38 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
-import { Compass, Layers, LocateFixed, Maximize2, Minimize2 } from 'lucide-react';
-import type { VelocitySample, VelocityTrap } from '../utils/velocityEngine';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import {
+  Crosshair,
+  Layers,
+  LocateFixed,
+  Maximize2,
+  Minimize2,
+  Minus,
+  Navigation,
+  Plus,
+} from 'lucide-react';
+import {
+  buildMarcoArrowGeometry,
+  buildMarcoGateLineString,
+  type TrapKind,
+  type VelocitySample,
+  type VelocityTrap,
+} from '../utils/velocityEngine';
 
-const MAPBOX_PUBLIC_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN ?? '').trim();
+// Centro padrão em Erechim, RS (-27.6344, -52.2739)
+const ERECHIM_LATLON: [number, number] = [-27.6344, -52.2739];
 
-// Centro padrão em Erechim, RS (-27.6344, -52.2739) com zoom 12
-const ERECHIM_CENTER: [number, number] = [-52.2739, -27.6344];
-
-type MapStyleId = 'hybrid' | 'streets' | 'satellite';
+type MapStyleId = 'satellite' | 'hybrid' | 'streets';
 
 interface MapStyleOption {
   id: MapStyleId;
   label: string;
-  url: string;
 }
 
-// Cicla entre Híbrido (Standard Satellite), Ruas (Standard) e Satélite puro
-const MAPBOX_STYLES: MapStyleOption[] = [
-  {
-    id: 'hybrid',
-    label: 'Híbrido',
-    url: 'mapbox://styles/mapbox/standard-satellite',
-  },
-  {
-    id: 'streets',
-    label: 'Ruas',
-    url: 'mapbox://styles/mapbox/standard',
-  },
-  {
-    id: 'satellite',
-    label: 'Satélite',
-    url: 'mapbox://styles/mapbox/satellite-v9',
-  },
+const MAP_STYLES: MapStyleOption[] = [
+  { id: 'satellite', label: 'Satélite' },
+  { id: 'hybrid', label: 'Híbrido' },
+  { id: 'streets', label: 'Ruas' },
 ];
 
 interface VelocityMapboxViewProps {
@@ -45,23 +44,136 @@ interface VelocityMapboxViewProps {
   navigationMode?: boolean;
   navHeadingDeg?: number | null;
   containerClassName?: string;
+  placementKind?: TrapKind | null;
+  selectedTrapId?: string | null;
+  onMapClickPlaceTrap?: (lat: number, lon: number) => void;
+  onSelectTrap?: (trapId: string) => void;
+  onDragTrapEnd?: (trapId: string, lat: number, lon: number) => void;
+  onCenterChange?: (lat: number, lon: number) => void;
 }
 
-function buildGateSegment(trap: VelocityTrap): [[number, number], [number, number]] {
-  const halfM = Math.max(10, trap.widthM / 2);
-  const rad = (trap.bearingDeg * Math.PI) / 180;
-  // Vetor perpendicular à direção de avanço
-  const px = Math.cos(rad);
-  const py = -Math.sin(rad);
-  const mPerDegLat = 111320;
-  const mPerDegLon = 111320 * Math.cos((trap.lat * Math.PI) / 180);
+function trapColorByKind(kind: TrapKind): string {
+  if (kind === 'start') return '#10b981';
+  if (kind === 'start_finish') return '#38bdf8';
+  if (kind === 'finish') return '#E10600';
+  return '#2563eb';
+}
 
-  const dLon = (px * halfM) / Math.max(1, mPerDegLon);
-  const dLat = (py * halfM) / mPerDegLat;
-  return [
-    [trap.lon - dLon, trap.lat - dLat],
-    [trap.lon + dLon, trap.lat + dLat],
-  ];
+function createMarcoPinElement(
+  trap: VelocityTrap,
+  splitOrdinal: number,
+  selected: boolean
+): HTMLDivElement {
+  const color = trapColorByKind(trap.kind);
+  const badgeText =
+    trap.kind === 'start'
+      ? 'L'
+      : trap.kind === 'start_finish'
+        ? 'L/C'
+        : trap.kind === 'finish'
+          ? 'C'
+          : `P${splitOrdinal}`;
+
+  const el = document.createElement('div');
+  el.style.width = '48px';
+  el.style.height = '48px';
+  el.style.display = 'flex';
+  el.style.alignItems = 'center';
+  el.style.justifyContent = 'center';
+  el.style.cursor = 'grab';
+  el.style.userSelect = 'none';
+  el.style.position = 'relative';
+
+  // Unified Arrow + Crossbar glyph centered at the exact pin point
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', '46');
+  svg.setAttribute('height', '46');
+  svg.setAttribute('viewBox', '0 0 48 48');
+  svg.style.transform = `rotate(${Number(trap.bearingDeg) || 0}deg)`;
+  svg.style.transformOrigin = '50% 50%';
+  svg.style.display = 'block';
+  svg.style.filter = 'drop-shadow(0 2px 4px rgba(0,0,0,0.85))';
+
+  // Transversal crossbar line inside icon
+  const bar = document.createElementNS(svgNS, 'line');
+  bar.setAttribute('x1', '7');
+  bar.setAttribute('y1', '24');
+  bar.setAttribute('x2', '41');
+  bar.setAttribute('y2', '24');
+  bar.setAttribute('stroke', selected ? '#FFFFFF' : '#E2E8F0');
+  bar.setAttribute('stroke-width', selected ? '4' : '3');
+  bar.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(bar);
+
+  // Direction arrow shaft & head perpendicular to gate line
+  const arrow = document.createElementNS(svgNS, 'path');
+  arrow.setAttribute('d', 'M24 4L33 19H27.5V35H20.5V19H15L24 4Z');
+  arrow.setAttribute('fill', color);
+  arrow.setAttribute('stroke', '#FFFFFF');
+  arrow.setAttribute('stroke-width', selected ? '2' : '1.4');
+  arrow.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(arrow);
+
+  // Exact Center Pin dot at (24,24)
+  const centerDot = document.createElementNS(svgNS, 'circle');
+  centerDot.setAttribute('cx', '24');
+  centerDot.setAttribute('cy', '24');
+  centerDot.setAttribute('r', selected ? '5.5' : '4.5');
+  centerDot.setAttribute('fill', '#FFFFFF');
+  centerDot.setAttribute('stroke', color);
+  centerDot.setAttribute('stroke-width', '2.5');
+  svg.appendChild(centerDot);
+
+  const badge = document.createElement('span');
+  badge.textContent = badgeText;
+  badge.style.position = 'absolute';
+  badge.style.bottom = '-4px';
+  badge.style.left = '50%';
+  badge.style.transform = 'translateX(-50%)';
+  badge.style.background = '#080B0D';
+  badge.style.border = `1.5px solid ${selected ? '#FFFFFF' : color}`;
+  badge.style.color = '#FFFFFF';
+  badge.style.fontFamily = 'monospace';
+  badge.style.fontSize = '9px';
+  badge.style.fontWeight = '800';
+  badge.style.lineHeight = '1';
+  badge.style.padding = '1px 4px';
+  badge.style.borderRadius = '4px';
+  badge.style.whiteSpace = 'nowrap';
+  badge.style.pointerEvents = 'none';
+
+  el.appendChild(svg);
+  el.appendChild(badge);
+  return el;
+}
+
+function createVehicleMarkerElement(headingDeg: number | null): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.width = '28px';
+  el.style.height = '28px';
+  el.style.display = 'flex';
+  el.style.alignItems = 'center';
+  el.style.justifyContent = 'center';
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', '26');
+  svg.setAttribute('height', '26');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.style.transform = `rotate(${typeof headingDeg === 'number' ? headingDeg : 0}deg)`;
+  svg.style.filter = 'drop-shadow(0 2px 5px rgba(0,0,0,0.9))';
+
+  const path = document.createElementNS(svgNS, 'path');
+  path.setAttribute('d', 'M12 2L20 20L12 16L4 20Z');
+  path.setAttribute('fill', '#E10600');
+  path.setAttribute('stroke', '#FFFFFF');
+  path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(path);
+
+  el.appendChild(svg);
+  return el;
 }
 
 export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
@@ -72,359 +184,346 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   currentPos,
   navigationMode = false,
   navHeadingDeg = null,
-  containerClassName = 'relative mt-2.5 h-72 w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-96',
+  containerClassName = 'relative mt-2 h-80 w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[420px]',
+  placementKind = null,
+  selectedTrapId = null,
+  onMapClickPlaceTrap,
+  onSelectTrap,
+  onDragTrapEnd,
+  onCenterChange,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<mapboxgl.Map | null>(null);
-  const defaultMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const baseLayersRef = useRef<{
+    satellite: L.TileLayer;
+    labels: L.TileLayer;
+    streets: L.TileLayer;
+  } | null>(null);
+  const routeLayerRef = useRef<L.LayerGroup | null>(null);
+  const gatesLayerRef = useRef<L.LayerGroup | null>(null);
+  const carLayerRef = useRef<L.LayerGroup | null>(null);
   const lastFittedKeyRef = useRef<string>('');
   const lastNavEaseRef = useRef<number>(0);
 
-  const [styleIndex, setStyleIndex] = useState(0); // Inicia em Híbrido (standard-satellite)
+  const placementKindRef = useRef(placementKind);
+  placementKindRef.current = placementKind;
+  const onMapClickRef = useRef(onMapClickPlaceTrap);
+  onMapClickRef.current = onMapClickPlaceTrap;
+  const onSelectTrapRef = useRef(onSelectTrap);
+  onSelectTrapRef.current = onSelectTrap;
+  const onDragTrapEndRef = useRef(onDragTrapEnd);
+  onDragTrapEndRef.current = onDragTrapEnd;
+  const onCenterChangeRef = useRef(onCenterChange);
+  onCenterChangeRef.current = onCenterChange;
+
+  const [styleIndex, setStyleIndex] = useState(0); // Default: Satélite
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [webglUnsupported, setWebglUnsupported] = useState(false);
-  const tokenMissing = !MAPBOX_PUBLIC_TOKEN;
 
-  const currentStyle = MAPBOX_STYLES[styleIndex];
+  const currentStyle = MAP_STYLES[styleIndex];
 
-  // Fallback vetorial caso o dispositivo não suporte WebGL
-  const fallbackProjection = useMemo(() => {
-    const pts: { lat: number; lon: number }[] = [
-      ...editableTrace.map((s) => ({ lat: s.lat, lon: s.lon })),
-      ...orderedTraps.map((t) => ({ lat: t.lat, lon: t.lon })),
-    ];
-    if (currentPos) pts.push(currentPos);
-    if (pts.length === 0) return null;
-
-    let minLat = pts[0].lat;
-    let maxLat = pts[0].lat;
-    let minLon = pts[0].lon;
-    let maxLon = pts[0].lon;
-    for (const p of pts) {
-      if (p.lat < minLat) minLat = p.lat;
-      if (p.lat > maxLat) maxLat = p.lat;
-      if (p.lon < minLon) minLon = p.lon;
-      if (p.lon > maxLon) maxLon = p.lon;
-    }
-    const padLat = Math.max(0.0008, (maxLat - minLat) * 0.14);
-    const padLon = Math.max(0.0008, (maxLon - minLon) * 0.14);
-    minLat -= padLat;
-    maxLat += padLat;
-    minLon -= padLon;
-    maxLon += padLon;
-
-    const project = (lat: number, lon: number) => ({
-      x: ((lon - minLon) / Math.max(1e-6, maxLon - minLon)) * 320 + 20,
-      y: (1 - (lat - minLat) / Math.max(1e-6, maxLat - minLat)) * 200 + 20,
-    });
-    return { project };
-  }, [editableTrace, orderedTraps, currentPos]);
-
-  // Monta os GeoJSONs para rota, traps, cursor pós-gravação e posição atual do carro
-  const geoJsonData = useMemo(() => {
-    const routeFc = {
-      type: 'FeatureCollection' as const,
-      features:
-        editableTrace.length > 1
-          ? [
-              {
-                type: 'Feature' as const,
-                properties: {},
-                geometry: {
-                  type: 'LineString' as const,
-                  coordinates: editableTrace.map((s) => [s.lon, s.lat]),
-                },
-              },
-            ]
-          : [],
-    };
-
-    const gatesFc = {
-      type: 'FeatureCollection' as const,
-      features: orderedTraps.map((tr) => ({
-        type: 'Feature' as const,
-        properties: {
-          kind: tr.kind,
-          name: tr.name,
-        },
-        geometry: {
-          type: 'LineString' as const,
-          coordinates: buildGateSegment(tr),
-        },
-      })),
-    };
-
-    const trapsPtsFc = {
-      type: 'FeatureCollection' as const,
-      features: orderedTraps.map((tr) => ({
-        type: 'Feature' as const,
-        properties: {
-          kind: tr.kind,
-          label:
-            tr.kind === 'start'
-              ? 'LARGADA'
-              : tr.kind === 'finish'
-                ? 'CHEGADA'
-                : tr.name,
-        },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [tr.lon, tr.lat],
-        },
-      })),
-    };
-
-    const scrubberSample = editableTrace[postEditIdx];
-    const scrubberFc = {
-      type: 'FeatureCollection' as const,
-      features: scrubberSample
-        ? [
-            {
-              type: 'Feature' as const,
-              properties: {},
-              geometry: {
-                type: 'Point' as const,
-                coordinates: [scrubberSample.lon, scrubberSample.lat],
-              },
-            },
-          ]
-        : [],
-    };
-
-    const carFc = {
-      type: 'FeatureCollection' as const,
-      features: currentPos
-        ? [
-            {
-              type: 'Feature' as const,
-              properties: {},
-              geometry: {
-                type: 'Point' as const,
-                coordinates: [currentPos.lon, currentPos.lat],
-              },
-            },
-          ]
-        : [],
-    };
-
-    return { routeFc, gatesFc, trapsPtsFc, scrubberFc, carFc };
-  }, [editableTrace, orderedTraps, postEditIdx, currentPos]);
-
-  const geoDataRef = useRef(geoJsonData);
-  geoDataRef.current = geoJsonData;
-
-  const syncOverlaySourcesAndLayers = (map: mapboxgl.Map) => {
-    const data = geoDataRef.current;
-
-    type GeoDataPayload = Parameters<mapboxgl.GeoJSONSource['setData']>[0];
-    const upsertSource = (id: string, fc: GeoDataPayload) => {
-      const existing = map.getSource(id) as mapboxgl.GeoJSONSource | undefined;
-      if (existing) {
-        existing.setData(fc);
-      } else {
-        map.addSource(id, { type: 'geojson', data: fc });
-      }
-    };
-
-    upsertSource('pitstop-route', data.routeFc);
-    upsertSource('pitstop-gates', data.gatesFc);
-    upsertSource('pitstop-traps', data.trapsPtsFc);
-    upsertSource('pitstop-scrubber', data.scrubberFc);
-    upsertSource('pitstop-car', data.carFc);
-
-    if (!map.getLayer('pitstop-route-casing')) {
-      map.addLayer({
-        id: 'pitstop-route-casing',
-        type: 'line',
-        source: 'pitstop-route',
-        paint: {
-          'line-color': '#FFFFFF',
-          'line-width': 6,
-          'line-opacity': 0.85,
-        },
-      });
-    }
-    if (!map.getLayer('pitstop-route-line')) {
-      map.addLayer({
-        id: 'pitstop-route-line',
-        type: 'line',
-        source: 'pitstop-route',
-        paint: {
-          'line-color': '#E10600',
-          'line-width': 3.5,
-        },
-      });
-    }
-    if (!map.getLayer('pitstop-gates-line')) {
-      map.addLayer({
-        id: 'pitstop-gates-line',
-        type: 'line',
-        source: 'pitstop-gates',
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'kind'],
-            'start',
-            '#10b981',
-            'finish',
-            '#E10600',
-            '#f59e0b',
-          ],
-          'line-width': 5,
-        },
-      });
-    }
-    if (!map.getLayer('pitstop-traps-circle')) {
-      map.addLayer({
-        id: 'pitstop-traps-circle',
-        type: 'circle',
-        source: 'pitstop-traps',
-        paint: {
-          'circle-radius': 6,
-          'circle-color': [
-            'match',
-            ['get', 'kind'],
-            'start',
-            '#10b981',
-            'finish',
-            '#E10600',
-            '#f59e0b',
-          ],
-          'circle-stroke-color': '#FFFFFF',
-          'circle-stroke-width': 2,
-        },
-      });
-    }
-    if (!map.getLayer('pitstop-traps-label')) {
-      map.addLayer({
-        id: 'pitstop-traps-label',
-        type: 'symbol',
-        source: 'pitstop-traps',
-        layout: {
-          'text-field': ['get', 'label'],
-          'text-size': 11,
-          'text-offset': [0, -1.3],
-          'text-anchor': 'bottom',
-          'text-allow-overlap': true,
-        },
-        paint: {
-          'text-color': '#FFFFFF',
-          'text-halo-color': '#080B0D',
-          'text-halo-width': 2,
-        },
-      });
-    }
-    if (!map.getLayer('pitstop-scrubber-circle')) {
-      map.addLayer({
-        id: 'pitstop-scrubber-circle',
-        type: 'circle',
-        source: 'pitstop-scrubber',
-        paint: {
-          'circle-radius': 7,
-          'circle-color': '#38bdf8',
-          'circle-stroke-color': '#FFFFFF',
-          'circle-stroke-width': 2,
-        },
-      });
-    }
-    if (!map.getLayer('pitstop-car-circle')) {
-      map.addLayer({
-        id: 'pitstop-car-circle',
-        type: 'circle',
-        source: 'pitstop-car',
-        paint: {
-          'circle-radius': 8,
-          'circle-color': '#E10600',
-          'circle-stroke-color': '#FFFFFF',
-          'circle-stroke-width': 2.5,
-        },
-      });
-    }
-  };
-
-  // Inicializa o mapa Mapbox GL JS
+  // Inicializa Leaflet em Modo Satélite
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    if (!MAPBOX_PUBLIC_TOKEN) return;
-    if (!mapboxgl.supported()) {
-      setWebglUnsupported(true);
-      return;
-    }
 
-    mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
+    const map = L.map(el, {
+      center: ERECHIM_LATLON,
+      zoom: 16,
+      minZoom: 3,
+      maxZoom: 20,
+      zoomControl: false,
+      attributionControl: false,
+    });
 
-    try {
-      const map = new mapboxgl.Map({
-        container: el,
-        style: MAPBOX_STYLES[0].url,
-        center: ERECHIM_CENTER,
-        zoom: 12,
-        attributionControl: false,
-      });
+    const satellite = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 20, maxNativeZoom: 19 }
+    );
+    const labels = L.tileLayer(
+      'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 20, maxNativeZoom: 18 }
+    );
+    const streets = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 20,
+      maxNativeZoom: 19,
+    });
 
-      map.addControl(new mapboxgl.NavigationControl({ showCompass: true }), 'top-left');
+    satellite.addTo(map);
+    baseLayersRef.current = { satellite, labels, streets };
 
-      // Marcador padrão em Erechim, RS (-27.6344, -52.2739)
-      const defaultMarker = new mapboxgl.Marker({ color: '#E10600' })
-        .setLngLat(ERECHIM_CENTER)
-        .setPopup(
-          new mapboxgl.Popup({ offset: 24 }).setText('Erechim, RS (-27.6344, -52.2739)')
-        )
-        .addTo(map);
-      defaultMarkerRef.current = defaultMarker;
+    const routeLayer = L.layerGroup().addTo(map);
+    const gatesLayer = L.layerGroup().addTo(map);
+    const carLayer = L.layerGroup().addTo(map);
+    routeLayerRef.current = routeLayer;
+    gatesLayerRef.current = gatesLayer;
+    carLayerRef.current = carLayer;
 
-      map.on('style.load', () => {
-        syncOverlaySourcesAndLayers(map);
-      });
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      if (placementKindRef.current && onMapClickRef.current) {
+        onMapClickRef.current(e.latlng.lat, e.latlng.lng);
+      }
+    });
 
-      map.on('error', () => {
-        // Erros transitórios de rede não devem derrubar o canvas
-      });
+    map.on('moveend', () => {
+      const c = map.getCenter();
+      onCenterChangeRef.current?.(c.lat, c.lng);
+    });
 
-      mapRef.current = map;
+    const resizeObserver = new ResizeObserver(() => {
+      map.invalidateSize({ animate: false });
+    });
+    resizeObserver.observe(el);
 
-      return () => {
-        defaultMarker.remove();
-        map.remove();
-        mapRef.current = null;
-        defaultMarkerRef.current = null;
-      };
-    } catch {
-      setWebglUnsupported(true);
-    }
+    mapRef.current = map;
+
+    return () => {
+      resizeObserver.disconnect();
+      map.remove();
+      mapRef.current = null;
+      baseLayersRef.current = null;
+      routeLayerRef.current = null;
+      gatesLayerRef.current = null;
+      carLayerRef.current = null;
+    };
   }, []);
 
-  // Redimensiona mapa ao entrar/sair do modo Tela Cheia
+  // Alterna camada Satélite / Híbrido / Ruas
+  useEffect(() => {
+    const map = mapRef.current;
+    const layers = baseLayersRef.current;
+    if (!map || !layers) return;
+
+    if (map.hasLayer(layers.satellite)) map.removeLayer(layers.satellite);
+    if (map.hasLayer(layers.labels)) map.removeLayer(layers.labels);
+    if (map.hasLayer(layers.streets)) map.removeLayer(layers.streets);
+
+    if (currentStyle.id === 'satellite') {
+      layers.satellite.addTo(map);
+    } else if (currentStyle.id === 'hybrid') {
+      layers.satellite.addTo(map);
+      layers.labels.addTo(map);
+    } else {
+      layers.streets.addTo(map);
+    }
+  }, [currentStyle.id]);
+
+  // Atualiza cursor quando em modo de marcação
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const t = window.setTimeout(() => map.resize(), 120);
+    map.getContainer().style.cursor = placementKind ? 'crosshair' : '';
+  }, [placementKind]);
+
+  // Redimensiona mapa ao alternar tela cheia
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const t = window.setTimeout(() => map.invalidateSize({ animate: false }), 120);
     return () => window.clearTimeout(t);
   }, [isFullscreen]);
 
-  // Atualiza estilo quando usuário toca no botão flutuante
+  // Renderiza traçado e ponto scrubber
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    map.setStyle(currentStyle.url);
-  }, [currentStyle.url]);
+    const routeLayer = routeLayerRef.current;
+    if (!routeLayer) return;
+    routeLayer.clearLayers();
 
-  // Atualiza fontes de dados (rota, traps, carro) sempre que houver alteração
+    if (editableTrace.length > 1) {
+      const latLngs: [number, number][] = editableTrace.map((s) => [s.lat, s.lon]);
+      L.polyline(latLngs, { color: '#FFFFFF', weight: 6, opacity: 0.85 }).addTo(routeLayer);
+      L.polyline(latLngs, { color: '#E10600', weight: 3.5, opacity: 0.95 }).addTo(routeLayer);
+    }
+
+    const scrubber = editableTrace[postEditIdx];
+    if (scrubber) {
+      L.circleMarker([scrubber.lat, scrubber.lon], {
+        radius: 7,
+        color: '#FFFFFF',
+        weight: 2,
+        fillColor: '#38bdf8',
+        fillOpacity: 1,
+      }).addTo(routeLayer);
+    }
+  }, [editableTrace, postEditIdx]);
+
+  // Renderiza cada Marco (@turf/turf linha transversal + seta perpendicular + marcador central no mesmo ponto)
+  const gatesDataKey = useMemo(
+    () =>
+      orderedTraps
+        .map(
+          (t) =>
+            `${t.id}:${t.lat.toFixed(7)},${t.lon.toFixed(7)},${t.bearingDeg},${t.widthM},${t.kind},${t.unidirectional !== false}`
+        )
+        .join('|'),
+    [orderedTraps]
+  );
+
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-    syncOverlaySourcesAndLayers(map);
-  }, [geoJsonData]);
+    const gatesLayer = gatesLayerRef.current;
+    if (!gatesLayer) return;
+    gatesLayer.clearLayers();
 
-  // Centraliza automaticamente na Especial carregada ou no GPS atual
+    let splitIdx = 0;
+    for (const trap of orderedTraps) {
+      if (trap.kind === 'split') splitIdx += 1;
+      const isSelected = trap.id === selectedTrapId;
+      const color = trapColorByKind(trap.kind);
+
+      const gateGeo = buildMarcoGateLineString(
+        trap.lat,
+        trap.lon,
+        trap.bearingDeg,
+        trap.widthM
+      );
+      const gateLatLngs: [number, number][] = gateGeo.geometry.coordinates.map(
+        ([lng, lat]) => [lat, lng]
+      );
+
+      const arrowGeo = buildMarcoArrowGeometry(
+        trap.lat,
+        trap.lon,
+        trap.bearingDeg,
+        trap.widthM
+      );
+      const shaftLatLngs: [number, number][] = arrowGeo.shaftCoords.map(([lng, lat]) => [
+        lat,
+        lng,
+      ]);
+      const headLatLngs: [number, number][] = arrowGeo.headCoords.map(([lng, lat]) => [
+        lat,
+        lng,
+      ]);
+
+      // Casing escuro + linha transversal do portão (Turf P1 -> P2)
+      const gateCasing = L.polyline(gateLatLngs, {
+        color: '#000000',
+        weight: isSelected ? 8 : 6,
+        opacity: 0.78,
+        lineCap: 'round',
+      }).addTo(gatesLayer);
+      const gateLine = L.polyline(gateLatLngs, {
+        color: isSelected ? '#FFFFFF' : color,
+        weight: isSelected ? 4.5 : 3.5,
+        opacity: 0.98,
+        lineCap: 'round',
+      }).addTo(gatesLayer);
+
+      // Seta perpendicular saindo do centro apontando o sentido da pista
+      const arrowCasing = L.polyline(shaftLatLngs, {
+        color: '#000000',
+        weight: isSelected ? 7 : 5,
+        opacity: 0.78,
+        lineCap: 'round',
+      }).addTo(gatesLayer);
+      const arrowShaft = L.polyline(shaftLatLngs, {
+        color,
+        weight: isSelected ? 4 : 3,
+        opacity: 0.98,
+        lineCap: 'round',
+      }).addTo(gatesLayer);
+      const headCasing = L.polyline(headLatLngs, {
+        color: '#000000',
+        weight: isSelected ? 7 : 5,
+        opacity: 0.78,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(gatesLayer);
+      const headLine = L.polyline(headLatLngs, {
+        color,
+        weight: isSelected ? 4 : 3,
+        opacity: 0.98,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(gatesLayer);
+
+      const pinEl = createMarcoPinElement(trap, splitIdx, isSelected);
+      const icon = L.divIcon({
+        html: pinEl,
+        className: 'pitstop-marco-divicon',
+        iconSize: [48, 48],
+        iconAnchor: [24, 24],
+      });
+
+      const marker = L.marker([trap.lat, trap.lon], {
+        icon,
+        draggable: Boolean(onDragTrapEndRef.current),
+        zIndexOffset: isSelected ? 900 : 500,
+      }).addTo(gatesLayer);
+
+      marker.on('click', (ev) => {
+        L.DomEvent.stopPropagation(ev);
+        onSelectTrapRef.current?.(trap.id);
+      });
+
+      // Atualiza linha transversal e seta em tempo real durante o arrasto
+      marker.on('drag', () => {
+        const pos = marker.getLatLng();
+        const liveGate = buildMarcoGateLineString(
+          pos.lat,
+          pos.lng,
+          trap.bearingDeg,
+          trap.widthM
+        );
+        const liveGateLatLngs: [number, number][] = liveGate.geometry.coordinates.map(
+          ([lng, lat]) => [lat, lng]
+        );
+        const liveArrow = buildMarcoArrowGeometry(
+          pos.lat,
+          pos.lng,
+          trap.bearingDeg,
+          trap.widthM
+        );
+        const liveShaft: [number, number][] = liveArrow.shaftCoords.map(([lng, lat]) => [
+          lat,
+          lng,
+        ]);
+        const liveHead: [number, number][] = liveArrow.headCoords.map(([lng, lat]) => [
+          lat,
+          lng,
+        ]);
+        gateCasing.setLatLngs(liveGateLatLngs);
+        gateLine.setLatLngs(liveGateLatLngs);
+        arrowCasing.setLatLngs(liveShaft);
+        arrowShaft.setLatLngs(liveShaft);
+        headCasing.setLatLngs(liveHead);
+        headLine.setLatLngs(liveHead);
+      });
+
+      marker.on('dragend', () => {
+        const pos = marker.getLatLng();
+        onSelectTrapRef.current?.(trap.id);
+        onDragTrapEndRef.current?.(trap.id, pos.lat, pos.lng);
+      });
+    }
+  }, [orderedTraps, selectedTrapId, gatesDataKey]);
+
+  // Renderiza marcador de posição atual do veículo
+  useEffect(() => {
+    const carLayer = carLayerRef.current;
+    if (!carLayer) return;
+    carLayer.clearLayers();
+    if (!currentPos) return;
+
+    const icon = L.divIcon({
+      html: createVehicleMarkerElement(navHeadingDeg),
+      className: 'pitstop-car-divicon',
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    });
+    L.marker([currentPos.lat, currentPos.lon], {
+      icon,
+      interactive: false,
+      zIndexOffset: 1000,
+    }).addTo(carLayer);
+  }, [currentPos, navHeadingDeg]);
+
   const fitMapToTrackOrCenter = (force = false) => {
     const map = mapRef.current;
     if (!map) return;
 
     const pts: [number, number][] = [
-      ...editableTrace.map((s): [number, number] => [s.lon, s.lat]),
-      ...orderedTraps.map((t): [number, number] => [t.lon, t.lat]),
+      ...editableTrace.map((s): [number, number] => [s.lat, s.lon]),
+      ...orderedTraps.map((t): [number, number] => [t.lat, t.lon]),
     ];
 
     const key = `${trackId}:${editableTrace.length}:${orderedTraps.length}`;
@@ -432,26 +531,20 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
 
     if (pts.length >= 2) {
       lastFittedKeyRef.current = key;
-      const bounds = new mapboxgl.LngLatBounds(pts[0], pts[0]);
-      for (const p of pts) bounds.extend(p);
-      map.fitBounds(bounds, { padding: 42, maxZoom: 16, duration: 500 });
-      defaultMarkerRef.current?.getElement()?.style.setProperty('display', 'none');
+      const bounds = L.latLngBounds(pts);
+      map.fitBounds(bounds, { padding: [36, 36], maxZoom: 17, animate: true });
       return;
     }
 
     if (pts.length === 1) {
       lastFittedKeyRef.current = key;
-      map.flyTo({ center: pts[0], zoom: 15, duration: 500 });
-      defaultMarkerRef.current?.getElement()?.style.setProperty('display', 'none');
+      map.setView(pts[0], 17, { animate: true });
       return;
     }
 
     if (currentPos) {
       lastFittedKeyRef.current = 'pos';
-      map.flyTo({ center: [currentPos.lon, currentPos.lat], zoom: 14, duration: 500 });
-      defaultMarkerRef.current?.getElement()?.style.setProperty('display', 'none');
-    } else {
-      defaultMarkerRef.current?.getElement()?.style.setProperty('display', 'block');
+      map.setView([currentPos.lat, currentPos.lon], 16, { animate: true });
     }
   };
 
@@ -461,96 +554,64 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackId, editableTrace.length, orderedTraps.length, currentPos?.lat, currentPos?.lon, navigationMode]);
 
-  // Câmera 3D tipo Waze (pitch + proa) quando modo de navegação estiver ativo
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-
-    if (!navigationMode) {
-      if (map.getPitch() > 2 || Math.abs(map.getBearing()) > 2) {
-        map.easeTo({ pitch: 0, bearing: 0, duration: 450 });
-      }
-      return;
-    }
-
-    if (!currentPos) return;
+    if (!map || !navigationMode || !currentPos) return;
     const now = Date.now();
-    if (now - lastNavEaseRef.current < 320) return;
+    if (now - lastNavEaseRef.current < 350) return;
     lastNavEaseRef.current = now;
-    defaultMarkerRef.current?.getElement()?.style.setProperty('display', 'none');
-    map.easeTo({
-      center: [currentPos.lon, currentPos.lat],
-      zoom: 17.2,
-      pitch: 56,
-      bearing: typeof navHeadingDeg === 'number' && Number.isFinite(navHeadingDeg) ? navHeadingDeg : map.getBearing(),
-      duration: 380,
-      essential: true,
+    map.setView([currentPos.lat, currentPos.lon], Math.max(map.getZoom(), 17), {
+      animate: true,
     });
-  }, [navigationMode, currentPos, navHeadingDeg]);
+  }, [navigationMode, currentPos]);
 
   const cycleMapStyle = () => {
-    setStyleIndex((prev) => (prev + 1) % MAPBOX_STYLES.length);
+    setStyleIndex((prev) => (prev + 1) % MAP_STYLES.length);
   };
 
-  const centerOnErechim = () => {
+  const centerOnGpsOrErechim = () => {
     const map = mapRef.current;
     if (!map) return;
-    defaultMarkerRef.current?.getElement()?.style.setProperty('display', 'block');
-    map.flyTo({ center: ERECHIM_CENTER, zoom: 12, pitch: 0, bearing: 0, duration: 600 });
+    if (currentPos) {
+      map.setView([currentPos.lat, currentPos.lon], 17, { animate: true });
+    } else {
+      map.setView(ERECHIM_LATLON, 15, { animate: true });
+    }
   };
 
-  if (tokenMissing || webglUnsupported) {
-    return (
-      <div className="mt-2.5 flex items-center justify-center rounded-xl border border-zinc-800 bg-[#000000] p-2">
-        {fallbackProjection ? (
-          <svg viewBox="0 0 360 240" className="h-64 w-full sm:h-80">
-            {editableTrace.length > 1 && (
-              <polyline
-                fill="none"
-                stroke="#E10600"
-                strokeWidth="2.5"
-                points={editableTrace
-                  .map((s) => {
-                    const pt = fallbackProjection.project(s.lat, s.lon);
-                    return `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`;
-                  })
-                  .join(' ')}
-              />
-            )}
-          </svg>
-        ) : (
-          <div className="flex h-64 flex-col items-center justify-center text-center text-xs text-zinc-500">
-            <Compass className="h-8 w-8 text-[#E10600]" />
-            <p className="mt-2 max-w-xs">
-              {tokenMissing
-                ? 'Mapa Mapbox indisponível neste build (variável VITE_MAPBOX_TOKEN não configurada).'
-                : 'WebGL indisponível neste dispositivo. Use um arquivo KML/KMZ/GPX ou rode o Simulador para ver a rota.'}
-            </p>
-          </div>
-        )}
-      </div>
-    );
-  }
+  const handlePlaceAtCrosshair = () => {
+    const map = mapRef.current;
+    if (!map || !onMapClickPlaceTrap) return;
+    const c = map.getCenter();
+    onMapClickPlaceTrap(c.lat, c.lng);
+  };
 
   return (
     <div
       className={
-        isFullscreen
-          ? 'fixed inset-0 z-50 bg-[#080B0D]'
-          : containerClassName
+        isFullscreen ? 'fixed inset-0 z-50 bg-[#080B0D]' : containerClassName
       }
     >
-      {/* Container Mapbox em Tela Cheia ou Embutido */}
       <div ref={containerRef} className="h-full w-full" />
 
-      {/* Controles superiores direitos (Centralizar Rota / Erechim / Tela Cheia) */}
-      <div className="absolute top-2.5 right-2.5 z-10 flex flex-wrap items-center gap-1.5">
+      {/* Central Crosshair Mira overlay when placing Marcos interactively */}
+      {placementKind && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-[400] flex items-center justify-center"
+        >
+          <Crosshair className="h-9 w-9 text-amber-300 drop-shadow-[0_0_6px_rgba(0,0,0,0.95)]" />
+        </div>
+      )}
+
+      {/* Controles superiores direitos */}
+      <div className="absolute top-2.5 right-2.5 z-[400] flex flex-wrap items-center gap-1.5">
         {(editableTrace.length > 0 || orderedTraps.length > 0) && (
           <button
             type="button"
             onClick={() => fitMapToTrackOrCenter(true)}
-            className="inline-flex h-9 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2.5 text-[11px] font-bold text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
-            title="Enquadrar Especial / Traps"
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2 text-[11px] font-bold text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
+            title="Enquadrar Pista"
           >
             <LocateFixed className="h-3.5 w-3.5 text-[#E10600]" />
             <span>Rota</span>
@@ -559,35 +620,65 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
 
         <button
           type="button"
-          onClick={centerOnErechim}
-          className="inline-flex h-9 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2.5 text-[11px] font-bold text-[#C0C4C9] shadow-lg backdrop-blur-xs hover:text-white"
-          title="Centralizar em Erechim, RS (-27.6344, -52.2739)"
+          onClick={centerOnGpsOrErechim}
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2 text-[11px] font-bold text-[#C0C4C9] shadow-lg backdrop-blur-xs hover:text-white"
+          title={currentPos ? 'Centralizar no GPS' : 'Centralizar em Erechim, RS'}
         >
-          <span>Erechim</span>
+          <Navigation className="h-3 w-3 text-emerald-400" />
+          <span>{currentPos ? 'GPS' : 'Erechim'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={cycleMapStyle}
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2 text-[11px] font-bold text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
+          aria-label="Alternar camada do mapa"
+        >
+          <Layers className="h-3.5 w-3.5 text-amber-300" />
+          <span>{currentStyle.label}</span>
         </button>
 
         <button
           type="button"
           onClick={() => setIsFullscreen((v) => !v)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D]/90 text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D]/90 text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
           aria-label={isFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
-          title={isFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
         >
           {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </button>
       </div>
 
-      {/* Botão Flutuante (FAB) para alternar Ruas / Satélite / Híbrido */}
-      <button
-        type="button"
-        onClick={cycleMapStyle}
-        className="pitstop-btn-red absolute right-3 bottom-3 z-10 inline-flex min-h-[44px] items-center gap-2 rounded-full px-4 text-xs font-extrabold tracking-wide text-white shadow-2xl transition-transform active:scale-95"
-        aria-label="Alternar estilo do mapa Mapbox"
-        title="Alternar entre Híbrido, Ruas e Satélite"
-      >
-        <Layers className="h-4 w-4 shrink-0" />
-        <span>Mapa: {currentStyle.label}</span>
-      </button>
+      {/* Controles de Zoom + / - estilo RaceChrono */}
+      <div className="absolute right-2.5 bottom-14 z-[400] flex flex-col overflow-hidden rounded-lg border border-zinc-700 bg-[#080B0D]/90 shadow-lg backdrop-blur-xs">
+        <button
+          type="button"
+          onClick={() => mapRef.current?.zoomIn()}
+          className="flex h-9 w-9 items-center justify-center text-white hover:bg-zinc-800 border-b border-zinc-800"
+          aria-label="Aumentar zoom"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => mapRef.current?.zoomOut()}
+          className="flex h-9 w-9 items-center justify-center text-white hover:bg-zinc-800"
+          aria-label="Diminuir zoom"
+        >
+          <Minus className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Botão Marcar na Mira quando em modo de marcação */}
+      {placementKind && onMapClickPlaceTrap && (
+        <button
+          type="button"
+          onClick={handlePlaceAtCrosshair}
+          className="pitstop-btn-red absolute bottom-3 left-3 z-[400] inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-extrabold text-white shadow-xl active:scale-95"
+        >
+          <Plus className="h-4 w-4" />
+          <span>Marcar na Mira</span>
+        </button>
+      )}
     </div>
   );
 };

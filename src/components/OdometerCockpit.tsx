@@ -20,7 +20,11 @@ function formatClockTime(tsMs: number): string {
   ].join(':');
 }
 
-export const OdometerCockpit: React.FC = () => {
+interface OdometerCockpitProps {
+  isActive?: boolean;
+}
+
+export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = true }) => {
   const [settings, updateSettings] = useNavSettings();
   const [source, setSource] = useState<DriveMode>('gps');
   const [totalKm, setTotalKm] = useState(0);
@@ -43,13 +47,14 @@ export const OdometerCockpit: React.FC = () => {
   calFactorRef.current = settings.calibrationPct / 100;
 
   useEffect(() => {
+    if (!isActive) return;
     const id = window.setInterval(() => setNowMs(Date.now()), 250);
     return () => window.clearInterval(id);
-  }, []);
+  }, [isActive]);
 
   // Real GPS watcher
   useEffect(() => {
-    if (source !== 'gps') return;
+    if (!isActive || source !== 'gps') return;
     let cancelled = false;
     let webWid: number | null = null;
     let capWid: string | null = null;
@@ -130,11 +135,11 @@ export const OdometerCockpit: React.FC = () => {
       if (webWid !== null && 'geolocation' in navigator) navigator.geolocation.clearWatch(webWid);
       if (capWid !== null) Geolocation.clearWatch({ id: capWid }).catch(() => {});
     };
-  }, [source]);
+  }, [isActive, source]);
 
   // Indoor Simulator engine
   useEffect(() => {
-    if (source !== 'simulator' || !simRunning) return;
+    if (!isActive || source !== 'simulator' || !simRunning) return;
     const id = window.setInterval(() => {
       const kmTick = ((simSpeedKmh / 3600) * 0.25) * calFactorRef.current;
       setTotalKm((v) => v + kmTick);
@@ -146,7 +151,7 @@ export const OdometerCockpit: React.FC = () => {
       }
     }, 250);
     return () => window.clearInterval(id);
-  }, [source, simRunning, simSpeedKmh]);
+  }, [isActive, source, simRunning, simSpeedKmh]);
 
   const adjustDistanceMeters = (deltaMeters: number) => {
     const deltaKm = deltaMeters / 1000;
@@ -263,7 +268,7 @@ export const OdometerCockpit: React.FC = () => {
               <span>Zerar Total</span>
             </button>
           </div>
-          <div className="my-3 text-center font-mono text-5xl font-black tracking-tight text-white tabular-nums sm:text-6xl">
+          <div className="my-2 text-center font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
             {totalKm.toFixed(3).replace('.', ',')}
           </div>
           <div className="grid grid-cols-4 gap-1.5">
@@ -331,7 +336,7 @@ export const OdometerCockpit: React.FC = () => {
             )}
           </div>
 
-          <div className="my-3 text-center font-mono text-5xl font-black tracking-tight text-amber-300 tabular-nums sm:text-6xl">
+          <div className="my-2 text-center font-mono text-4xl font-black tracking-tight text-amber-300 tabular-nums sm:text-5xl">
             {displayedTripKm.toFixed(3).replace('.', ',')}
           </div>
 
@@ -347,19 +352,19 @@ export const OdometerCockpit: React.FC = () => {
 
       {/* Live Speed Metrics */}
       <section className="grid grid-cols-3 gap-2.5 font-mono tabular-nums">
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
+        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-center">
           <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Atual</p>
-          <p className="mt-0.5 text-3xl font-black text-white sm:text-4xl">{speedKmh}</p>
+          <p className="mt-0.5 text-2xl font-black text-white sm:text-3xl">{speedKmh}</p>
           <p className="text-[10px] font-bold text-[#E10600]">KM/H</p>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
+        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-center">
           <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Média</p>
-          <p className="mt-0.5 text-3xl font-black text-emerald-400 sm:text-4xl">{avgSpeedKmh}</p>
+          <p className="mt-0.5 text-2xl font-black text-emerald-400 sm:text-3xl">{avgSpeedKmh}</p>
           <p className="text-[10px] text-zinc-400">KM/H</p>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
+        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-center">
           <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Máxima</p>
-          <p className="mt-0.5 text-3xl font-black text-amber-300 sm:text-4xl">{maxSpeedKmh}</p>
+          <p className="mt-0.5 text-2xl font-black text-amber-300 sm:text-3xl">{maxSpeedKmh}</p>
           <button
             type="button"
             onClick={() => {

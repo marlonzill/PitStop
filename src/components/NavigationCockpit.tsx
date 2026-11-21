@@ -48,6 +48,8 @@ import {
 } from '../utils/navSettings';
 import {
   connectPairingRoom,
+  playPairingBell,
+  type PairingAlertCue,
   type PairingConnection,
   type PairingPresenceState,
   type PairingTelemetryPayload,
@@ -586,6 +588,452 @@ const DigitalSpeedometer: React.FC<{
   );
 };
 
+interface PlanilhaRowProps {
+  t: RoadbookTulipa;
+  realIdx: number;
+  isActive: boolean;
+  isManualSelected: boolean;
+  isPassed: boolean;
+  compactPassed: boolean;
+  markup?: TulipaMarkup;
+  highlightTheme: HighlightTheme;
+  showPassedTick: boolean;
+  isNonTimedSection: boolean;
+  showCountdownBar: boolean;
+  barTargetTulipaNum: number | null;
+  barTargetIsSelf: boolean;
+  barRemainingKm: number;
+  barPercentLeft: number;
+  rowDelta: number | null;
+  sectionRemainingMs: number | null;
+  onStartLongPress: (realIdx: number, e: React.PointerEvent) => void;
+  onMoveLongPress: (e: React.PointerEvent) => void;
+  onCancelLongPress: () => void;
+  onOpenContextMenu: (realIdx: number) => void;
+  onRowClick: (realIdx: number) => void;
+  onSyncHereAndIdealTime: (realIdx: number) => void;
+  onSyncToTulipa: (realIdx: number) => void;
+  onExitManualBrowse: () => void;
+}
+
+const PlanilhaRow = React.memo<PlanilhaRowProps>(({
+  t,
+  realIdx,
+  isActive,
+  isManualSelected,
+  isPassed,
+  compactPassed,
+  markup,
+  highlightTheme,
+  showPassedTick,
+  isNonTimedSection,
+  showCountdownBar,
+  barTargetTulipaNum,
+  barTargetIsSelf,
+  barRemainingKm,
+  barPercentLeft,
+  rowDelta,
+  sectionRemainingMs,
+  onStartLongPress,
+  onMoveLongPress,
+  onCancelLongPress,
+  onOpenContextMenu,
+  onRowClick,
+  onSyncHereAndIdealTime,
+  onSyncToTulipa,
+  onExitManualBrowse,
+}) => {
+  const hazard = hasHazardKeyword(t.notes);
+  const shownKm = t.displayKm ?? t.totalKm;
+  const diffKm = t.interKm;
+
+  const idealFormatted =
+    t.idealTimeMs !== null
+      ? formatTdnOrTime(t.idealTimeMs)
+      : t.idealTimeStr
+        ? t.idealTimeStr.replace(/:/g, '.').slice(0, 8)
+        : '00.00.00';
+
+  const { primary: velPrimary, secondary: velSecondary } = formatVelTdnBadge(t);
+
+  const cellBorderClass = isActive ? 'border-slate-900/35' : 'border-zinc-800';
+
+  const activeBgClass =
+    highlightTheme === 'blue'
+      ? 'bg-sky-300 text-slate-950 ring-2 ring-inset ring-[#E10600]'
+      : highlightTheme === 'green'
+        ? 'bg-emerald-300 text-slate-950 ring-2 ring-inset ring-[#E10600]'
+        : 'bg-[#fde047] text-slate-950 ring-2 ring-inset ring-[#E10600]';
+
+  const activeCellBgClass =
+    highlightTheme === 'blue'
+      ? 'bg-sky-300'
+      : highlightTheme === 'green'
+        ? 'bg-emerald-300'
+        : 'bg-[#fde047]';
+
+  const activePillBgClass =
+    highlightTheme === 'blue'
+      ? 'bg-sky-200/90 text-slate-950 border border-slate-900/20'
+      : highlightTheme === 'green'
+        ? 'bg-emerald-200/90 text-slate-950 border border-slate-900/20'
+        : 'bg-amber-300/90 text-slate-950 border border-slate-900/20';
+
+  const obsGraphic =
+    t.notesImageDataUrl || (!t.notes && t.imageIsComposite ? t.imageDataUrl : undefined);
+
+  return (
+    <div
+      onPointerDown={(e) => onStartLongPress(realIdx, e)}
+      onPointerMove={onMoveLongPress}
+      onPointerUp={onCancelLongPress}
+      onPointerCancel={onCancelLongPress}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onCancelLongPress();
+        onOpenContextMenu(realIdx);
+      }}
+      onClick={() => onRowClick(realIdx)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onRowClick(realIdx);
+        }
+      }}
+      className={`grid cursor-pointer select-none grid-cols-[40px_24px_54px_34px_42px_minmax(0,1fr)] sm:grid-cols-[68px_44px_100px_76px_88px_minmax(0,1fr)] md:grid-cols-[84px_52px_118px_88px_104px_minmax(0,1fr)] items-stretch transition-colors ${
+        isActive
+          ? isManualSelected
+            ? `${activeBgClass} outline-2 outline-sky-400`
+            : activeBgClass
+          : isManualSelected
+            ? 'bg-sky-950/60 text-white ring-2 ring-inset ring-sky-400'
+            : isPassed
+              ? `bg-[#12151B] text-zinc-400 hover:bg-[#171A21] ${compactPassed ? 'opacity-80' : ''}`
+              : 'bg-[#0B0D10] text-[#F4F4F4] hover:bg-[#14161A]'
+      }`}
+    >
+      {/* Col 1: Desenho */}
+      <div
+        className={`min-w-0 overflow-hidden flex items-center justify-center border-r ${
+          compactPassed ? 'p-0.5' : 'p-0.5 sm:p-1.5'
+        } ${cellBorderClass} ${
+          isActive ? activeCellBgClass : isPassed ? 'bg-[#12151B]' : 'bg-[#0B0D10]'
+        }`}
+      >
+        <TulipVectorIcon
+          cap={t.cap}
+          imageDataUrl={t.imageDataUrl}
+          imageIsComposite={t.imageIsComposite}
+          active={isActive}
+          passed={isPassed}
+          compact={compactPassed}
+          highlightTheme={highlightTheme}
+        />
+      </div>
+
+      {/* Col 2: Tul */}
+      <div
+        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 font-mono font-black tabular-nums sm:px-1 ${
+          isActive ? 'text-slate-950' : isPassed ? 'text-zinc-400' : 'text-white'
+        } ${
+          compactPassed
+            ? 'py-0.5 text-[10px] sm:py-1 sm:text-xs'
+            : 'py-1 text-[11px] sm:py-2 sm:text-sm md:text-base'
+        } ${cellBorderClass}`}
+      >
+        <span className="leading-none">{t.tulipa}</span>
+        {isPassed && showPassedTick && (
+          <span
+            className="mt-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-black text-white sm:h-4 sm:w-4 sm:text-[10px]"
+            title="Referência passada"
+          >
+            ✓
+          </span>
+        )}
+        {isActive && (
+          <span className="hidden sm:inline-block mt-0.5 rounded-xs bg-[#E10600] px-1 py-0.5 text-[8px] font-black tracking-wide uppercase text-white">
+            VEZ
+          </span>
+        )}
+      </div>
+
+      {/* Col 3: Distância */}
+      <div
+        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 text-center font-mono tabular-nums sm:px-1 ${
+          compactPassed ? 'py-0.5' : 'py-1 sm:py-1.5'
+        } ${cellBorderClass}`}
+      >
+        <span
+          className={`max-w-full truncate font-black leading-none tracking-tighter ${
+            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-white'
+          } ${
+            compactPassed ? 'text-[10px] sm:text-sm' : 'text-[11px] sm:text-base md:text-lg'
+          }`}
+        >
+          {formatKm3(shownKm)}
+        </span>
+        <div
+          className={`mt-0.5 w-full truncate px-0.5 py-0.5 text-[8px] font-bold leading-tight tracking-tighter sm:px-1 sm:text-[11px] ${
+            t.resetsOdometer
+              ? 'rounded-xs bg-lime-400 font-extrabold text-slate-950'
+              : isActive
+                ? 'text-slate-950'
+                : 'text-[#B5B5B5]'
+          }`}
+        >
+          {t.resetsOdometer ? `${formatKm3(diffKm)} | 0,00` : formatKm3(diffKm)}
+        </div>
+        {!compactPassed && (
+          <div
+            className={`mt-0.5 w-full truncate rounded-xs px-0.5 py-0.5 text-[8px] font-bold leading-tight sm:px-1 sm:text-[10px] ${
+              isActive ? activePillBgClass : 'bg-[#181B22] text-[#C0C4C9]'
+            }`}
+          >
+            {t.section !== null ? `T${t.section}` : 'T-'} | {typeShortLabel(t.type)}
+          </div>
+        )}
+      </div>
+
+      {/* Col 4: Vel/TDN */}
+      <div
+        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 text-center font-mono tabular-nums sm:px-1 ${
+          compactPassed ? 'py-0.5' : 'py-1 sm:py-2'
+        } ${cellBorderClass}`}
+      >
+        <span
+          className={`max-w-full truncate leading-none ${
+            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-white'
+          } ${
+            t.type === 'V'
+              ? compactPassed
+                ? 'text-[10px] font-black sm:text-sm'
+                : 'text-[11px] font-black sm:text-base md:text-lg'
+              : 'text-[8.5px] font-extrabold tracking-tighter sm:text-sm md:text-base'
+          }`}
+        >
+          {velPrimary}
+        </span>
+        {velSecondary ? (
+          <span
+            className={`mt-0.5 max-w-full truncate text-[7.5px] font-bold leading-none sm:text-[9px] ${
+              isActive ? 'text-slate-900' : 'text-zinc-400'
+            }`}
+          >
+            {velSecondary}
+          </span>
+        ) : null}
+      </div>
+
+      {/* Col 5: Tempo */}
+      <div
+        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 text-center font-mono tabular-nums sm:px-1 ${
+          compactPassed ? 'py-0.5' : 'py-1 sm:py-1.5'
+        } ${cellBorderClass}`}
+      >
+        <span
+          className={`max-w-full truncate text-[9px] font-extrabold tracking-tighter sm:text-xs md:text-sm ${
+            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-[#F4F4F4]'
+          }`}
+        >
+          {idealFormatted}
+        </span>
+        {isActive && isNonTimedSection && sectionRemainingMs !== null && (
+          <span className="mt-0.5 max-w-full truncate rounded-xs bg-sky-700 px-1 py-0.5 text-[8px] font-extrabold leading-none text-white sm:mt-1 sm:px-1.5 sm:text-[10px]">
+            {sectionRemainingMs >= 0
+              ? `${typeShortLabel(t.type)} ${formatHmsDuration(sectionRemainingMs)}`
+              : `+${formatHmsDuration(-sectionRemainingMs)}`}
+          </span>
+        )}
+        {isActive && !isNonTimedSection && rowDelta !== null && (
+          <span
+            className={`mt-0.5 max-w-full truncate rounded-xs px-1 py-0.5 text-[8px] font-extrabold leading-none uppercase sm:mt-1 sm:px-1.5 sm:text-[10px] ${
+              Math.abs(rowDelta) <= 0.5
+                ? 'bg-emerald-500 text-white'
+                : rowDelta < 0
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-red-600 text-white'
+            }`}
+          >
+            {Math.abs(rowDelta) <= 0.5
+              ? 'OK'
+              : rowDelta < 0
+                ? `Ad ${Math.abs(rowDelta).toFixed(0)}s`
+                : `At +${rowDelta.toFixed(0)}s`}
+          </span>
+        )}
+      </div>
+
+      {/* Col 6: Observação */}
+      <div
+        className={`min-w-0 overflow-hidden flex flex-col items-stretch justify-center gap-0.5 px-1 text-left sm:items-center sm:px-1.5 sm:text-center ${
+          compactPassed ? 'py-1' : 'py-1.5 sm:py-2'
+        }`}
+      >
+        {obsGraphic && (
+          <div className="w-full flex items-center justify-start sm:justify-center overflow-hidden">
+            <CroppedObsImage
+              src={obsGraphic}
+              alt={`Observação tulipa ${t.tulipa}`}
+              className={`${
+                compactPassed ? 'h-9 sm:h-11' : 'h-12 sm:h-14 md:h-16'
+              } w-auto max-w-full object-contain object-left sm:object-center ${
+                !isActive ? 'invert hue-rotate-180 contrast-125' : ''
+              }`}
+            />
+          </div>
+        )}
+        {(t.notes || !obsGraphic) && (
+          <div className="flex w-full items-start gap-1 sm:justify-center">
+            <p
+              className={`w-full font-extrabold leading-snug whitespace-pre-line break-words uppercase ${
+                isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-[#F4F4F4]'
+              } ${
+                compactPassed
+                  ? 'text-[9.5px] sm:text-[11px]'
+                  : 'text-[11px] sm:text-xs md:text-[13px]'
+              }`}
+            >
+              {t.notes ||
+                (t.type === 'D'
+                  ? `Deslocamento ${
+                      t.tdnMs && t.tdnMs > 0 ? formatTdnOrTime(t.tdnMs) : ''
+                    }`.trim()
+                  : t.type === 'N'
+                    ? `Neutralização ${
+                        t.tdnMs && t.tdnMs > 0 ? formatTdnOrTime(t.tdnMs) : ''
+                      }`.trim()
+                    : t.cap !== null
+                      ? `CAP ${t.cap}°`
+                      : `Ref. #${t.tulipa}`)}
+            </p>
+            {hazard && (
+              <AlertTriangle
+                className="mt-0.5 h-3 w-3 text-red-600 shrink-0 sm:h-3.5 sm:w-3.5"
+                aria-label="Atenção na referência"
+              />
+            )}
+          </div>
+        )}
+
+        {markup && (
+          <div className="flex w-full flex-wrap items-center gap-1 sm:justify-center">
+            {markup.drawingDataUrl && (
+              <span className="inline-flex items-center gap-0.5 rounded bg-red-600 px-1.5 py-0.5 text-[8px] font-extrabold text-white uppercase sm:text-[9px]">
+                <PenTool className="h-2.5 w-2.5" />
+                <span>Marcado</span>
+              </span>
+            )}
+            {markup.noteText && (
+              <span className="max-w-full truncate rounded bg-zinc-900 px-1.5 py-0.5 text-[8px] font-bold text-amber-300 uppercase sm:text-[9px]">
+                {markup.noteText}
+              </span>
+            )}
+            {markup.audioDataUrl && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  try {
+                    const audio = new Audio(markup.audioDataUrl);
+                    audio.play().catch(() => {});
+                  } catch {
+                    // Ignore playback restriction
+                  }
+                }}
+                className="inline-flex items-center gap-0.5 rounded bg-sky-600 px-1.5 py-0.5 text-[8px] font-extrabold text-white hover:bg-sky-500 sm:text-[9px]"
+              >
+                <Mic className="h-2.5 w-2.5" />
+                <span>Ouvir {markup.audioDurationSec ? `${markup.audioDurationSec}s` : 'Áudio'}</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {showCountdownBar && barTargetTulipaNum !== null && (
+          <div className="mt-1 w-full">
+            <div
+              className={`mb-0.5 flex items-center justify-between gap-1 font-mono text-[8.5px] font-extrabold leading-none tabular-nums sm:text-[10px] ${
+                isActive ? 'text-emerald-950' : 'text-emerald-400'
+              }`}
+            >
+              <span className="truncate">
+                {barTargetIsSelf ? 'Falta ref.' : `Próx #${barTargetTulipaNum}`}
+              </span>
+              <span className="shrink-0">
+                {barRemainingKm < 1
+                  ? `${Math.round(barRemainingKm * 1000)} m`
+                  : `${barRemainingKm.toFixed(2).replace('.', ',')} km`}
+              </span>
+            </div>
+            <div
+              className={`h-1 w-full overflow-hidden rounded-xs border sm:h-1.5 ${
+                isActive ? 'border-emerald-800 bg-white' : 'border-emerald-700/70 bg-[#080B0D]'
+              }`}
+              aria-label={`Distância restante ${Math.round(barRemainingKm * 1000)} metros`}
+            >
+              <div
+                className="h-full bg-emerald-500 transition-all duration-150"
+                style={{ width: `${barPercentLeft}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {isManualSelected && (
+          <div
+            className="mt-1 flex flex-wrap items-center justify-start gap-1.5 sm:justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                onSyncHereAndIdealTime(realIdx);
+                onExitManualBrowse();
+              }}
+              className="pitstop-btn-red inline-flex items-center gap-1 rounded px-2 py-1 font-mono text-[9px] font-extrabold tracking-wide text-white uppercase shadow sm:text-[10px]"
+            >
+              <MapPin className="h-3 w-3" />
+              <span>Estou Aqui</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onSyncToTulipa(realIdx);
+                onExitManualBrowse();
+              }}
+              className="rounded border border-zinc-600 bg-zinc-950 px-2 py-1 font-mono text-[9px] font-bold text-sky-300 hover:bg-zinc-800 sm:text-[10px]"
+            >
+              Só Hodômetro
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenContextMenu(realIdx)}
+              className="rounded border border-amber-500/40 bg-amber-950/60 px-2 py-1 font-mono text-[9px] font-bold text-amber-200 hover:bg-amber-900 sm:text-[10px]"
+            >
+              Opções
+            </button>
+          </div>
+        )}
+
+        {isActive && !isManualSelected && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSyncToTulipa(realIdx);
+            }}
+            className="mt-0.5 rounded bg-zinc-950 px-1.5 py-0.5 font-mono text-[8px] font-extrabold tracking-wide text-sky-300 hover:bg-zinc-800 sm:mt-1 sm:px-2 sm:text-[9px]"
+          >
+            AQUI / SINC.
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
   onOpenRoadbookSettings,
 }) => {
@@ -679,6 +1127,17 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
   });
   const pairingConnRef = useRef<PairingConnection | null>(null);
   const lastBroadcastMsRef = useRef<number>(0);
+  const alertCueSeqRef = useRef<number>(0);
+  const pendingAlertCueRef = useRef<PairingAlertCue | null>(null);
+  const [cueVersion, setCueVersion] = useState(0);
+  const lastHandledCueSeqRef = useRef<number>(0);
+  const pilotBellRungRef = useRef<boolean>(false);
+
+  const triggerNavAlertCue = useCallback((kind: PairingAlertCue['kind']) => {
+    alertCueSeqRef.current += 1;
+    pendingAlertCueRef.current = { kind, seq: alertCueSeqRef.current };
+    setCueVersion((v) => v + 1);
+  }, []);
 
   const roadbookStorageKey = roadbook?.id || roadbook?.fileName || 'default';
 
@@ -845,7 +1304,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     setParseError(null);
     setLoadingSample(true);
     try {
-      const res = await fetch('/assets/aistudio/rally_escoteiros_merged_66a34567.txt');
+      const res = await fetch(`${import.meta.env.BASE_URL}assets/aistudio/rally_escoteiros_merged_66a34567.txt`);
       if (!res.ok) throw new Error('Planilha modelo não encontrada.');
       const buffer = await res.arrayBuffer();
       const parsed = await parseNavigationBuffer(buffer, 'rally_escoteiros_merged.txt');
@@ -867,6 +1326,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     setStartTimestampMs(parseRaceStartTimestampMs(raceDate, normalized));
     lastGpsCoordRef.current = null;
     setIsRunning(true);
+    triggerNavAlertCue('bell');
   };
 
   // Clock + Simulator Loop
@@ -1068,6 +1528,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
         (prevT.type !== nextT.type ||
           Math.abs((prevT.avgSpeedKmh ?? 0) - (nextT.avgSpeedKmh ?? 0)) >= 2);
 
+      if (isPmmChange) {
+        triggerNavAlertCue('pmm_change');
+      }
       if (soundEnabled && isRunning && lastAlertedTulipaRef.current !== idx) {
         lastAlertedTulipaRef.current = idx;
         playBeep(isPmmChange ? 1180 : 920, 110, Boolean(isPmmChange));
@@ -1081,6 +1544,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     activeTulipaIdx,
     soundEnabled,
     isRunning,
+    triggerNavAlertCue,
   ]);
 
   const currentTulipa: RoadbookTulipa | null =
@@ -1262,8 +1726,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     if (secLeft >= 0 && secLeft <= 5 && lastCountdownSecRef.current !== secLeft) {
       lastCountdownSecRef.current = secLeft;
       playBeep(secLeft === 0 ? 1400 : 980, secLeft === 0 ? 220 : 90, secLeft === 0);
+      triggerNavAlertCue('countdown');
     }
-  }, [isRunning, soundEnabled, isNonTimedSection, sectionRemainingMs]);
+  }, [isRunning, soundEnabled, isNonTimedSection, sectionRemainingMs, triggerNavAlertCue]);
 
   // Active Row Positioning: Linha 1 (Topo) vs Linha 2 (1 passada acima), frozen when in Modo Livre
   const livePlanilhaStartIdx = showPassedRows
@@ -1292,17 +1757,22 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
   const adjustOdometer = (deltaKm: number) => {
     setOdometerKm((prev) => Math.max(0, Number((prev + deltaKm).toFixed(3))));
+    triggerNavAlertCue('reset');
   };
 
   const syncToTulipa = useCallback(
     (idx: number) => {
       if (!roadbook || !roadbook.tulipas[idx]) return;
+      spokenThresholdsRef.current.clear();
+      approachBeepedIdxRef.current = -1;
+      lastAlertedTulipaRef.current = -1;
       setActiveTulipaIdx(idx);
       const km = roadbook.tulipas[idx].totalKm;
       setOdometerKm(km);
       setPartialBaseKm(km);
+      triggerNavAlertCue('sync');
     },
-    [roadbook]
+    [roadbook, triggerNavAlertCue]
   );
 
   const syncHereAndIdealTime = useCallback(
@@ -1323,8 +1793,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
         setStartTimeStr(formattedStart);
         setIsRunning(true);
       }
+      triggerNavAlertCue('sync');
     },
-    [roadbook, syncToTulipa, navSettings.clockOffsetMs]
+    [roadbook, syncToTulipa, navSettings.clockOffsetMs, triggerNavAlertCue]
   );
 
   // Press-and-hold handler on odometer display (Totem signature interaction)
@@ -1349,22 +1820,27 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     setFrozenBrowseStartIdx(null);
   }, []);
 
+  const manualBrowseIdxRef = useRef<number | null>(manualBrowseIdx);
+  manualBrowseIdxRef.current = manualBrowseIdx;
+  const livePlanilhaStartIdxRef = useRef<number>(livePlanilhaStartIdx);
+  livePlanilhaStartIdxRef.current = livePlanilhaStartIdx;
+
   // Row Long-Press (~850ms) enters Modo Livre / Reposicionamento ("Estou Aqui") cleanly without shifting scroll
-  const cancelRowLongPress = () => {
+  const cancelRowLongPress = useCallback(() => {
     if (rowLongPressTimerRef.current !== null) {
       window.clearTimeout(rowLongPressTimerRef.current);
       rowLongPressTimerRef.current = null;
     }
     rowPressStartPtRef.current = null;
-  };
+  }, []);
 
-  const startRowLongPress = (realIdx: number, e: React.PointerEvent) => {
+  const startRowLongPress = useCallback((realIdx: number, e: React.PointerEvent) => {
     cancelRowLongPress();
     rowLongPressTriggeredRef.current = false;
     rowPressStartPtRef.current = { x: e.clientX, y: e.clientY };
     rowLongPressTimerRef.current = window.setTimeout(() => {
       rowLongPressTriggeredRef.current = true;
-      setFrozenBrowseStartIdx((prev) => (prev !== null ? prev : livePlanilhaStartIdx));
+      setFrozenBrowseStartIdx((prev) => (prev !== null ? prev : livePlanilhaStartIdxRef.current));
       setManualBrowseIdx(realIdx);
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
         try {
@@ -1374,15 +1850,27 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
         }
       }
     }, 850);
-  };
+  }, [cancelRowLongPress]);
 
-  const moveRowLongPress = (e: React.PointerEvent) => {
+  const moveRowLongPress = useCallback((e: React.PointerEvent) => {
     const startPt = rowPressStartPtRef.current;
     if (!startPt) return;
     if (Math.hypot(e.clientX - startPt.x, e.clientY - startPt.y) > 10) {
       cancelRowLongPress();
     }
-  };
+  }, [cancelRowLongPress]);
+
+  const handleRowClick = useCallback((realIdx: number) => {
+    if (rowLongPressTriggeredRef.current) {
+      rowLongPressTriggeredRef.current = false;
+      return;
+    }
+    if (manualBrowseIdxRef.current !== null) {
+      setManualBrowseIdx(realIdx);
+      return;
+    }
+    syncToTulipa(realIdx);
+  }, [syncToTulipa]);
 
   const handleCalibrateByMarco = () => {
     const targetKm = parseFloat(officialMarcoKm.replace(',', '.'));
@@ -1446,9 +1934,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
   const lastPilotAlertTulRef = useRef<number>(-1);
   const lastPilotApproachTulRef = useRef<number>(-1);
 
-  // Real-time Pairing Room lifecycle
+  // Real-time Pairing Room lifecycle (Bluetooth Classic SPP + Wi-Fi WebSocket)
   useEffect(() => {
-    if (!navSettings.pairing.enabled || !navSettings.pairing.roomCode) {
+    pilotBellRungRef.current = false;
+    lastHandledCueSeqRef.current = 0;
+
+    if (!navSettings.pairing.enabled || (!navSettings.pairing.roomCode && navSettings.pairing.transportMode !== 'bluetooth_spp')) {
       if (pairingConnRef.current) {
         pairingConnRef.current.close();
         pairingConnRef.current = null;
@@ -1465,33 +1956,65 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
     const conn = connectPairingRoom({
       roomCode: navSettings.pairing.roomCode,
+      roomPin: navSettings.pairing.roomPin,
       role: navSettings.pairing.role,
+      transportMode: navSettings.pairing.transportMode,
+      bluetoothDevices: navSettings.pairing.bluetoothDevices,
       onTelemetry: (payload) => {
         setPairedTelemetry(payload);
-        // Trigger audio/vibration alerts on the Pilot device when enabled
-        if (navSettings.pairing.role === 'pilot' && soundEnabled && payload.isRunning) {
-          if (lastPilotAlertTulRef.current !== payload.tulipaNum) {
-            lastPilotAlertTulRef.current = payload.tulipaNum;
-            playBeep(960, 100, false);
+        if (navSettings.pairing.role === 'pilot' && soundEnabled) {
+          if (!pilotBellRungRef.current) {
+            pilotBellRungRef.current = true;
+            playPairingBell();
           }
-          const distM = payload.distToNextKm * 1000;
-          if (
-            distM > 0 &&
-            distM <= 50 &&
-            lastPilotApproachTulRef.current !== payload.tulipaNum
-          ) {
-            lastPilotApproachTulRef.current = payload.tulipaNum;
-            if (navSettings.alertStyle === 'vibration' && 'vibrate' in navigator) {
-              navigator.vibrate([120, 60, 120]);
-            } else if (navSettings.alertStyle === 'beep_long') {
-              playBeep(820, 280, false);
+          if (payload.alertCue && payload.alertCue.seq > lastHandledCueSeqRef.current) {
+            lastHandledCueSeqRef.current = payload.alertCue.seq;
+            if (payload.alertCue.kind === 'bell') {
+              playPairingBell();
+            } else if (payload.alertCue.kind === 'countdown') {
+              playBeep(980, 90, false);
             } else {
-              playBeep(1120, 110, true);
+              playBeep(1180, 120, true);
+            }
+          }
+          if (payload.isRunning) {
+            if (lastPilotAlertTulRef.current !== payload.tulipaNum) {
+              lastPilotAlertTulRef.current = payload.tulipaNum;
+              playBeep(960, 100, false);
+            }
+            const distM = payload.distToNextKm * 1000;
+            if (
+              distM > 0 &&
+              distM <= 50 &&
+              lastPilotApproachTulRef.current !== payload.tulipaNum
+            ) {
+              lastPilotApproachTulRef.current = payload.tulipaNum;
+              if (navSettings.alertStyle === 'vibration' && 'vibrate' in navigator) {
+                navigator.vibrate([120, 60, 120]);
+              } else if (navSettings.alertStyle === 'beep_long') {
+                playBeep(820, 280, false);
+              } else {
+                playBeep(1120, 110, true);
+              }
             }
           }
         }
       },
-      onPresence: (p) => setPairingPresence(p),
+      onPresence: (p) => {
+        setPairingPresence(p);
+        if (
+          navSettings.pairing.role === 'pilot' &&
+          p.status === 'connected' &&
+          p.navigators > 0 &&
+          !pilotBellRungRef.current
+        ) {
+          pilotBellRungRef.current = true;
+          if (soundEnabled) playPairingBell();
+        }
+        if (p.status === 'disconnected' && p.navigators === 0) {
+          pilotBellRungRef.current = false;
+        }
+      },
     });
     pairingConnRef.current = conn;
     if (navSettings.pairing.role === 'pilot') {
@@ -1506,9 +2029,33 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     navSettings.pairing.enabled,
     navSettings.pairing.role,
     navSettings.pairing.roomCode,
+    navSettings.pairing.roomPin,
+    navSettings.pairing.transportMode,
+    navSettings.pairing.bluetoothDevices,
     navSettings.alertStyle,
     soundEnabled,
   ]);
+
+  const hotkeyHandlersRef = useRef({
+    roadbook,
+    shortcuts: navSettings.shortcuts,
+    activeTulipaIdx,
+    manualStepKm,
+    isRunning,
+    syncToTulipa,
+    adjustOdometer,
+    handleStartNavigation,
+  });
+  hotkeyHandlersRef.current = {
+    roadbook,
+    shortcuts: navSettings.shortcuts,
+    activeTulipaIdx,
+    manualStepKm,
+    isRunning,
+    syncToTulipa,
+    adjustOdometer,
+    handleStartNavigation,
+  };
 
   // Global Hotkeys (Bluetooth buttons / Keyboard)
   useEffect(() => {
@@ -1518,33 +2065,36 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
       const tag = activeEl?.tagName?.toUpperCase() || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      const sc = navSettings.shortcuts;
+      const h = hotkeyHandlersRef.current;
+      if (!h.roadbook) return;
+      const sc = h.shortcuts;
       if (sc.syncHere && e.key === sc.syncHere) {
         e.preventDefault();
-        syncToTulipa(activeTulipaIdx);
+        h.syncToTulipa(h.activeTulipaIdx);
       } else if (sc.odoPlus && e.key === sc.odoPlus) {
         e.preventDefault();
-        adjustOdometer(manualStepKm);
+        h.adjustOdometer(h.manualStepKm);
       } else if (sc.odoMinus && e.key === sc.odoMinus) {
         e.preventDefault();
-        adjustOdometer(-manualStepKm);
+        h.adjustOdometer(-h.manualStepKm);
       } else if (sc.nextTulipa && e.key === sc.nextTulipa) {
         e.preventDefault();
-        setActiveTulipaIdx((i) => Math.min(roadbook.tulipas.length - 1, i + 1));
+        const maxIdx = h.roadbook.tulipas.length - 1;
+        setActiveTulipaIdx((i) => Math.min(maxIdx, i + 1));
       } else if (sc.prevTulipa && e.key === sc.prevTulipa) {
         e.preventDefault();
         setActiveTulipaIdx((i) => Math.max(0, i - 1));
       } else if (sc.toggleRun && e.key === sc.toggleRun) {
         e.preventDefault();
-        if (isRunning) setIsRunning(false);
-        else handleStartNavigation();
+        if (h.isRunning) setIsRunning(false);
+        else h.handleStartNavigation();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  });
+  }, [roadbook]);
 
-  // Navigator -> Pilot Real-Time WebSocket Broadcast
+  // Navigator (Mestre) -> Droid Piloto (Escravo) Real-Time Broadcast
   useEffect(() => {
     if (
       !roadbook ||
@@ -1555,15 +2105,24 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
       return;
     }
     const now = Date.now();
-    if (now - lastBroadcastMsRef.current < 150) return;
+    const hasPendingCue = Boolean(pendingAlertCueRef.current);
+    if (!hasPendingCue && now - lastBroadcastMsRef.current < 140) return;
     lastBroadcastMsRef.current = now;
     const targetRef = nextTulipa ?? currentTulipa;
+    const cueToSend = pendingAlertCueRef.current ?? undefined;
+    pendingAlertCueRef.current = null;
+
     pairingConnRef.current.sendTelemetry({
       roomCode: navSettings.pairing.roomCode,
       odometerKm,
       partialKm,
       speedKmh: currentSpeedKmh,
       targetSpeedKmh: isNonTimedSection ? null : currentTulipa?.avgSpeedKmh ?? null,
+      nextTargetSpeedKmh:
+        blockTelemetry?.nextChangeTulipa?.type === 'V'
+          ? (blockTelemetry.nextChangeTulipa.avgSpeedKmh ?? null)
+          : null,
+      nextBlockType: blockTelemetry?.nextChangeTulipa?.type ?? '',
       deltaSec: isNonTimedSection ? null : deltaSec,
       deltaMeters: isNonTimedSection ? null : deltaMeters,
       clockTimeStr: formatClockMs(officialNowMs, false),
@@ -1582,6 +2141,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
       imageIsComposite: targetRef?.imageIsComposite,
       isRunning,
       eventName: roadbook.eventName,
+      alertCue: cueToSend,
       updatedAtMs: now,
     });
   }, [
@@ -1595,6 +2155,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     isNonTimedSection,
     currentTulipa,
     nextTulipa,
+    blockTelemetry,
     deltaSec,
     deltaMeters,
     officialNowMs,
@@ -1603,6 +2164,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     distToNextKm,
     sectionRemainingMs,
     isRunning,
+    cueVersion,
   ]);
 
   const renderPilotDashboard = (opts: {
@@ -1611,6 +2173,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     odoKm: number;
     speed: number;
     targetSpeed: number | null;
+    nextTargetSpeed?: number | null;
+    nextType?: 'D' | 'V' | 'N' | '';
     pDeltaSec: number | null;
     pDeltaMeters: number | null;
     pClockStr: string;
@@ -1622,7 +2186,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     pImage?: string;
     pNotesImg?: string;
     pIsComposite?: boolean;
-    pairedHeader?: { roomCode: string; connected: boolean } | null;
+    pairedHeader?: { roomCode: string; connected: boolean; transportLabel?: string } | null;
   }) => {
     const pd = navSettings.pilotDisplay;
     const obsImg = opts.pNotesImg || (opts.pIsComposite ? opts.pImage : undefined);
@@ -1647,20 +2211,20 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
           : 'grid-cols-3';
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {opts.pairedHeader && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3.5 py-2.5 text-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2 text-white">
             <div className="flex items-center gap-2">
               <Link2 className="h-4 w-4 text-[#E10600]" />
-              <span className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                Piloto Pareado · Sala {opts.pairedHeader.roomCode}
+              <span className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
+                Droid Piloto · {opts.pairedHeader.roomCode}
               </span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setSoundEnabled((s) => !s)}
-                title={soundEnabled ? 'Desativar alertas' : 'Ativar alertas'}
+                title={soundEnabled ? 'Desativar som' : 'Ativar som'}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white"
               >
                 {soundEnabled ? (
@@ -1670,35 +2234,37 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 )}
               </button>
               <span
-                className={`font-mono text-xs font-bold ${
+                className={`font-mono text-[11px] font-bold ${
                   opts.pairedHeader.connected ? 'text-emerald-400' : 'text-amber-400'
                 }`}
               >
-                {opts.pairedHeader.connected ? 'Navegador Online' : 'Aguardando Navegador'}
+                {opts.pairedHeader.connected
+                  ? `Navegador (${opts.pairedHeader.transportLabel || 'OK'})`
+                  : 'Aguardando Navegador'}
               </span>
             </div>
           </div>
         )}
 
-        <section className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-12">
+        <section className="grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-12">
           {hasLeft && (
             <div
-              className={`rounded-xl border border-zinc-800 bg-[#111214] p-4 text-white sm:p-5 space-y-4 ${
+              className={`rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white sm:p-4 space-y-3 ${
                 hasRight ? 'md:col-span-7' : 'md:col-span-12'
               }`}
             >
               {(pd.showDistance || pd.showOdometer || pd.showClock || pd.showDeltaMeters) && (
-                <div className="flex flex-wrap items-end justify-between gap-3">
+                <div className="flex flex-wrap items-end justify-between gap-2">
                   {pd.showDistance && (
                     <div>
-                      <p className="text-[11px] font-bold tracking-wider text-[#B5B5B5] uppercase sm:text-xs">
+                      <p className="text-[11px] font-bold tracking-wider text-[#B5B5B5] uppercase">
                         {nonTimed && opts.pSectionRemMs !== null
                           ? opts.pSectionRemMs >= 0
-                            ? `${opts.pType === 'N' ? 'Neutro' : 'Deslocamento'} · V em ${formatHmsDuration(opts.pSectionRemMs)}`
-                            : `Tempo excedido (+${formatHmsDuration(-opts.pSectionRemMs)})`
-                          : `Falta para Referência #${opts.tulNum}`}
+                            ? `${opts.pType === 'N' ? 'Neutro' : 'Desloc.'} · V em ${formatHmsDuration(opts.pSectionRemMs)}`
+                            : `Excedido +${formatHmsDuration(-opts.pSectionRemMs)}`
+                          : `Falta Ref #${opts.tulNum}`}
                       </p>
-                      <p className="mt-0.5 font-mono text-5xl font-black leading-none tracking-tight text-amber-300 tabular-nums sm:text-6xl">
+                      <p className="mt-0.5 font-mono text-4xl font-black leading-none tracking-tight text-amber-300 tabular-nums sm:text-5xl">
                         {opts.distKm < 1
                           ? `${Math.round(opts.distKm * 1000)} m`
                           : `${opts.distKm.toFixed(2)} km`}
@@ -1706,15 +2272,15 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     </div>
                   )}
 
-                  <div className="flex flex-col items-start gap-1 text-left font-mono text-xs text-[#C0C4C9] sm:items-end sm:text-right">
+                  <div className="flex flex-col items-start gap-0.5 text-left font-mono text-xs text-[#C0C4C9] sm:items-end sm:text-right">
                     {pd.showOdometer && (
                       <span>
-                        Hodômetro: <strong className="text-white text-sm">{opts.odoKm.toFixed(3)} km</strong>
+                        Odo: <strong className="text-white">{opts.odoKm.toFixed(3)} km</strong>
                       </span>
                     )}
                     {pd.showDeltaMeters && opts.pDeltaMeters !== null && (
                       <span>
-                        Diferença:{' '}
+                        Dif:{' '}
                         <strong className={opts.pDeltaMeters >= 0 ? 'text-emerald-400' : 'text-[#FF2A2A]'}>
                           {opts.pDeltaMeters >= 0 ? '+' : ''}
                           {opts.pDeltaMeters} m
@@ -1730,15 +2296,15 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </div>
               )}
 
-              {/* Big VELOCIDADE · MÉDIA · TNAV cards */}
+              {/* VELOCIDADE · MÉDIA · TNAV */}
               {metricCount > 0 && (
-                <div className={`grid ${metricsGridClass} gap-2.5 border-t border-zinc-800 pt-3.5 text-center font-mono tabular-nums`}>
+                <div className={`grid ${metricsGridClass} gap-2 border-t border-zinc-800 pt-2.5 text-center font-mono tabular-nums`}>
                   {pd.showSpeed && (
-                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-2 py-3 sm:py-4">
-                      <span className="block text-[10px] font-bold tracking-widest text-[#B5B5B5] uppercase sm:text-xs">
+                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-1.5 py-2.5 sm:py-3">
+                      <span className="block text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
                         Velocidade
                       </span>
-                      <strong className="mt-1 block text-4xl font-black leading-none text-white sm:text-5xl md:text-6xl">
+                      <strong className="mt-1 block text-3xl font-black leading-none text-white sm:text-5xl">
                         {Math.round(opts.speed)}
                       </strong>
                       <span className="mt-1 block text-[10px] text-zinc-500 uppercase">km/h</span>
@@ -1746,26 +2312,32 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   )}
 
                   {pd.showTargetSpeed && (
-                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-2 py-3 sm:py-4">
-                      <span className="block text-[10px] font-bold tracking-widest text-[#B5B5B5] uppercase sm:text-xs">
+                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-1.5 py-2.5 sm:py-3">
+                      <span className="block text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
                         Média
                       </span>
-                      <strong className="mt-1 block text-4xl font-black leading-none text-[#E10600] sm:text-5xl md:text-6xl">
+                      <strong className="mt-1 block text-3xl font-black leading-none text-[#E10600] sm:text-5xl">
                         {nonTimed ? opts.pType : opts.targetSpeed ?? '--'}
                       </strong>
-                      <span className="mt-1 block text-[10px] text-zinc-500 uppercase">
-                        {nonTimed ? 'Isento' : 'km/h'}
+                      <span className="mt-1 block text-[10px] text-zinc-400 uppercase truncate">
+                        {opts.nextTargetSpeed != null
+                          ? `Próx ${opts.nextTargetSpeed}`
+                          : opts.nextType === 'D' || opts.nextType === 'N'
+                            ? `Próx ${opts.nextType}`
+                            : nonTimed
+                              ? 'Livre'
+                              : 'km/h'}
                       </span>
                     </div>
                   )}
 
                   {pd.showTnav && (
-                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-2 py-3 sm:py-4">
-                      <span className="block text-[10px] font-bold tracking-widest text-[#B5B5B5] uppercase sm:text-xs">
+                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-1.5 py-2.5 sm:py-3">
+                      <span className="block text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
                         TNAV
                       </span>
                       <strong
-                        className={`mt-1 block text-3xl font-black leading-none sm:text-4xl md:text-5xl ${
+                        className={`mt-1 block text-2xl font-black leading-none sm:text-4xl ${
                           nonTimed
                             ? 'text-[#C0C4C9]'
                             : opts.pDeltaSec === null
@@ -1780,16 +2352,15 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         {nonTimed ? 'n.e.' : formatTnavReadout(opts.pDeltaSec)}
                       </strong>
                       <span className="mt-1 block text-[10px] text-zinc-500 uppercase">
-                        {nonTimed ? 'Livre' : 'Segundos'}
+                        {nonTimed ? 'Livre' : 'Seg'}
                       </span>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Bi-directional Regularity Color Bar (Verde = Adiantado | Cinza = 00:00 | Vermelho = Atrasado) */}
               {pd.showColorBar && (
-                <div className="border-t border-zinc-800 pt-3">
+                <div className="border-t border-zinc-800 pt-2.5">
                   <TnavHorizontalColorBar deltaSec={opts.pDeltaSec} disabled={nonTimed} />
                 </div>
               )}
@@ -1798,12 +2369,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
           {hasRight && (
             <div
-              className={`flex flex-col justify-between gap-3 rounded-xl border border-zinc-800 bg-[#111214] p-4 text-white sm:p-5 ${
+              className={`flex flex-col justify-between gap-2.5 rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white sm:p-4 ${
                 hasLeft ? 'md:col-span-5' : 'md:col-span-12'
               }`}
             >
               {(pd.showDesenho || pd.showCap) && (
-                <div className="flex items-center gap-3.5">
+                <div className="flex items-center gap-3">
                   {pd.showDesenho && (
                     <TulipVectorIcon
                       cap={opts.pCap}
@@ -1815,11 +2386,11 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     />
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-bold text-[#E10600] uppercase sm:text-xs">
-                      Próxima Direção · Tulipa #{opts.tulNum}
+                    <p className="text-[11px] font-bold text-[#E10600] uppercase">
+                      Tulipa #{opts.tulNum}
                     </p>
                     {pd.showCap && (
-                      <p className="mt-0.5 font-['Barlow_Condensed'] text-3xl font-bold text-white sm:text-4xl">
+                      <p className="mt-0.5 font-['Barlow_Condensed'] text-2xl font-bold text-white sm:text-3xl">
                         {opts.pCap !== null ? `CAP ${opts.pCap}°` : `Trecho ${opts.pSection ?? '-'}`}
                       </p>
                     )}
@@ -1830,7 +2401,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               {pd.showObs && (
                 <div className="w-full flex-1 flex flex-col justify-center">
                   {obsImg && (
-                    <div className="flex w-full items-center justify-center rounded-lg bg-white p-2">
+                    <div className="flex w-full items-center justify-center rounded-lg bg-white p-1.5">
                       <CroppedObsImage
                         src={obsImg}
                         alt={`Observação tulipa ${opts.tulNum}`}
@@ -1839,7 +2410,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     </div>
                   )}
                   {(opts.pNotes || !obsImg) && (
-                    <p className="mt-2 text-center text-base font-extrabold text-white whitespace-pre-line break-words uppercase sm:text-lg">
+                    <p className="mt-1.5 text-center text-sm font-extrabold text-white whitespace-pre-line break-words uppercase sm:text-base">
                       {opts.pNotes || `Trecho ${opts.pType || '-'}`}
                     </p>
                   )}
@@ -1857,12 +2428,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     if (navSettings.pairing.enabled && navSettings.pairing.role === 'pilot') {
       if (!pairedTelemetry) {
         return (
-          <div className="mx-auto max-w-2xl space-y-3">
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-4 py-3 text-white">
+          <div className="mx-auto max-w-xl space-y-3">
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3.5 py-2.5 text-white">
               <div className="flex items-center gap-2">
                 <Link2 className="h-4 w-4 text-[#E10600]" />
                 <span className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                  Piloto Pareado · Sala {navSettings.pairing.roomCode}
+                  Droid Piloto · Sala {navSettings.pairing.roomCode}
                 </span>
               </div>
               <span
@@ -1870,12 +2441,33 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   pairingPresence.navigators > 0 ? 'text-emerald-400' : 'text-amber-400'
                 }`}
               >
-                {pairingPresence.navigators > 0 ? 'Navegador Online' : 'Aguardando...'}
+                {pairingPresence.navigators > 0 ? 'Navegador Online' : 'Aguardando Navegador'}
               </span>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-8 text-center text-sm text-[#B5B5B5]">
-              Aguardando envio de telemetria do celular Navegador na sala{' '}
-              <strong className="font-mono text-white">{navSettings.pairing.roomCode}</strong>...
+            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-6 text-center space-y-3">
+              <p className="text-sm font-semibold text-white">
+                Aguardando Navegador na sala{' '}
+                <strong className="font-mono text-[#E10600]">{navSettings.pairing.roomCode}</strong>
+              </p>
+              <p className="text-xs text-[#B5B5B5]">
+                Canal: <strong className="text-white">{pairingPresence.transport.toUpperCase()}</strong>
+              </p>
+              <div className="flex justify-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => playPairingBell()}
+                  className="pitstop-btn-metal rounded-lg px-4 py-2 text-xs font-bold"
+                >
+                  Testar Sinetinha
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSoundEnabled((s) => !s)}
+                  className="rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-2 text-xs font-bold text-[#C0C4C9]"
+                >
+                  {soundEnabled ? 'Som Ativo' : 'Som Mudo'}
+                </button>
+              </div>
             </div>
           </div>
         );
@@ -1889,6 +2481,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             odoKm: pairedTelemetry.odometerKm,
             speed: pairedTelemetry.speedKmh,
             targetSpeed: pairedTelemetry.targetSpeedKmh,
+            nextTargetSpeed: pairedTelemetry.nextTargetSpeedKmh,
+            nextType: pairedTelemetry.nextBlockType,
             pDeltaSec: pairedTelemetry.deltaSec,
             pDeltaMeters: pairedTelemetry.deltaMeters ?? null,
             pClockStr: pairedTelemetry.clockTimeStr || formatClockMs(officialNowMs, false),
@@ -1902,7 +2496,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             pIsComposite: pairedTelemetry.imageIsComposite,
             pairedHeader: {
               roomCode: navSettings.pairing.roomCode,
-              connected: pairingPresence.navigators > 0,
+              connected: pairingPresence.navigators > 0 || Boolean(pairedTelemetry),
+              transportLabel: pairingPresence.transport === 'bt_spp' ? 'BT' : pairingPresence.transport.toUpperCase(),
             },
           })}
         </div>
@@ -2461,7 +3056,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
           {/* --- PAINEL DE CONTEXTO COMPLETO DO TRECHO (D / N / V + PRÓXIMA TRANSIÇÃO) --- */}
           {currentTulipa && blockTelemetry && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800 bg-[#10141d] px-3.5 py-2 text-xs text-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3.5 py-2 text-xs text-[#F4F4F4]">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span
                   className={`font-mono font-extrabold uppercase ${
@@ -2469,7 +3064,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       ? 'text-sky-400'
                       : currentTulipa.type === 'N'
                         ? 'text-amber-400'
-                        : 'text-sky-400'
+                        : 'text-[#E10600]'
                   }`}
                 >
                   {currentTulipa.section !== null ? `T${currentTulipa.section} · ` : ''}
@@ -2481,7 +3076,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </span>
 
                 {isNonTimedSection ? (
-                  <span className="font-mono text-slate-300 tabular-nums">
+                  <span className="font-mono text-[#C0C4C9] tabular-nums">
                     Falta p/ saída:{' '}
                     <strong className="text-white">
                       {blockTelemetry.distToBlockEndKm < 1
@@ -2502,7 +3097,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 ) : (
                   blockTelemetry.nextChangeTulipa &&
                   blockTelemetry.distToNextChangeKm !== null && (
-                    <span className="font-mono text-slate-300 tabular-nums">
+                    <span className="font-mono text-[#C0C4C9] tabular-nums">
                       Próx.{' '}
                       <strong className="text-amber-300">
                         {blockTelemetry.nextChangeTulipa.type === 'D'
@@ -2523,7 +3118,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 )}
               </div>
 
-              <span className="font-mono text-[11px] text-slate-400 tabular-nums">
+              <span className="font-mono text-[11px] text-zinc-400 tabular-nums">
                 Ref {activeTulipaIdx + 1}/{roadbook.tulipas.length} · Antecipação {transitionAdvanceM}m
               </span>
             </div>
@@ -2532,7 +3127,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
       )}
 
       {/* --- SCENARIO: PILOTO (TELA LIMPA SEM CABEÇALHO DO NAVEGADOR + VEL/MÉDIA/TNAV GRANDES + BARRA DE CORES) --- */}
-      {scenario === 'piloto' && (pairedTelemetry && navSettings.pairing.enabled && navSettings.pairing.role === 'pilot' || currentTulipa) && (() => {
+      {scenario === 'piloto' && ((pairedTelemetry && navSettings.pairing.enabled && navSettings.pairing.role === 'pilot') || currentTulipa) && (() => {
         const pUseLiveSync = Boolean(
           pairedTelemetry && navSettings.pairing.enabled && navSettings.pairing.role === 'pilot'
         );
@@ -2547,6 +3142,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             : isNonTimedSection
               ? null
               : currentTulipa?.avgSpeedKmh ?? null,
+          nextTargetSpeed: pUseLiveSync
+            ? pairedTelemetry!.nextTargetSpeedKmh
+            : blockTelemetry?.nextChangeTulipa?.type === 'V'
+              ? (blockTelemetry.nextChangeTulipa.avgSpeedKmh ?? null)
+              : null,
+          nextType: pUseLiveSync
+            ? pairedTelemetry!.nextBlockType
+            : blockTelemetry?.nextChangeTulipa?.type ?? '',
           pDeltaSec: pUseLiveSync ? pairedTelemetry!.deltaSec : isNonTimedSection ? null : deltaSec,
           pDeltaMeters: pUseLiveSync ? (pairedTelemetry!.deltaMeters ?? null) : isNonTimedSection ? null : deltaMeters,
           pClockStr: pUseLiveSync
@@ -2563,7 +3166,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
           pairedHeader: pUseLiveSync
             ? {
                 roomCode: navSettings.pairing.roomCode,
-                connected: pairingPresence.navigators > 0,
+                connected: pairingPresence.navigators > 0 || Boolean(pairedTelemetry),
+                transportLabel: pairingPresence.transport === 'bt_spp' ? 'BT' : pairingPresence.transport.toUpperCase(),
               }
             : null,
         });
@@ -2691,7 +3295,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
           {/* PLANILHA DIGITAL ESPELHO: Desenho | Tul | Distância | Vel/TDN | Tempo | Observação */}
           <div className="overflow-hidden rounded-xl border border-zinc-700 bg-[#080B0D] text-[#F4F4F4] shadow-xl">
             {/* Table Column Header (explicit tracks prevent mobile cell overlap) */}
-            <div className="grid grid-cols-[48px_28px_62px_40px_48px_minmax(0,1fr)] sm:grid-cols-[68px_44px_100px_76px_88px_minmax(0,1fr)] md:grid-cols-[84px_52px_118px_88px_104px_minmax(0,1fr)] border-b border-zinc-700 bg-[#14161A] text-center text-[9px] font-bold tracking-wider uppercase text-[#C0C4C9] sm:text-xs">
+            <div className="grid grid-cols-[40px_24px_54px_34px_42px_minmax(0,1fr)] sm:grid-cols-[68px_44px_100px_76px_88px_minmax(0,1fr)] md:grid-cols-[84px_52px_118px_88px_104px_minmax(0,1fr)] border-b border-zinc-700 bg-[#14161A] text-center text-[9px] font-bold tracking-wider uppercase text-[#C0C4C9] sm:text-xs">
               <div className="min-w-0 overflow-hidden truncate border-r border-zinc-800 py-1.5 px-0.5 sm:px-1">
                 <span className="sm:hidden">Des.</span>
                 <span className="hidden sm:inline">Desenho</span>
@@ -2704,7 +3308,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             </div>
 
             {/* Scrolling Rows (touch/wheel smooth scroll with hidden scrollbar) */}
-            <div className="no-scrollbar max-h-[46vh] sm:max-h-[540px] divide-y divide-zinc-800/90 overflow-y-auto">
+            <div className="no-scrollbar max-h-[54dvh] sm:max-h-[540px] divide-y divide-zinc-800/90 overflow-y-auto">
               {planilhaRows.length === 0 ? (
                 <div className="p-6 text-center text-xs font-medium text-zinc-400">
                   Fim da planilha atingido. Use &quot;Anterior&quot; ou &quot;Funções &gt; Ir para Referência&quot; para reposicionar.
@@ -2716,18 +3320,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   const isManualSelected = realIdx === manualBrowseIdx;
                   const isPassed = realIdx < activeTulipaIdx;
                   const compactPassed = isPassed && navSettings.reducePassedRow && !isManualSelected;
-                  const hazard = hasHazardKeyword(t.notes);
-                  const markup = markingsMap.get(t.tulipa);
-                  const shownKm = t.displayKm ?? t.totalKm;
-                  const diffKm = t.interKm;
 
-                  // Remaining distance & regressive slim green bar strictly on the active reference row
-                  const barTargetTulipa =
-                    t.totalKm > odometerKm
+                  const barTargetTulipa = isActive
+                    ? t.totalKm > odometerKm
                       ? t
-                      : isActive && nextTulipa && nextTulipa.totalKm > odometerKm
+                      : nextTulipa && nextTulipa.totalKm > odometerKm
                         ? nextTulipa
-                        : null;
+                        : null
+                    : null;
                   const showCountdownBar = Boolean(barTargetTulipa) && isActive;
                   let barRemainingKm = 0;
                   let barPercentLeft = 0;
@@ -2744,414 +3344,39 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       Math.min(100, (barRemainingKm / segmentSpanKm) * 100)
                     );
                   }
-                  const idealFormatted =
-                    t.idealTimeMs !== null
-                      ? formatTdnOrTime(t.idealTimeMs)
-                      : t.idealTimeStr
-                        ? t.idealTimeStr.replace(/:/g, '.').slice(0, 8)
-                        : '00.00.00';
 
-                  const { primary: velPrimary, secondary: velSecondary } = formatVelTdnBadge(t);
-
-                  const rowDelta = isActive && !isNonTimedSection
-                    ? deltaSec ?? activeTulipaDeltaSec
-                    : null;
-                  const cellBorderClass = isActive
-                    ? 'border-slate-900/35'
-                    : 'border-zinc-800';
-
-                  const activeBgClass =
-                    navSettings.highlightTheme === 'blue'
-                      ? 'bg-sky-300 text-slate-950 ring-2 ring-inset ring-[#E10600]'
-                      : navSettings.highlightTheme === 'green'
-                        ? 'bg-emerald-300 text-slate-950 ring-2 ring-inset ring-[#E10600]'
-                        : 'bg-[#fde047] text-slate-950 ring-2 ring-inset ring-[#E10600]';
-
-                  const activeCellBgClass =
-                    navSettings.highlightTheme === 'blue'
-                      ? 'bg-sky-300'
-                      : navSettings.highlightTheme === 'green'
-                        ? 'bg-emerald-300'
-                        : 'bg-[#fde047]';
-
-                  const activePillBgClass =
-                    navSettings.highlightTheme === 'blue'
-                      ? 'bg-sky-200/90 text-slate-950 border border-slate-900/20'
-                      : navSettings.highlightTheme === 'green'
-                        ? 'bg-emerald-200/90 text-slate-950 border border-slate-900/20'
-                        : 'bg-amber-300/90 text-slate-950 border border-slate-900/20';
+                  const rowDelta =
+                    isActive && !isNonTimedSection ? deltaSec ?? activeTulipaDeltaSec : null;
 
                   return (
-                    <div
+                    <PlanilhaRow
                       key={`${t.tulipa}-${realIdx}`}
-                      onPointerDown={(e) => startRowLongPress(realIdx, e)}
-                      onPointerMove={moveRowLongPress}
-                      onPointerUp={cancelRowLongPress}
-                      onPointerCancel={cancelRowLongPress}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        cancelRowLongPress();
-                        setContextMenuIdx(realIdx);
-                      }}
-                      onClick={() => {
-                        if (rowLongPressTriggeredRef.current) {
-                          rowLongPressTriggeredRef.current = false;
-                          return;
-                        }
-                        if (manualBrowseIdx !== null) {
-                          setManualBrowseIdx(realIdx);
-                          return;
-                        }
-                        syncToTulipa(realIdx);
-                      }}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          if (manualBrowseIdx !== null) {
-                            setManualBrowseIdx(realIdx);
-                          } else {
-                            syncToTulipa(realIdx);
-                          }
-                        }
-                      }}
-                      className={`grid cursor-pointer select-none grid-cols-[48px_28px_62px_40px_48px_minmax(0,1fr)] sm:grid-cols-[68px_44px_100px_76px_88px_minmax(0,1fr)] md:grid-cols-[84px_52px_118px_88px_104px_minmax(0,1fr)] items-stretch transition-colors ${
-                        isActive
-                          ? isManualSelected
-                            ? `${activeBgClass} outline-2 outline-sky-400`
-                            : activeBgClass
-                          : isManualSelected
-                            ? 'bg-sky-950/60 text-white ring-2 ring-inset ring-sky-400'
-                            : isPassed
-                              ? `bg-[#12151B] text-zinc-400 hover:bg-[#171A21] ${compactPassed ? 'opacity-80' : ''}`
-                              : 'bg-[#0B0D10] text-[#F4F4F4] hover:bg-[#14161A]'
-                      }`}
-                    >
-                      {/* Col 1: Desenho */}
-                      <div
-                        className={`min-w-0 overflow-hidden flex items-center justify-center border-r ${
-                          compactPassed ? 'p-0.5' : 'p-0.5 sm:p-1.5'
-                        } ${cellBorderClass} ${
-                          isActive
-                            ? activeCellBgClass
-                            : isPassed
-                              ? 'bg-[#12151B]'
-                              : 'bg-[#0B0D10]'
-                        }`}
-                      >
-                        <TulipVectorIcon
-                          cap={t.cap}
-                          imageDataUrl={t.imageDataUrl}
-                          imageIsComposite={t.imageIsComposite}
-                          active={isActive}
-                          passed={isPassed}
-                          compact={compactPassed}
-                          highlightTheme={navSettings.highlightTheme}
-                        />
-                      </div>
-
-                      {/* Col 2: Tul */}
-                      <div
-                        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 font-mono font-black tabular-nums sm:px-1 ${
-                          isActive ? 'text-slate-950' : isPassed ? 'text-zinc-400' : 'text-white'
-                        } ${
-                          compactPassed
-                            ? 'py-0.5 text-[10px] sm:py-1 sm:text-xs'
-                            : 'py-1 text-[11px] sm:py-2 sm:text-sm md:text-base'
-                        } ${cellBorderClass}`}
-                      >
-                        <span className="leading-none">{t.tulipa}</span>
-                        {isPassed && navSettings.showPassedTick && (
-                          <span
-                            className="mt-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-black text-white sm:h-4 sm:w-4 sm:text-[10px]"
-                            title="Referência passada"
-                          >
-                            ✓
-                          </span>
-                        )}
-                        {isActive && (
-                          <span className="hidden sm:inline-block mt-0.5 rounded-xs bg-[#E10600] px-1 py-0.5 text-[8px] font-black tracking-wide uppercase text-white">
-                            VEZ
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Col 3: Distância (Big KM + Diff below + T# | Des/Vel/Neu) */}
-                      <div
-                        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 text-center font-mono tabular-nums sm:px-1 ${
-                          compactPassed ? 'py-0.5' : 'py-1 sm:py-1.5'
-                        } ${cellBorderClass}`}
-                      >
-                        <span
-                          className={`max-w-full truncate font-black leading-none tracking-tighter ${
-                            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-white'
-                          } ${
-                            compactPassed ? 'text-[10.5px] sm:text-sm' : 'text-[12px] sm:text-base md:text-lg'
-                          }`}
-                        >
-                          {formatKm3(shownKm)}
-                        </span>
-                        <div
-                          className={`mt-0.5 w-full truncate px-0.5 py-0.5 text-[8.5px] font-bold leading-tight tracking-tighter sm:px-1 sm:text-[11px] ${
-                            t.resetsOdometer
-                              ? 'rounded-xs bg-lime-400 font-extrabold text-slate-950'
-                              : isActive
-                                ? 'text-slate-950'
-                                : 'text-[#B5B5B5]'
-                          }`}
-                        >
-                          {t.resetsOdometer ? `${formatKm3(diffKm)} | 0,00` : formatKm3(diffKm)}
-                        </div>
-                        {!compactPassed && (
-                          <div
-                            className={`mt-0.5 w-full truncate rounded-xs px-0.5 py-0.5 text-[8.5px] font-bold leading-tight sm:px-1 sm:text-[10px] ${
-                              isActive
-                                ? activePillBgClass
-                                : 'bg-[#181B22] text-[#C0C4C9]'
-                            }`}
-                          >
-                            {t.section !== null ? `T${t.section}` : 'T-'} | {typeShortLabel(t.type)}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Col 4: Vel/TDN */}
-                      <div
-                        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 text-center font-mono tabular-nums sm:px-1 ${
-                          compactPassed ? 'py-0.5' : 'py-1 sm:py-2'
-                        } ${cellBorderClass}`}
-                      >
-                        <span
-                          className={`max-w-full truncate leading-none ${
-                            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-white'
-                          } ${
-                            t.type === 'V'
-                              ? compactPassed
-                                ? 'text-[10.5px] font-black sm:text-sm'
-                                : 'text-[12px] font-black sm:text-base md:text-lg'
-                              : 'text-[9px] font-extrabold tracking-tighter sm:text-sm md:text-base'
-                          }`}
-                        >
-                          {velPrimary}
-                        </span>
-                        {velSecondary ? (
-                          <span className={`mt-0.5 max-w-full truncate text-[8px] font-bold leading-none sm:text-[9px] ${isActive ? 'text-slate-900' : 'text-zinc-400'}`}>
-                            {velSecondary}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {/* Col 5: Tempo */}
-                      <div
-                        className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 text-center font-mono tabular-nums sm:px-1 ${
-                          compactPassed ? 'py-0.5' : 'py-1 sm:py-1.5'
-                        } ${cellBorderClass}`}
-                      >
-                        <span className={`max-w-full truncate text-[9.5px] font-extrabold tracking-tighter sm:text-xs md:text-sm ${
-                          isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-[#F4F4F4]'
-                        }`}>
-                          {idealFormatted}
-                        </span>
-                        {isActive && isNonTimedSection && sectionRemainingMs !== null && (
-                          <span className="mt-0.5 max-w-full truncate rounded-xs bg-sky-700 px-1 py-0.5 text-[8px] font-extrabold leading-none text-white sm:mt-1 sm:px-1.5 sm:text-[10px]">
-                            {sectionRemainingMs >= 0
-                              ? `${typeShortLabel(t.type)} ${formatHmsDuration(sectionRemainingMs)}`
-                              : `+${formatHmsDuration(-sectionRemainingMs)}`}
-                          </span>
-                        )}
-                        {isActive && !isNonTimedSection && rowDelta !== null && (
-                          <span
-                            className={`mt-0.5 max-w-full truncate rounded-xs px-1 py-0.5 text-[8px] font-extrabold leading-none uppercase sm:mt-1 sm:px-1.5 sm:text-[10px] ${
-                              Math.abs(rowDelta) <= 0.5
-                                ? 'bg-emerald-500 text-white'
-                                : rowDelta < 0
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-red-600 text-white'
-                            }`}
-                          >
-                            {Math.abs(rowDelta) <= 0.5
-                              ? 'OK'
-                              : rowDelta < 0
-                                ? `Ad ${Math.abs(rowDelta).toFixed(0)}s`
-                                : `At +${rowDelta.toFixed(0)}s`}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Col 6: Observação (Full readable text height with horizontal whitespace cropped cleanly) */}
-                      <div
-                        className={`min-w-0 overflow-hidden flex flex-col items-stretch justify-center gap-0.5 px-1 text-left sm:items-center sm:px-1.5 sm:text-center ${
-                          compactPassed ? 'py-1' : 'py-1.5 sm:py-2'
-                        }`}
-                      >
-                        {(() => {
-                          const obsGraphic =
-                            t.notesImageDataUrl ||
-                            (!t.notes && t.imageIsComposite ? t.imageDataUrl : undefined);
-                          return (
-                            <>
-                              {obsGraphic && (
-                                <div className="w-full flex items-center justify-start sm:justify-center overflow-hidden">
-                                  <CroppedObsImage
-                                    src={obsGraphic}
-                                    alt={`Observação tulipa ${t.tulipa}`}
-                                    className={`${
-                                      compactPassed ? 'h-9 sm:h-11' : 'h-12 sm:h-14 md:h-16'
-                                    } w-auto max-w-full object-contain object-left sm:object-center ${
-                                      !isActive ? 'invert hue-rotate-180 contrast-125' : ''
-                                    }`}
-                                  />
-                                </div>
-                              )}
-                              {(t.notes || !obsGraphic) && (
-                                <div className="flex w-full items-start gap-1 sm:justify-center">
-                                  <p
-                                    className={`w-full font-extrabold leading-snug whitespace-pre-line break-words uppercase ${
-                                      isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-[#F4F4F4]'
-                                    } ${
-                                      compactPassed ? 'text-[9.5px] sm:text-[11px]' : 'text-[11px] sm:text-xs md:text-[13px]'
-                                    }`}
-                                  >
-                                    {t.notes ||
-                                      (t.type === 'D'
-                                        ? `Deslocamento ${
-                                            t.tdnMs && t.tdnMs > 0 ? formatTdnOrTime(t.tdnMs) : ''
-                                          }`.trim()
-                                        : t.type === 'N'
-                                          ? `Neutralização ${
-                                              t.tdnMs && t.tdnMs > 0 ? formatTdnOrTime(t.tdnMs) : ''
-                                            }`.trim()
-                                          : t.cap !== null
-                                            ? `CAP ${t.cap}°`
-                                            : `Ref. #${t.tulipa}`)}
-                                  </p>
-                                  {hazard && (
-                                    <AlertTriangle
-                                      className="mt-0.5 h-3 w-3 text-red-600 shrink-0 sm:h-3.5 sm:w-3.5"
-                                      aria-label="Atenção na referência"
-                                    />
-                                  )}
-                                </div>
-                              )}
-                            </>
-                          );
-                        })()}
-
-                        {markup && (
-                          <div className="flex w-full flex-wrap items-center gap-1 sm:justify-center">
-                            {markup.drawingDataUrl && (
-                              <span className="inline-flex items-center gap-0.5 rounded bg-red-600 px-1.5 py-0.5 text-[8px] font-extrabold text-white uppercase sm:text-[9px]">
-                                <PenTool className="h-2.5 w-2.5" />
-                                <span>Marcado</span>
-                              </span>
-                            )}
-                            {markup.noteText && (
-                              <span className="max-w-full truncate rounded bg-slate-900 px-1.5 py-0.5 text-[8px] font-bold text-amber-300 uppercase sm:text-[9px]">
-                                {markup.noteText}
-                              </span>
-                            )}
-                            {markup.audioDataUrl && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  try {
-                                    const audio = new Audio(markup.audioDataUrl);
-                                    audio.play().catch(() => {});
-                                  } catch {
-                                    // Ignore playback restriction
-                                  }
-                                }}
-                                className="inline-flex items-center gap-0.5 rounded bg-sky-600 px-1.5 py-0.5 text-[8px] font-extrabold text-white hover:bg-sky-500 sm:text-[9px]"
-                              >
-                                <Mic className="h-2.5 w-2.5" />
-                                <span>Ouvir {markup.audioDurationSec ? `${markup.audioDurationSec}s` : 'Áudio'}</span>
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {showCountdownBar && barTargetTulipa && (
-                          <div className="mt-1 w-full">
-                            <div className={`mb-0.5 flex items-center justify-between gap-1 font-mono text-[8.5px] font-extrabold leading-none tabular-nums sm:text-[10px] ${
-                              isActive ? 'text-emerald-950' : 'text-emerald-400'
-                            }`}>
-                              <span className="truncate">
-                                {barTargetTulipa === t
-                                  ? 'Falta ref.'
-                                  : `Próx #${barTargetTulipa.tulipa}`}
-                              </span>
-                              <span className="shrink-0">
-                                {barRemainingKm < 1
-                                  ? `${Math.round(barRemainingKm * 1000)} m`
-                                  : `${barRemainingKm.toFixed(2).replace('.', ',')} km`}
-                              </span>
-                            </div>
-                            <div
-                              className={`h-1 w-full overflow-hidden rounded-xs border sm:h-1.5 ${
-                                isActive ? 'border-emerald-800 bg-white' : 'border-emerald-700/70 bg-[#080B0D]'
-                              }`}
-                              aria-label={`Distância restante ${Math.round(barRemainingKm * 1000)} metros`}
-                            >
-                              <div
-                                className="h-full bg-emerald-500 transition-all duration-150"
-                                style={{ width: `${barPercentLeft}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {isManualSelected && (
-                          <div
-                            className="mt-1 flex flex-wrap items-center justify-start gap-1.5 sm:justify-center"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                syncHereAndIdealTime(realIdx);
-                                exitManualBrowse();
-                              }}
-                              className="pitstop-btn-red inline-flex items-center gap-1 rounded px-2 py-1 font-mono text-[9px] font-extrabold tracking-wide text-white uppercase shadow sm:text-[10px]"
-                            >
-                              <MapPin className="h-3 w-3" />
-                              <span>Estou Aqui</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                syncToTulipa(realIdx);
-                                exitManualBrowse();
-                              }}
-                              className="rounded border border-zinc-600 bg-slate-950 px-2 py-1 font-mono text-[9px] font-bold text-sky-300 hover:bg-slate-800 sm:text-[10px]"
-                            >
-                              Só Hodômetro
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setContextMenuIdx(realIdx)}
-                              className="rounded border border-amber-500/40 bg-amber-950/60 px-2 py-1 font-mono text-[9px] font-bold text-amber-200 hover:bg-amber-900 sm:text-[10px]"
-                            >
-                              Opções
-                            </button>
-                          </div>
-                        )}
-
-                        {isActive && !isManualSelected && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              syncToTulipa(realIdx);
-                            }}
-                            className="mt-0.5 rounded bg-slate-950 px-1.5 py-0.5 font-mono text-[8px] font-extrabold tracking-wide text-sky-300 hover:bg-slate-800 sm:mt-1 sm:px-2 sm:text-[9px]"
-                          >
-                            AQUI / SINC.
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                      t={t}
+                      realIdx={realIdx}
+                      isActive={isActive}
+                      isManualSelected={isManualSelected}
+                      isPassed={isPassed}
+                      compactPassed={compactPassed}
+                      markup={markingsMap.get(t.tulipa)}
+                      highlightTheme={navSettings.highlightTheme}
+                      showPassedTick={navSettings.showPassedTick}
+                      isNonTimedSection={isActive && isNonTimedSection}
+                      showCountdownBar={showCountdownBar}
+                      barTargetTulipaNum={barTargetTulipa ? barTargetTulipa.tulipa : null}
+                      barTargetIsSelf={barTargetTulipa === t}
+                      barRemainingKm={barRemainingKm}
+                      barPercentLeft={barPercentLeft}
+                      rowDelta={rowDelta}
+                      sectionRemainingMs={isActive && isNonTimedSection ? sectionRemainingMs : null}
+                      onStartLongPress={startRowLongPress}
+                      onMoveLongPress={moveRowLongPress}
+                      onCancelLongPress={cancelRowLongPress}
+                      onOpenContextMenu={setContextMenuIdx}
+                      onRowClick={handleRowClick}
+                      onSyncHereAndIdealTime={syncHereAndIdealTime}
+                      onSyncToTulipa={syncToTulipa}
+                      onExitManualBrowse={exitManualBrowse}
+                    />
                   );
                 })
               )}

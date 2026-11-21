@@ -97,13 +97,28 @@ function loadReccePrefs(): ReccePrefs {
   }
 }
 
+let sharedRecceAudioCtx: AudioContext | null = null;
+
+function getRecceAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  if (sharedRecceAudioCtx && sharedRecceAudioCtx.state !== 'closed') {
+    if (sharedRecceAudioCtx.state === 'suspended') {
+      sharedRecceAudioCtx.resume().catch(() => {});
+    }
+    return sharedRecceAudioCtx;
+  }
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return null;
+  sharedRecceAudioCtx = new AudioCtx();
+  return sharedRecceAudioCtx;
+}
+
 function playRecceAlertTone(level: 'warning' | 'over') {
   try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const ctx = getRecceAudioContext();
+    if (!ctx) return;
 
     const triggerPulse = (freq: number, startOffset: number, dur: number, gainPeak: number) => {
       const osc = ctx.createOscillator();
@@ -125,8 +140,6 @@ function playRecceAlertTone(level: 'warning' | 'over') {
     } else {
       triggerPulse(880, 0, 0.12, 0.14);
     }
-
-    window.setTimeout(() => ctx.close().catch(() => {}), 600);
   } catch {
     // Ignore audio context restriction
   }
@@ -140,6 +153,20 @@ function formatClockTime(tsMs: number): string {
     String(d.getSeconds()).padStart(2, '0'),
   ].join(':');
 }
+
+const SurveyClockBadge: React.FC<{ clockOffsetMs: number }> = ({ clockOffsetMs }) => {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <span className="font-mono text-xs font-bold text-[#C0C4C9] tabular-nums">
+      <Satellite className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />
+      {formatClockTime(nowMs + clockOffsetMs)}
+    </span>
+  );
+};
 
 function signedAngleDiffDeg(fromDeg: number, toDeg: number): number {
   return ((toDeg - fromDeg + 540) % 360) - 180;
@@ -175,7 +202,11 @@ function renderManeuverIcon(kind: ManeuverKind) {
   }
 }
 
-export const SurveyCockpit: React.FC = () => {
+interface SurveyCockpitProps {
+  isActive?: boolean;
+}
+
+export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true }) => {
   const [settings, updateSettings] = useNavSettings();
   const [source, setSource] = useState<DriveMode>('gps');
   const [totalKm, setTotalKm] = useState(0);
@@ -189,11 +220,10 @@ export const SurveyCockpit: React.FC = () => {
   const [simRunning, setSimRunning] = useState(false);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState('10.00');
 
-  // Modo Recce: Limite de Velocidade configurável com alerta visual e sonoro
+  // Limite de Velocidade configurável com alerta visual e sonoro
   const [reccePrefs, setReccePrefs] = useState<ReccePrefs>(() => loadReccePrefs());
   const [recceOverCount, setRecceOverCount] = useState(0);
   const [reccePeakSpeedKmh, setReccePeakSpeedKmh] = useState(0);
@@ -222,11 +252,6 @@ export const SurveyCockpit: React.FC = () => {
       // ignore storage errors
     }
   }, [reccePrefs]);
-
-  useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 250);
-    return () => window.clearInterval(id);
-  }, []);
 
   // Build ordered navigable points from KML/KMZ (either polyline trace or traps fallback)
   const routeSamples: VelocitySample[] = useMemo(() => {
@@ -262,9 +287,9 @@ export const SurveyCockpit: React.FC = () => {
     [loadedTrack]
   );
 
-  // Real GPS watcher
+  // Real GPS watcher (active only when tab is active and GPS mode selected)
   useEffect(() => {
-    if (source !== 'gps') return;
+    if (!isActive || source !== 'gps') return;
     let cancelled = false;
     let webWid: number | null = null;
     let capWid: string | null = null;
@@ -320,10 +345,11 @@ export const SurveyCockpit: React.FC = () => {
       if (Capacitor.isNativePlatform()) {
         try {
           await Geolocation.requestPermissions();
-          capWid = await Geolocation.watchPosition(
+          if (cancelled) return;
+          const wid = await Geolocation.watchPosition(
             { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 },
             (pos, err) => {
-              if (!err && pos) {
+              if (!cancelled && !err && pos) {
                 handlePos(
                   pos.coords.latitude,
                   pos.coords.longitude,
@@ -335,6 +361,11 @@ export const SurveyCockpit: React.FC = () => {
               }
             }
           );
+          if (cancelled) {
+            Geolocation.clearWatch({ id: wid }).catch(() => {});
+            return;
+          }
+          capWid = wid;
         } catch {
           if (!cancelled) setGpsError('Erro ao acessar GPS nativo.');
         }
@@ -365,7 +396,7 @@ export const SurveyCockpit: React.FC = () => {
       if (webWid !== null && 'geolocation' in navigator) navigator.geolocation.clearWatch(webWid);
       if (capWid !== null) Geolocation.clearWatch({ id: capWid }).catch(() => {});
     };
-  }, [source]);
+  }, [isActive, source]);
 
   // Indoor Simulator (follows KML/KMZ route trace when imported!)
   useEffect(() => {
@@ -606,7 +637,6 @@ export const SurveyCockpit: React.FC = () => {
       ? Math.round(avgSpeedSamples.reduce((a, b) => a + b, 0) / avgSpeedSamples.length)
       : 0;
   const activeW = wValueFromCalibrationPct(settings.calibrationPct, settings.wBaseValue);
-  const officialClockMs = nowMs + settings.clockOffsetMs;
 
   const toggleWazeNavigation = () => {
     setWazeNavActive((prev) => {
@@ -634,17 +664,15 @@ export const SurveyCockpit: React.FC = () => {
   return (
     <div className="mx-auto max-w-5xl space-y-3 text-white">
       {/* Top Header: Levantamento + GPS/Simulador + Importar KML/KMZ */}
-      <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3.5 py-2.5">
+      <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2.5">
         <div className="flex items-center gap-2">
-          <Compass className="h-5 w-5 text-[#E10600]" />
-          <div>
-            <h1 className="font-['Barlow_Condensed'] text-xl font-extrabold italic tracking-wide uppercase sm:text-2xl">
-              Levantamento · Modo Recce &amp; KML/KMZ
-            </h1>
-          </div>
+          <Compass className="h-5 w-5 text-amber-400" />
+          <h1 className="font-['Barlow_Condensed'] text-lg font-extrabold italic tracking-wide uppercase sm:text-xl">
+            Levantamento · KML/KMZ
+          </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-0.5">
             <button
               type="button"
@@ -652,7 +680,7 @@ export const SurveyCockpit: React.FC = () => {
                 setSource('gps');
                 setSimRunning(false);
               }}
-              className={`min-h-[34px] rounded-md px-3 text-xs font-bold ${
+              className={`min-h-[34px] rounded-md px-2.5 text-xs font-bold ${
                 source === 'gps' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
               }`}
             >
@@ -661,11 +689,11 @@ export const SurveyCockpit: React.FC = () => {
             <button
               type="button"
               onClick={() => setSource('simulator')}
-              className={`min-h-[34px] rounded-md px-3 text-xs font-bold ${
+              className={`min-h-[34px] rounded-md px-2.5 text-xs font-bold ${
                 source === 'simulator' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
               }`}
             >
-              Simulador
+              Sim
             </button>
           </div>
 
@@ -679,233 +707,38 @@ export const SurveyCockpit: React.FC = () => {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 text-xs font-bold text-white hover:border-[#E10600]"
+            className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-bold text-white hover:border-[#E10600]"
           >
             <Upload className="h-3.5 w-3.5 text-[#E10600]" />
-            <span>Importar KML / KMZ</span>
+            <span>KML/KMZ</span>
           </button>
 
-          <span className="font-mono text-xs font-bold text-[#C0C4C9] tabular-nums">
-            <Satellite className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />
-            {formatClockTime(officialClockMs)}
-          </span>
+          <SurveyClockBadge clockOffsetMs={settings.clockOffsetMs} />
         </div>
       </section>
 
-      {/* MODO RECCE: Controle Rígido de Velocidade + Alerta Visual & Sonoro */}
-      <section
-        className={`rounded-2xl border p-3.5 transition-colors sm:p-4 ${
-          recceZone === 'over'
-            ? 'animate-pulse border-red-500 bg-red-950/85 shadow-[0_0_28px_rgba(225,6,0,0.55)]'
-            : recceZone === 'warning'
-              ? 'border-amber-400 bg-amber-950/60 shadow-[0_0_20px_rgba(245,158,11,0.35)]'
-              : 'border-zinc-800 bg-[#111214]'
-        }`}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      {/* Compact Top Alert Strip (only shown when warning/exceeding limit) */}
+      {(recceZone === 'over' || recceZone === 'warning') && (
+        <section
+          className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${
+            recceZone === 'over'
+              ? 'animate-pulse border-red-500 bg-red-950/85 text-red-200'
+              : 'border-amber-400 bg-amber-950/60 text-amber-200'
+          }`}
+        >
           <div className="flex items-center gap-2">
-            {recceZone === 'over' || recceZone === 'warning' ? (
-              <AlertTriangle
-                className={`h-5 w-5 shrink-0 ${
-                  recceZone === 'over' ? 'text-red-300' : 'text-amber-300'
-                }`}
-              />
-            ) : (
-              <ShieldAlert className="h-5 w-5 shrink-0 text-[#E10600]" />
-            )}
-            <div>
-              <h2 className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide uppercase sm:text-xl">
-                Modo Recce · Controle de Limite de Velocidade
-              </h2>
-              <p className="font-mono text-[11px] text-[#C0C4C9]">
-                {recceZone === 'over'
-                  ? `ACIMA DO LIMITE (${speedKmh} / ${reccePrefs.speedLimitKmh} km/h) — REDUZA IMEDIATAMENTE!`
-                  : recceZone === 'warning'
-                    ? `ATENÇÃO: Próximo do limite (${speedKmh} / ${reccePrefs.speedLimitKmh} km/h)`
-                    : reccePrefs.enabled
-                      ? `Monitorando limite rígido de ${reccePrefs.speedLimitKmh} km/h (aviso em ${warnThresholdKmh} km/h)`
-                      : 'Monitoramento de limite de velocidade desativado'}
-              </p>
-            </div>
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>
+              {recceZone === 'over'
+                ? `ACIMA DO LIMITE: ${speedKmh} / ${reccePrefs.speedLimitKmh} km/h — REDUZA!`
+                : `Próximo do limite: ${speedKmh} / ${reccePrefs.speedLimitKmh} km/h`}
+            </span>
           </div>
-
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() =>
-                setReccePrefs((p) => ({ ...p, soundEnabled: !p.soundEnabled }))
-              }
-              title={reccePrefs.soundEnabled ? 'Silenciar alerta sonoro' : 'Ativar alerta sonoro'}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
-            >
-              {reccePrefs.soundEnabled ? (
-                <Volume2 className="h-4 w-4 text-emerald-400" />
-              ) : (
-                <VolumeX className="h-4 w-4 text-zinc-500" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setReccePrefs((p) => ({ ...p, enabled: !p.enabled }))
-              }
-              className={`min-h-[36px] rounded-lg px-3.5 text-xs font-extrabold uppercase ${
-                reccePrefs.enabled
-                  ? 'pitstop-btn-red text-white'
-                  : 'border border-zinc-700 bg-[#080B0D] text-zinc-400'
-              }`}
-            >
-              {reccePrefs.enabled ? 'Recce Ativo' : 'Ativar Recce'}
-            </button>
-          </div>
-        </div>
-
-        {/* Visual Speedometer Bar vs Configured Limit */}
-        {reccePrefs.enabled && (
-          <div className="mt-3 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums">
-              <span>
-                Atual:{' '}
-                <strong
-                  className={`text-lg font-black ${
-                    recceZone === 'over'
-                      ? 'text-red-300'
-                      : recceZone === 'warning'
-                        ? 'text-amber-300'
-                        : 'text-emerald-400'
-                  }`}
-                >
-                  {speedKmh} km/h
-                </strong>
-              </span>
-              <span className="text-[#C0C4C9]">
-                Aviso em <strong className="text-amber-300">{warnThresholdKmh}</strong> · Limite{' '}
-                <strong className="text-white">{reccePrefs.speedLimitKmh} km/h</strong>
-              </span>
-              <span className="text-[#C0C4C9]">
-                Excedências:{' '}
-                <strong className={recceOverCount > 0 ? 'text-[#FF2A2A]' : 'text-emerald-400'}>
-                  {recceOverCount}
-                </strong>
-                {reccePeakSpeedKmh > 0 ? ` (Pico ${reccePeakSpeedKmh})` : ''}
-              </span>
-            </div>
-
-            <div className="relative h-3.5 w-full overflow-hidden rounded-full border border-zinc-700 bg-[#080B0D]">
-              <div
-                className={`h-full transition-all duration-150 ${
-                  recceZone === 'over'
-                    ? 'bg-[#FF2A2A]'
-                    : recceZone === 'warning'
-                      ? 'bg-amber-400'
-                      : 'bg-emerald-500'
-                }`}
-                style={{ width: `${speedPctOfLimit}%` }}
-              />
-            </div>
-
-            {/* Configurable Limit & Pre-Warning Margin Controls */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="font-mono text-[11px] font-bold text-[#B5B5B5] uppercase">
-                  Limite:
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setReccePrefs((p) => ({
-                      ...p,
-                      speedLimitKmh: Math.max(10, p.speedLimitKmh - 5),
-                    }))
-                  }
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
-                  aria-label="Diminuir limite em 5 km/h"
-                >
-                  −
-                </button>
-                <input
-                  type="number"
-                  min={10}
-                  max={200}
-                  step={5}
-                  value={reccePrefs.speedLimitKmh}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (Number.isFinite(n)) {
-                      setReccePrefs((p) => ({
-                        ...p,
-                        speedLimitKmh: Math.min(200, Math.max(10, Math.round(n))),
-                      }));
-                    }
-                  }}
-                  aria-label="Limite de velocidade em km/h"
-                  className="h-8 w-16 rounded-md border border-zinc-700 bg-[#080B0D] text-center font-mono text-xs font-extrabold text-white focus:border-[#E10600] focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() =>
-                    setReccePrefs((p) => ({
-                      ...p,
-                      speedLimitKmh: Math.min(200, p.speedLimitKmh + 5),
-                    }))
-                  }
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
-                  aria-label="Aumentar limite em 5 km/h"
-                >
-                  +
-                </button>
-
-                {[40, 50, 60, 80, 100].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => setReccePrefs((p) => ({ ...p, speedLimitKmh: preset }))}
-                    className={`h-8 rounded-md px-2 font-mono text-[11px] font-bold ${
-                      reccePrefs.speedLimitKmh === preset
-                        ? 'bg-[#E10600] text-white'
-                        : 'border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
-                    }`}
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="font-mono text-[11px] font-bold text-[#B5B5B5] uppercase">
-                  Pré-alerta:
-                </span>
-                {[3, 5, 10].map((margin) => (
-                  <button
-                    key={margin}
-                    type="button"
-                    onClick={() => setReccePrefs((p) => ({ ...p, warningMarginKmh: margin }))}
-                    className={`h-8 rounded-md px-2 font-mono text-[11px] font-bold ${
-                      reccePrefs.warningMarginKmh === margin
-                        ? 'bg-amber-400 text-slate-950 font-extrabold'
-                        : 'border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
-                    }`}
-                  >
-                    -{margin} km/h
-                  </button>
-                ))}
-                {recceOverCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRecceOverCount(0);
-                      setReccePeakSpeedKmh(0);
-                    }}
-                    className="ml-1 text-[11px] font-semibold text-zinc-400 underline hover:text-white"
-                  >
-                    Zerar registro
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
+          <span className="font-mono text-[11px] tabular-nums">
+            Pico {Math.max(reccePeakSpeedKmh, speedKmh)}
+          </span>
+        </section>
+      )}
 
       {importError && (
         <div className="rounded-lg border border-red-500/40 bg-red-950/30 px-3.5 py-2 text-xs text-red-200">
@@ -1073,7 +906,7 @@ export const SurveyCockpit: React.FC = () => {
               <span>Zerar Total</span>
             </button>
           </div>
-          <div className="my-3 text-center font-mono text-5xl font-black tracking-tight text-white tabular-nums sm:text-6xl">
+          <div className="my-2 text-center font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
             {totalKm.toFixed(3).replace('.', ',')}
           </div>
           <div className="grid grid-cols-4 gap-1.5">
@@ -1154,41 +987,242 @@ export const SurveyCockpit: React.FC = () => {
         </div>
       </section>
 
-      {/* Live Speed Metrics */}
-      <section className="grid grid-cols-3 gap-2.5 font-mono tabular-nums">
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
-          <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Atual</p>
-          <p
-            className={`mt-0.5 text-3xl font-black sm:text-4xl ${
-              recceZone === 'over'
-                ? 'text-[#FF2A2A]'
-                : recceZone === 'warning'
-                  ? 'text-amber-300'
-                  : 'text-white'
-            }`}
-          >
-            {speedKmh}
-          </p>
-          <p className="text-[10px] font-bold text-[#E10600]">KM/H</p>
+      {/* Live Speed Metrics + Limite de Velocidade (Levantamento) */}
+      <section className="space-y-3">
+        <div className="grid grid-cols-3 gap-2.5 font-mono tabular-nums">
+          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
+            <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Atual</p>
+            <p
+              className={`mt-0.5 text-3xl font-black sm:text-4xl ${
+                recceZone === 'over'
+                  ? 'text-[#FF2A2A]'
+                  : recceZone === 'warning'
+                    ? 'text-amber-300'
+                    : 'text-white'
+              }`}
+            >
+              {speedKmh}
+            </p>
+            <p className="text-[10px] font-bold text-[#E10600]">KM/H</p>
+          </div>
+          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
+            <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Média</p>
+            <p className="mt-0.5 text-3xl font-black text-emerald-400 sm:text-4xl">{avgSpeedKmh}</p>
+            <p className="text-[10px] text-zinc-400">KM/H</p>
+          </div>
+          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
+            <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Máxima</p>
+            <p className="mt-0.5 text-3xl font-black text-amber-300 sm:text-4xl">{maxSpeedKmh}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setMaxSpeedKmh(0);
+                setAvgSpeedSamples([]);
+              }}
+              className="text-[10px] text-zinc-500 hover:text-white underline"
+            >
+              limpar
+            </button>
+          </div>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
-          <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Média</p>
-          <p className="mt-0.5 text-3xl font-black text-emerald-400 sm:text-4xl">{avgSpeedKmh}</p>
-          <p className="text-[10px] text-zinc-400">KM/H</p>
-        </div>
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
-          <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Máxima</p>
-          <p className="mt-0.5 text-3xl font-black text-amber-300 sm:text-4xl">{maxSpeedKmh}</p>
-          <button
-            type="button"
-            onClick={() => {
-              setMaxSpeedKmh(0);
-              setAvgSpeedSamples([]);
-            }}
-            className="text-[10px] text-zinc-500 hover:text-white underline"
-          >
-            limpar
-          </button>
+
+        {/* Controle de Limite de Velocidade no Levantamento junto com as velocidades */}
+        <div
+          className={`rounded-2xl border p-3 transition-colors sm:p-4 ${
+            recceZone === 'over'
+              ? 'border-red-500 bg-red-950/85 shadow-[0_0_24px_rgba(225,6,0,0.45)]'
+              : recceZone === 'warning'
+                ? 'border-amber-400 bg-amber-950/60 shadow-[0_0_16px_rgba(245,158,11,0.3)]'
+                : 'border-zinc-800 bg-[#111214]'
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              {recceZone === 'over' || recceZone === 'warning' ? (
+                <AlertTriangle
+                  className={`h-5 w-5 shrink-0 ${
+                    recceZone === 'over' ? 'text-red-300' : 'text-amber-300'
+                  }`}
+                />
+              ) : (
+                <ShieldAlert className="h-5 w-5 shrink-0 text-[#E10600]" />
+              )}
+              <div>
+                <h2 className="font-['Barlow_Condensed'] text-base font-extrabold tracking-wide uppercase sm:text-lg">
+                  Limite de Velocidade (Levantamento)
+                </h2>
+                <p className="font-mono text-[11px] text-[#C0C4C9]">
+                  {recceZone === 'over'
+                    ? `ACIMA DO LIMITE (${speedKmh} / ${reccePrefs.speedLimitKmh} km/h) — REDUZA!`
+                    : recceZone === 'warning'
+                      ? `ATENÇÃO: Próximo do limite (${speedKmh} / ${reccePrefs.speedLimitKmh} km/h)`
+                      : reccePrefs.enabled
+                        ? `Limite ${reccePrefs.speedLimitKmh} km/h (aviso ${warnThresholdKmh} km/h)`
+                        : 'Monitoramento de limite desativado'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  setReccePrefs((p) => ({ ...p, soundEnabled: !p.soundEnabled }))
+                }
+                title={reccePrefs.soundEnabled ? 'Silenciar alerta sonoro' : 'Ativar alerta sonoro'}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
+              >
+                {reccePrefs.soundEnabled ? (
+                  <Volume2 className="h-4 w-4 text-emerald-400" />
+                ) : (
+                  <VolumeX className="h-4 w-4 text-zinc-500" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setReccePrefs((p) => ({ ...p, enabled: !p.enabled }))
+                }
+                className={`min-h-[36px] rounded-lg px-3 text-xs font-extrabold uppercase ${
+                  reccePrefs.enabled
+                    ? 'pitstop-btn-red text-white'
+                    : 'border border-zinc-700 bg-[#080B0D] text-zinc-400'
+                }`}
+              >
+                {reccePrefs.enabled ? 'Ativo' : 'Ativar'}
+              </button>
+            </div>
+          </div>
+
+          {reccePrefs.enabled && (
+            <div className="mt-3 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums">
+                <span className="text-[#C0C4C9]">
+                  Aviso em <strong className="text-amber-300">{warnThresholdKmh}</strong> · Limite{' '}
+                  <strong className="text-white">{reccePrefs.speedLimitKmh} km/h</strong>
+                </span>
+                <span className="text-[#C0C4C9]">
+                  Excedências:{' '}
+                  <strong className={recceOverCount > 0 ? 'text-[#FF2A2A]' : 'text-emerald-400'}>
+                    {recceOverCount}
+                  </strong>
+                  {reccePeakSpeedKmh > 0 ? ` (Pico ${reccePeakSpeedKmh})` : ''}
+                </span>
+              </div>
+
+              <div className="relative h-3.5 w-full overflow-hidden rounded-full border border-zinc-700 bg-[#080B0D]">
+                <div
+                  className={`h-full transition-all duration-150 ${
+                    recceZone === 'over'
+                      ? 'bg-[#FF2A2A]'
+                      : recceZone === 'warning'
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-500'
+                  }`}
+                  style={{ width: `${speedPctOfLimit}%` }}
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-mono text-[11px] font-bold text-[#B5B5B5] uppercase">
+                    Limite:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setReccePrefs((p) => ({
+                        ...p,
+                        speedLimitKmh: Math.max(10, p.speedLimitKmh - 5),
+                      }))
+                    }
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
+                    aria-label="Diminuir limite em 5 km/h"
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min={10}
+                    max={200}
+                    step={5}
+                    value={reccePrefs.speedLimitKmh}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isFinite(n)) {
+                        setReccePrefs((p) => ({
+                          ...p,
+                          speedLimitKmh: Math.min(200, Math.max(10, Math.round(n))),
+                        }));
+                      }
+                    }}
+                    aria-label="Limite de velocidade em km/h"
+                    className="h-8 w-16 rounded-md border border-zinc-700 bg-[#080B0D] text-center font-mono text-xs font-extrabold text-white focus:border-[#E10600] focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setReccePrefs((p) => ({
+                        ...p,
+                        speedLimitKmh: Math.min(200, p.speedLimitKmh + 5),
+                      }))
+                    }
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
+                    aria-label="Aumentar limite em 5 km/h"
+                  >
+                    +
+                  </button>
+
+                  {[40, 50, 60, 80, 100].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setReccePrefs((p) => ({ ...p, speedLimitKmh: preset }))}
+                      className={`h-8 rounded-md px-2 font-mono text-[11px] font-bold ${
+                        reccePrefs.speedLimitKmh === preset
+                          ? 'bg-[#E10600] text-white'
+                          : 'border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-mono text-[11px] font-bold text-[#B5B5B5] uppercase">
+                    Pré-alerta:
+                  </span>
+                  {[3, 5, 10].map((margin) => (
+                    <button
+                      key={margin}
+                      type="button"
+                      onClick={() => setReccePrefs((p) => ({ ...p, warningMarginKmh: margin }))}
+                      className={`h-8 rounded-md px-2 font-mono text-[11px] font-bold ${
+                        reccePrefs.warningMarginKmh === margin
+                          ? 'bg-amber-400 text-slate-950 font-extrabold'
+                          : 'border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
+                      }`}
+                    >
+                      -{margin} km/h
+                    </button>
+                  ))}
+                  {recceOverCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecceOverCount(0);
+                        setReccePeakSpeedKmh(0);
+                      }}
+                      className="ml-1 text-[11px] font-semibold text-zinc-400 underline hover:text-white"
+                    >
+                      Zerar registro
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
