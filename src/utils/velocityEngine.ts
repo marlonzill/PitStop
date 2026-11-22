@@ -1443,7 +1443,7 @@ export interface LapComparisonSummary {
   corners: CornerComparisonMetric[];
 }
 
-function interpolateSampleAtDist(
+export function interpolateSampleAtDist(
   samples: VelocitySample[],
   targetDistKm: number
 ): VelocitySample | null {
@@ -1455,18 +1455,70 @@ function interpolateSampleAtDist(
     if (targetDistKm <= b.distKm) {
       const span = b.distKm - a.distKm;
       const frac = span > 1e-6 ? Math.max(0, Math.min(1, (targetDistKm - a.distKm) / span)) : 0;
+      const aLongG = typeof a.accelLongG === 'number' ? a.accelLongG : 0;
+      const bLongG = typeof b.accelLongG === 'number' ? b.accelLongG : 0;
+      const aLatG = typeof a.accelLatG === 'number' ? a.accelLatG : 0;
+      const bLatG = typeof b.accelLatG === 'number' ? b.accelLatG : 0;
       return {
         lat: a.lat + (b.lat - a.lat) * frac,
         lon: a.lon + (b.lon - a.lon) * frac,
         speedKmh: a.speedKmh + (b.speedKmh - a.speedKmh) * frac,
         accuracyM: b.accuracyM,
         headingDeg: b.headingDeg,
-        altitudeM: b.altitudeM,
+        altitudeM:
+          a.altitudeM !== null && b.altitudeM !== null
+            ? a.altitudeM + (b.altitudeM - a.altitudeM) * frac
+            : b.altitudeM,
         timestampMs: Math.round(a.timestampMs + (b.timestampMs - a.timestampMs) * frac),
         distKm: targetDistKm,
         stageElapsedMs: Math.round(
           a.stageElapsedMs + (b.stageElapsedMs - a.stageElapsedMs) * frac
         ),
+        accelLongG: Number((aLongG + (bLongG - aLongG) * frac).toFixed(2)),
+        accelLatG: Number((aLatG + (bLatG - aLatG) * frac).toFixed(2)),
+      };
+    }
+  }
+  return samples[samples.length - 1];
+}
+
+export function interpolateSampleAtElapsedMs(
+  samples: VelocitySample[],
+  targetElapsedMs: number
+): VelocitySample | null {
+  if (samples.length === 0) return null;
+  if (targetElapsedMs <= samples[0].stageElapsedMs) return samples[0];
+  for (let i = 1; i < samples.length; i += 1) {
+    const a = samples[i - 1];
+    const b = samples[i];
+    if (targetElapsedMs <= b.stageElapsedMs) {
+      const span = b.stageElapsedMs - a.stageElapsedMs;
+      const frac =
+        span > 1 ? Math.max(0, Math.min(1, (targetElapsedMs - a.stageElapsedMs) / span)) : 0;
+      const aLongG = typeof a.accelLongG === 'number' ? a.accelLongG : 0;
+      const bLongG = typeof b.accelLongG === 'number' ? b.accelLongG : 0;
+      const aLatG = typeof a.accelLatG === 'number' ? a.accelLatG : 0;
+      const bLatG = typeof b.accelLatG === 'number' ? b.accelLatG : 0;
+      let interpHeading: number | null = b.headingDeg ?? a.headingDeg;
+      if (typeof a.headingDeg === 'number' && typeof b.headingDeg === 'number') {
+        const deltaH = ((b.headingDeg - a.headingDeg + 540) % 360) - 180;
+        interpHeading = Math.round((((a.headingDeg + deltaH * frac) % 360) + 360) % 360);
+      }
+      return {
+        lat: a.lat + (b.lat - a.lat) * frac,
+        lon: a.lon + (b.lon - a.lon) * frac,
+        speedKmh: a.speedKmh + (b.speedKmh - a.speedKmh) * frac,
+        accuracyM: b.accuracyM,
+        headingDeg: interpHeading,
+        altitudeM:
+          a.altitudeM !== null && b.altitudeM !== null
+            ? a.altitudeM + (b.altitudeM - a.altitudeM) * frac
+            : b.altitudeM,
+        timestampMs: Math.round(a.timestampMs + (b.timestampMs - a.timestampMs) * frac),
+        distKm: a.distKm + (b.distKm - a.distKm) * frac,
+        stageElapsedMs: Math.round(targetElapsedMs),
+        accelLongG: Number((aLongG + (bLongG - aLongG) * frac).toFixed(2)),
+        accelLatG: Number((aLatG + (bLatG - aLatG) * frac).toFixed(2)),
       };
     }
   }
@@ -1585,4 +1637,453 @@ export function computeLapComparisonSummary(
     avgSpeedDeltaKmh: Math.round(lapA.avgSpeedKmh - lapB.avgSpeedKmh),
     corners,
   };
+}
+
+export interface TrackSectorDef {
+  index: number;
+  key: string;
+  label: string;
+  shortLabel: string;
+  fromDistKm: number;
+  toDistKm: number;
+  fromTrapId?: string;
+  toTrapId?: string;
+  isTrapBased: boolean;
+}
+
+export interface SectorRunMetrics {
+  sectorIndex: number;
+  label: string;
+  shortLabel: string;
+  durationMs: number | null;
+  maxSpeedKmh: number | null;
+  avgSpeedKmh: number | null;
+  exitSpeedKmh: number | null;
+  fromDistKm: number;
+  toDistKm: number;
+}
+
+export interface SectorComparisonRow {
+  index: number;
+  label: string;
+  shortLabel: string;
+  fromDistM: number;
+  toDistM: number;
+  isTrapBased: boolean;
+  lapA: SectorRunMetrics;
+  lapB: SectorRunMetrics;
+  timeDeltaSec: number | null;
+  maxSpeedDeltaKmh: number | null;
+  avgSpeedDeltaKmh: number | null;
+  exitSpeedDeltaKmh: number | null;
+}
+
+export interface LiveSectorCardStatus {
+  index: number;
+  shortLabel: string;
+  label: string;
+  status: 'completed' | 'active' | 'future';
+  currentMaxKmh: number | null;
+  refMaxKmh: number | null;
+  deltaKmh: number | null;
+}
+
+function findNearestTraceDistKm(trace: VelocitySample[], lat: number, lon: number): number | null {
+  if (trace.length === 0) return null;
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < trace.length; i += 1) {
+    const d = haversineMetersVel(lat, lon, trace[i].lat, trace[i].lon);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  return trace[bestIdx].distKm;
+}
+
+/**
+ * Divide a pista pelos marcos (traps) intermediários cadastrados
+ * ou automaticamente em 4 trechos iguais de distância caso não haja parciais.
+ */
+export function buildTrackSectors(
+  track: VelocityTrack | null,
+  referenceRuns: VelocityRun[] = [],
+  fallbackDistKm = 0
+): TrackSectorDef[] {
+  const maxRunDist = referenceRuns.reduce((acc, r) => {
+    const lastSampleDist =
+      r.samples.length > 0 ? r.samples[r.samples.length - 1].distKm : 0;
+    return Math.max(acc, r.distanceKm || 0, lastSampleDist);
+  }, 0);
+
+  const totalDistKm = Math.max(
+    0.2,
+    fallbackDistKm,
+    track?.referenceDistanceKm || 0,
+    maxRunDist
+  );
+
+  if (track) {
+    const ordered = getOrderedTrackTraps(track);
+    const startTrap = ordered.find(
+      (t) => t.kind === 'start' || t.kind === 'start_finish'
+    );
+    const splits = ordered.filter((t) => t.kind === 'split');
+    const finishTrap =
+      ordered.find((t) => t.kind === 'finish') ??
+      (startTrap?.kind === 'start_finish' ? startTrap : undefined);
+
+    if (startTrap && splits.length > 0 && finishTrap) {
+      const checkpoints = [...splits, finishTrap];
+      const trace =
+        referenceRuns.find((r) => r.samples.length >= 2)?.samples ??
+        track.baseTrace ??
+        [];
+
+      const resolveTrapDist = (trap: VelocityTrap, isFinal: boolean): number => {
+        if (isFinal) return totalDistKm;
+        for (const run of referenceRuns) {
+          const tMs = run.splitTimesMs[trap.id];
+          if (typeof tMs === 'number' && tMs > 0 && run.samples.length >= 2) {
+            const s = interpolateSampleAtElapsedMs(run.samples, tMs);
+            if (s && s.distKm > 0) return s.distKm;
+          }
+        }
+        const nearDist = findNearestTraceDistKm(trace, trap.lat, trap.lon);
+        if (nearDist !== null && nearDist > 0 && nearDist < totalDistKm) {
+          return nearDist;
+        }
+        return 0;
+      };
+
+      const rawBoundaries: number[] = [0];
+      checkpoints.forEach((cp, idx) => {
+        const isFinal = idx === checkpoints.length - 1;
+        let d = resolveTrapDist(cp, isFinal);
+        const prevD = rawBoundaries[rawBoundaries.length - 1];
+        if (!isFinal && (d <= prevD + 0.02 || d >= totalDistKm - 0.02)) {
+          d = ((idx + 1) / checkpoints.length) * totalDistKm;
+        }
+        rawBoundaries.push(isFinal ? totalDistKm : Math.max(prevD + 0.01, Math.min(totalDistKm - 0.01, d)));
+      });
+
+      let prevTrapId = startTrap.id;
+      return checkpoints.map((cp, idx) => {
+        const isFinal = idx === checkpoints.length - 1;
+        const fromDistKm = rawBoundaries[idx];
+        const toDistKm = rawBoundaries[idx + 1];
+        const sectorDef: TrackSectorDef = {
+          index: idx + 1,
+          key: `trap_sec_${idx + 1}_${cp.id}`,
+          label: `Setor ${idx + 1}`,
+          shortLabel: `S${idx + 1}`,
+          fromDistKm,
+          toDistKm,
+          fromTrapId: prevTrapId,
+          toTrapId: isFinal ? finishTrap.id : cp.id,
+          isTrapBased: true,
+        };
+        prevTrapId = cp.id;
+        return sectorDef;
+      });
+    }
+  }
+
+  // Fallback automático em 4 trechos iguais de distância
+  const sectorCount = 4;
+  return Array.from({ length: sectorCount }, (_, idx) => {
+    const fromDistKm = (idx / sectorCount) * totalDistKm;
+    const toDistKm = ((idx + 1) / sectorCount) * totalDistKm;
+    return {
+      index: idx + 1,
+      key: `auto_sec_${idx + 1}`,
+      label: `Setor ${idx + 1}`,
+      shortLabel: `S${idx + 1}`,
+      fromDistKm,
+      toDistKm,
+      isTrapBased: false,
+    };
+  });
+}
+
+export function computeRunSectorMetrics(
+  run: VelocityRun,
+  sectors: TrackSectorDef[]
+): SectorRunMetrics[] {
+  const samples = ensureTraceGForces(run.samples);
+  const runEndDistKm =
+    samples.length > 0 ? samples[samples.length - 1].distKm : run.distanceKm;
+
+  return sectors.map((sec, idx) => {
+    const isLast = idx === sectors.length - 1;
+    let startElapsedMs: number | null = null;
+    let endElapsedMs: number | null = null;
+
+    if (sec.isTrapBased && sec.fromTrapId && sec.toTrapId) {
+      const fromT =
+        idx === 0
+          ? 0
+          : typeof run.splitTimesMs[sec.fromTrapId] === 'number'
+            ? run.splitTimesMs[sec.fromTrapId]
+            : null;
+      const toT = isLast
+        ? run.splitTimesMs[sec.toTrapId] ?? run.totalMs
+        : typeof run.splitTimesMs[sec.toTrapId] === 'number'
+          ? run.splitTimesMs[sec.toTrapId]
+          : null;
+      if (fromT !== null && toT !== null && toT > fromT) {
+        startElapsedMs = fromT;
+        endElapsedMs = toT;
+      }
+    }
+
+    if (samples.length < 2) {
+      return {
+        sectorIndex: sec.index,
+        label: sec.label,
+        shortLabel: sec.shortLabel,
+        durationMs:
+          startElapsedMs !== null && endElapsedMs !== null
+            ? endElapsedMs - startElapsedMs
+            : null,
+        maxSpeedKmh: null,
+        avgSpeedKmh: null,
+        exitSpeedKmh: null,
+        fromDistKm: sec.fromDistKm,
+        toDistKm: sec.toDistKm,
+      };
+    }
+
+    const startSample =
+      startElapsedMs !== null
+        ? interpolateSampleAtElapsedMs(samples, startElapsedMs)
+        : interpolateSampleAtDist(samples, Math.min(runEndDistKm, sec.fromDistKm));
+    const endSample =
+      endElapsedMs !== null
+        ? interpolateSampleAtElapsedMs(samples, endElapsedMs)
+        : interpolateSampleAtDist(
+            samples,
+            isLast ? runEndDistKm : Math.min(runEndDistKm, sec.toDistKm)
+          );
+
+    if (!startSample || !endSample) {
+      return {
+        sectorIndex: sec.index,
+        label: sec.label,
+        shortLabel: sec.shortLabel,
+        durationMs: null,
+        maxSpeedKmh: null,
+        avgSpeedKmh: null,
+        exitSpeedKmh: null,
+        fromDistKm: sec.fromDistKm,
+        toDistKm: sec.toDistKm,
+      };
+    }
+
+    const sStartMs = startElapsedMs ?? startSample.stageElapsedMs;
+    const sEndMs = endElapsedMs ?? endSample.stageElapsedMs;
+    const durationMs = sEndMs > sStartMs ? Math.round(sEndMs - sStartMs) : null;
+
+    const inside = samples.filter(
+      (s) => s.stageElapsedMs >= sStartMs && s.stageElapsedMs <= sEndMs
+    );
+    const pool = [startSample, ...inside, endSample];
+
+    const maxSpeedKmh = Math.round(
+      pool.reduce((m, s) => Math.max(m, s.speedKmh || 0), 0)
+    );
+
+    const spanDistKm = Math.max(0, endSample.distKm - startSample.distKm);
+    const avgSpeedKmh =
+      durationMs && durationMs > 0 && spanDistKm > 0.005
+        ? Math.round(spanDistKm / (durationMs / 3600000))
+        : Math.round(
+            pool.reduce((sum, s) => sum + (s.speedKmh || 0), 0) / Math.max(1, pool.length)
+          );
+
+    const exitSpeedKmh = Math.round(endSample.speedKmh || 0);
+
+    return {
+      sectorIndex: sec.index,
+      label: sec.label,
+      shortLabel: sec.shortLabel,
+      durationMs,
+      maxSpeedKmh,
+      avgSpeedKmh,
+      exitSpeedKmh,
+      fromDistKm: startSample.distKm,
+      toDistKm: endSample.distKm,
+    };
+  });
+}
+
+export function computeSectorComparisonRows(
+  track: VelocityTrack | null,
+  lapA: VelocityRun,
+  lapB: VelocityRun
+): { sectors: TrackSectorDef[]; rows: SectorComparisonRow[] } {
+  const sectors = buildTrackSectors(
+    track,
+    [lapA, lapB],
+    Math.max(lapA.distanceKm || 0, lapB.distanceKm || 0)
+  );
+  const metricsA = computeRunSectorMetrics(lapA, sectors);
+  const metricsB = computeRunSectorMetrics(lapB, sectors);
+
+  const rows: SectorComparisonRow[] = sectors.map((sec, idx) => {
+    const a = metricsA[idx];
+    const b = metricsB[idx];
+    const timeDeltaSec =
+      a.durationMs !== null && b.durationMs !== null
+        ? Number(((a.durationMs - b.durationMs) / 1000).toFixed(2))
+        : null;
+    const maxSpeedDeltaKmh =
+      a.maxSpeedKmh !== null && b.maxSpeedKmh !== null
+        ? Math.round(a.maxSpeedKmh - b.maxSpeedKmh)
+        : null;
+    const avgSpeedDeltaKmh =
+      a.avgSpeedKmh !== null && b.avgSpeedKmh !== null
+        ? Math.round(a.avgSpeedKmh - b.avgSpeedKmh)
+        : null;
+    const exitSpeedDeltaKmh =
+      a.exitSpeedKmh !== null && b.exitSpeedKmh !== null
+        ? Math.round(a.exitSpeedKmh - b.exitSpeedKmh)
+        : null;
+
+    return {
+      index: sec.index,
+      label: sec.label,
+      shortLabel: sec.shortLabel,
+      fromDistM: Math.round(sec.fromDistKm * 1000),
+      toDistM: Math.round(sec.toDistKm * 1000),
+      isTrapBased: sec.isTrapBased,
+      lapA: a,
+      lapB: b,
+      timeDeltaSec,
+      maxSpeedDeltaKmh,
+      avgSpeedDeltaKmh,
+      exitSpeedDeltaKmh,
+    };
+  });
+
+  return { sectors, rows };
+}
+
+export function computeLiveSectorCards(params: {
+  track: VelocityTrack | null;
+  bestRun: VelocityRun | null;
+  stageState: 'idle' | 'armed' | 'running' | 'finished';
+  totalDistKm: number;
+  liveSamples: VelocitySample[];
+  currentSplitTimesMs: Record<string, number>;
+  currentSpeedKmh: number;
+}): LiveSectorCardStatus[] {
+  const {
+    track,
+    bestRun,
+    stageState,
+    totalDistKm,
+    liveSamples,
+    currentSplitTimesMs,
+    currentSpeedKmh,
+  } = params;
+
+  const sectors = buildTrackSectors(
+    track,
+    bestRun ? [bestRun] : [],
+    Math.max(totalDistKm, bestRun?.distanceKm || 0, track?.referenceDistanceKm || 0)
+  );
+  const bestMetrics = bestRun ? computeRunSectorMetrics(bestRun, sectors) : [];
+
+  let activeIdx = -1;
+  if (stageState === 'running') {
+    if (sectors.some((s) => s.isTrapBased)) {
+      activeIdx = sectors.findIndex(
+        (s, idx) =>
+          idx === sectors.length - 1 ||
+          !s.toTrapId ||
+          currentSplitTimesMs[s.toTrapId] === undefined
+      );
+    } else {
+      activeIdx = sectors.findIndex(
+        (s, idx) => idx === sectors.length - 1 || totalDistKm < s.toDistKm
+      );
+    }
+    if (activeIdx < 0) activeIdx = sectors.length - 1;
+  }
+
+  return sectors.map((sec, idx) => {
+    const refMaxKmh = bestMetrics[idx]?.maxSpeedKmh ?? null;
+
+    if (stageState === 'idle' || stageState === 'armed') {
+      return {
+        index: sec.index,
+        shortLabel: sec.shortLabel,
+        label: sec.label,
+        status: 'future',
+        currentMaxKmh: null,
+        refMaxKmh,
+        deltaKmh: null,
+      };
+    }
+
+    const isCompleted =
+      stageState === 'finished' || (stageState === 'running' && idx < activeIdx);
+    const isActive = stageState === 'running' && idx === activeIdx;
+
+    if (!isCompleted && !isActive) {
+      return {
+        index: sec.index,
+        shortLabel: sec.shortLabel,
+        label: sec.label,
+        status: 'future',
+        currentMaxKmh: null,
+        refMaxKmh,
+        deltaKmh: null,
+      };
+    }
+
+    let sectorSamples: VelocitySample[] = [];
+    if (sec.isTrapBased) {
+      const startMs =
+        idx === 0
+          ? 0
+          : sec.fromTrapId && typeof currentSplitTimesMs[sec.fromTrapId] === 'number'
+            ? currentSplitTimesMs[sec.fromTrapId]
+            : 0;
+      const endMs =
+        sec.toTrapId && typeof currentSplitTimesMs[sec.toTrapId] === 'number'
+          ? currentSplitTimesMs[sec.toTrapId]
+          : Infinity;
+      sectorSamples = liveSamples.filter(
+        (s) => s.stageElapsedMs >= startMs && s.stageElapsedMs <= endMs
+      );
+    } else {
+      sectorSamples = liveSamples.filter(
+        (s) => s.distKm >= sec.fromDistKm && (idx === sectors.length - 1 || s.distKm <= sec.toDistKm)
+      );
+    }
+
+    let peak = sectorSamples.reduce((m, s) => Math.max(m, s.speedKmh || 0), 0);
+    if (isActive) {
+      peak = Math.max(peak, currentSpeedKmh);
+    }
+    const currentMaxKmh =
+      sectorSamples.length > 0 || isActive ? Math.round(peak) : null;
+    const deltaKmh =
+      currentMaxKmh !== null && refMaxKmh !== null
+        ? Math.round(currentMaxKmh - refMaxKmh)
+        : null;
+
+    return {
+      index: sec.index,
+      shortLabel: sec.shortLabel,
+      label: sec.label,
+      status: isActive ? 'active' : 'completed',
+      currentMaxKmh,
+      refMaxKmh,
+      deltaKmh,
+    };
+  });
 }

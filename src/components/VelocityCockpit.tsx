@@ -11,7 +11,6 @@ import {
   ChevronUp,
   Compass,
   Copy,
-  Cpu,
   Download,
   Film,
   Flag,
@@ -37,6 +36,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { FuelTechAnalysisPanel } from './FuelTechAnalysisPanel';
 import { OdometerCockpit } from './OdometerCockpit';
 import { SatcronLivePanel } from './SatcronLivePanel';
 import { SurveyCockpit } from './SurveyCockpit';
@@ -58,6 +58,7 @@ import {
   autoDetectNearestTrack,
   bearingBetweenDeg,
   computeLapComparisonSummary,
+  computeLiveSectorCards,
   computeOptimalStage,
   computePredictiveDeltaSec,
   computeSampleGForces,
@@ -72,6 +73,7 @@ import {
   getOrderedTrackTraps,
   haversineMetersVel,
   inferNearestBaseTraceBearing,
+  interpolateSampleAtElapsedMs,
   parseTrackFileToTrack,
   recalculateRunsForTrack,
   type LapComparisonSummary,
@@ -205,6 +207,7 @@ function estimateSatellites(accuracyM: number | null, gpsActive: boolean): numbe
 }
 
 interface VelocityLiveStagePanelProps {
+  activeTrack: VelocityTrack | null;
   activeTrackName: string;
   hasTraps: boolean;
   stageState: 'idle' | 'armed' | 'running' | 'finished';
@@ -219,9 +222,12 @@ interface VelocityLiveStagePanelProps {
   bestRun: VelocityRun | null;
   optimalSummary: OptimalStageSummary;
   lapNumber: number;
+  liveSamples: VelocitySample[];
+  currentSplitTimesMs: Record<string, number>;
 }
 
 const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
+  activeTrack,
   activeTrackName,
   hasTraps,
   stageState,
@@ -236,8 +242,32 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
   bestRun,
   optimalSummary,
   lapNumber,
+  liveSamples,
+  currentSplitTimesMs,
 }) => {
   const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const liveSectors = useMemo(
+    () =>
+      computeLiveSectorCards({
+        track: activeTrack,
+        bestRun,
+        stageState,
+        totalDistKm,
+        liveSamples,
+        currentSplitTimesMs,
+        currentSpeedKmh: speedKmh,
+      }),
+    [
+      activeTrack,
+      bestRun,
+      stageState,
+      totalDistKm,
+      liveSamples,
+      currentSplitTimesMs,
+      speedKmh,
+    ]
+  );
 
   useEffect(() => {
     const intervalMs = stageState === 'running' ? 80 : 500;
@@ -358,6 +388,106 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Resumo Rápido de Velocidade por Trecho ao Vivo */}
+      {liveSectors.length > 0 && (
+        <div className="mt-2.5">
+          <div className="mb-1 flex items-center justify-between px-0.5 font-mono text-[9px] font-bold tracking-wider text-zinc-400 uppercase">
+            <span>Máxima por Trecho</span>
+            <span>{bestRun ? `Ref #${bestRun.runNumber}` : 'Sem Ref.'}</span>
+          </div>
+          <div
+            className={`grid gap-1.5 font-mono tabular-nums ${
+              liveSectors.length <= 4
+                ? 'grid-cols-4'
+                : 'grid-flow-col auto-cols-[minmax(76px,1fr)] overflow-x-auto pb-0.5'
+            }`}
+          >
+            {liveSectors.map((sec) => {
+              const isCompleted = sec.status === 'completed';
+              const isActive = sec.status === 'active';
+              const deltaPositive = sec.deltaKmh !== null && sec.deltaKmh >= 0;
+
+              return (
+                <div
+                  key={sec.index}
+                  className={`rounded-lg border px-1.5 py-1.5 text-center transition-colors ${
+                    isActive
+                      ? 'border-[#E10600] bg-[#16080A] shadow-[0_0_12px_rgba(225,6,0,0.3)]'
+                      : isCompleted
+                        ? 'border-zinc-700 bg-[#080B0D]'
+                        : 'border-zinc-800/80 bg-[#080B0D]/70'
+                  }`}
+                >
+                  <p
+                    className={`text-[10px] font-extrabold uppercase ${
+                      isActive
+                        ? 'text-[#FF2A2A]'
+                        : isCompleted
+                          ? 'text-zinc-200'
+                          : 'text-zinc-500'
+                    }`}
+                  >
+                    {sec.shortLabel}
+                  </p>
+
+                  {isCompleted && (
+                    <>
+                      <p className="mt-0.5 text-xs font-black text-white sm:text-sm">
+                        {sec.currentMaxKmh ?? '--'}
+                        <span className="ml-0.5 text-[9px] font-normal text-zinc-400">
+                          km/h
+                        </span>
+                      </p>
+                      <p
+                        className={`text-[10px] font-extrabold ${
+                          sec.deltaKmh === null
+                            ? 'text-zinc-500'
+                            : deltaPositive
+                              ? 'text-[#10B981]'
+                              : 'text-[#FF2A2A]'
+                        }`}
+                      >
+                        {sec.deltaKmh === null
+                          ? `Ref ${sec.refMaxKmh ?? '--'}`
+                          : `${sec.deltaKmh > 0 ? '+' : ''}${sec.deltaKmh} km/h`}
+                      </p>
+                    </>
+                  )}
+
+                  {isActive && (
+                    <>
+                      <p className="mt-0.5 text-xs font-black text-white sm:text-sm">
+                        {sec.currentMaxKmh ?? 0}
+                        <span className="ml-0.5 text-[9px] font-normal text-zinc-400">
+                          km/h
+                        </span>
+                      </p>
+                      <p className="text-[10px] font-bold text-amber-300">
+                        Ref: {sec.refMaxKmh ?? '--'}
+                      </p>
+                    </>
+                  )}
+
+                  {sec.status === 'future' && (
+                    <>
+                      <p className="mt-0.5 text-xs font-bold text-zinc-400 sm:text-sm">
+                        {sec.refMaxKmh ?? '--'}
+                        <span className="ml-0.5 text-[9px] font-normal text-zinc-500">
+                          km/h
+                        </span>
+                      </p>
+                      <p className="text-[9px] font-semibold text-zinc-500 uppercase">
+                        Alvo
+                      </p>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="mt-2.5 grid grid-cols-3 gap-2 font-mono tabular-nums">
         <div className="rounded-lg border border-zinc-800 bg-[#080B0D] px-2 py-2 text-center">
@@ -522,10 +652,12 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [selectedSessionTrackId, setSelectedSessionTrackId] = useState<string>('');
   const [detailTab, setDetailTab] = useState<'analysis' | 'heatmap' | 'video'>('analysis');
   const [heatmapMode, setHeatmapMode] = useState<'speed' | 'accel'>('accel');
+  const [heatmapCompareMode, setHeatmapCompareMode] = useState<'single' | 'side-by-side'>('single');
   const [lapAId, setLapAId] = useState<string>('');
   const [lapBId, setLapBId] = useState<string>('');
-  const [replayIdx, setReplayIdx] = useState(0);
+  const [replayElapsedMs, setReplayElapsedMs] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 4>(1);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoOffsetMs, setVideoOffsetMs] = useState(0);
   const [videoHudSampleIdx, setVideoHudSampleIdx] = useState(0);
@@ -1862,7 +1994,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     const secondLast = sRuns.length >= 2 ? sRuns[sRuns.length - 2] : last;
     setLapAId(last?.id || '');
     setLapBId(best && best.id !== last?.id ? best.id : secondLast?.id || '');
-    setReplayIdx(0);
+    setReplayElapsedMs(0);
     setReplayPlaying(false);
     setCoachAdvice(null);
     setCoachError(null);
@@ -1933,19 +2065,41 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     return computeLapComparisonSummary(lapA, lapB);
   }, [lapA, lapB]);
 
+  const maxReplayElapsedMs = useMemo(() => {
+    const maxA =
+      lapASamples.length > 0 ? lapASamples[lapASamples.length - 1].stageElapsedMs : 0;
+    const maxB =
+      lapBSamples.length > 0 ? lapBSamples[lapBSamples.length - 1].stageElapsedMs : 0;
+    return Math.max(100, maxA, maxB);
+  }, [lapASamples, lapBSamples]);
+
   useEffect(() => {
-    if (screen !== 'session-detail' || !replayPlaying || lapASamples.length < 2) return;
-    const id = window.setInterval(() => {
-      setReplayIdx((prev) => {
-        if (prev >= lapASamples.length - 1) {
+    if (
+      screen !== 'session-detail' ||
+      detailTab !== 'heatmap' ||
+      !replayPlaying ||
+      lapASamples.length < 2
+    ) {
+      return;
+    }
+    let rafId = 0;
+    let lastTick = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(100, Math.max(0, now - lastTick));
+      lastTick = now;
+      setReplayElapsedMs((prev) => {
+        const next = prev + dt * replaySpeed;
+        if (next >= maxReplayElapsedMs) {
           setReplayPlaying(false);
-          return prev;
+          return maxReplayElapsedMs;
         }
-        return prev + 1;
+        return next;
       });
-    }, 180);
-    return () => window.clearInterval(id);
-  }, [screen, replayPlaying, lapASamples.length]);
+      rafId = window.requestAnimationFrame(step);
+    };
+    rafId = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [screen, detailTab, replayPlaying, replaySpeed, maxReplayElapsedMs, lapASamples.length]);
 
   const handleRequestAiCoach = async () => {
     if (!lapA || !lapB || !comparisonSummary) return;
@@ -2645,6 +2799,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           {liveMode === 'timer' && (
             <>
               <VelocityLiveStagePanel
+                activeTrack={activeTrack}
                 activeTrackName={activeTrack ? activeTrack.name : 'Especial Livre'}
                 hasTraps={Boolean(activeTrack && activeTrack.traps.length > 0)}
                 stageState={stageState}
@@ -2659,6 +2814,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 bestRun={bestRun}
                 optimalSummary={optimalSummary}
                 lapNumber={trackRuns.length + 1}
+                liveSamples={liveSamples}
+                currentSplitTimesMs={currentSplitTimesMs}
               />
 
               {orderedTraps.filter((t) => t.kind !== 'start').length > 0 && (
@@ -3078,7 +3235,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   value={lapA?.id || ''}
                   onChange={(e) => {
                     setLapAId(e.target.value);
-                    setReplayIdx(0);
+                    setReplayElapsedMs(0);
+                    setReplayPlaying(false);
                     setCoachAdvice(null);
                   }}
                   className="min-h-[40px] w-full rounded-lg border border-zinc-700 bg-[#080B0D] px-2 font-mono text-xs font-bold text-white"
@@ -3097,6 +3255,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   value={lapB?.id || ''}
                   onChange={(e) => {
                     setLapBId(e.target.value);
+                    setReplayElapsedMs(0);
+                    setReplayPlaying(false);
                     setCoachAdvice(null);
                   }}
                   className="min-h-[40px] w-full rounded-lg border border-zinc-700 bg-[#080B0D] px-2 font-mono text-xs font-bold text-emerald-300"
@@ -3135,547 +3295,344 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </div>
           </div>
 
-          {/* 5A. ANÁLISE & TREINADOR IA (Primary View — Exact Section 5 Spec) */}
-          {detailTab === 'analysis' && (() => {
-            const maxDistA =
-              lapASamples.length > 0 ? lapASamples[lapASamples.length - 1].distKm * 1000 : 0;
-            const maxDistB =
-              lapBSamples.length > 0 ? lapBSamples[lapBSamples.length - 1].distKm * 1000 : 0;
-            const maxDistM = Math.max(100, maxDistA, maxDistB);
-            const maxSpd = Math.max(
-              100,
-              ...lapASamples.map((s) => s.speedKmh),
-              ...lapBSamples.map((s) => s.speedKmh)
+          {/* 5A. ANÁLISE & TREINADOR IA (Painel FuelTech Datalogger + Comparativo por Setores) */}
+          {detailTab === 'analysis' && (
+            <FuelTechAnalysisPanel
+              sessionTrack={sessionTrack}
+              sessionRuns={sessionRuns}
+              sessionOptimal={sessionOptimal}
+              lapA={lapA}
+              lapB={lapB}
+              lapASamples={lapASamples}
+              lapBSamples={lapBSamples}
+              comparisonSummary={comparisonSummary}
+              coachLoading={coachLoading}
+              coachError={coachError}
+              coachAdvice={coachAdvice}
+              onRequestAiCoach={handleRequestAiCoach}
+              onDeleteSession={() => {
+                setRuns((prev) =>
+                  prev.filter((r) => r.trackId !== selectedSessionTrackId)
+                );
+                setScreen('sessions');
+              }}
+            />
+          )}
+
+          {/* 5B. MAPA DE CALOR & REPLAY CARRO FANTASMA (SINCRONIZADO POR TEMPO DECORRIDO) */}
+          {detailTab === 'heatmap' && (() => {
+            const hasDistinctLapB = Boolean(
+              lapB && lapBSamples.length > 1 && lapB.id !== lapA?.id
             );
-            const yTop = Math.ceil(maxSpd / 20) * 20;
 
-            const padL = 34;
-            const padR = 12;
-            const padT = 16;
-            const padB = 26;
-            const chartW = 420;
-            const chartH = 190;
-            const plotW = chartW - padL - padR;
-            const plotH = chartH - padT - padB;
+            const activeSampleA = interpolateSampleAtElapsedMs(
+              lapASamples,
+              replayElapsedMs
+            );
+            const activeSampleB = hasDistinctLapB
+              ? interpolateSampleAtElapsedMs(lapBSamples, replayElapsedMs)
+              : null;
 
-            const xAtM = (distM: number) =>
-              padL + Math.max(0, Math.min(1, distM / maxDistM)) * plotW;
-            const yAtKmh = (kmh: number) =>
-              padT + plotH - Math.max(0, Math.min(1, kmh / yTop)) * plotH;
+            const spdA = Math.round(activeSampleA?.speedKmh ?? 0);
+            const spdB = Math.round(activeSampleB?.speedKmh ?? 0);
+            const spdDelta = hasDistinctLapB ? spdA - spdB : null;
+            const leadMeters =
+              hasDistinctLapB && activeSampleA && activeSampleB
+                ? Math.round((activeSampleA.distKm - activeSampleB.distKm) * 1000)
+                : null;
 
-            const polyA = lapASamples
-              .map((s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtKmh(s.speedKmh).toFixed(1)}`)
-              .join(' ');
-            const polyB = lapBSamples
-              .map((s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtKmh(s.speedKmh).toFixed(1)}`)
-              .join(' ');
-
-            const xTicksM = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxDistM * f));
-            const yTicksKmh = [yTop, Math.round(yTop * 0.5), 0];
+            const replayLegendOverlay = (
+              <div className="rounded-lg border border-zinc-700/90 bg-[#050608]/90 px-2.5 py-1.5 font-mono text-[10px] leading-snug text-white shadow-lg backdrop-blur-xs tabular-nums">
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                  <span className="inline-flex items-center gap-1 font-bold text-[#10B981]">
+                    <span aria-hidden="true">●</span>
+                    <span>Volta A (Sólida / Calor)</span>
+                  </span>
+                  {hasDistinctLapB && (
+                    <span className="inline-flex items-center gap-1 font-bold text-[#F59E0B]">
+                      <span aria-hidden="true">◌</span>
+                      <span>Volta B (Tracejada / Fantasma)</span>
+                    </span>
+                  )}
+                </div>
+                {leadMeters !== null && (
+                  <p
+                    className={`mt-0.5 font-extrabold ${
+                      leadMeters > 0
+                        ? 'text-[#10B981]'
+                        : leadMeters < 0
+                          ? 'text-[#F59E0B]'
+                          : 'text-zinc-300'
+                    }`}
+                  >
+                    Vantagem: {leadMeters > 0 ? `+${leadMeters}m` : `${leadMeters}m`}
+                  </p>
+                )}
+              </div>
+            );
 
             return (
-              <div className="space-y-3">
-                {/* Summary KPI Strip */}
-                {comparisonSummary && (
-                  <div className="grid grid-cols-3 gap-2 font-mono text-center tabular-nums">
-                    <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5">
-                      <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Delta A vs B</p>
-                      <p
-                        className={`mt-0.5 text-sm font-extrabold sm:text-base ${
-                          comparisonSummary.totalDeltaSec <= 0
-                            ? 'text-emerald-400'
-                            : 'text-[#FF4D47]'
+              <div className="space-y-2.5 rounded-xl border border-zinc-800 bg-[#050608] p-3 text-white">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <div className="inline-flex rounded-lg border border-zinc-800 bg-[#0A0C10] p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setHeatmapMode('accel')}
+                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
+                          heatmapMode === 'accel'
+                            ? 'bg-[#E10600] text-white'
+                            : 'text-[#B5B5B5]'
                         }`}
                       >
-                        {comparisonSummary.totalDeltaSec > 0 ? '+' : ''}
-                        {comparisonSummary.totalDeltaSec.toFixed(2)}s
-                      </p>
+                        Aceleração / Freio
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHeatmapMode('speed')}
+                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
+                          heatmapMode === 'speed'
+                            ? 'bg-[#E10600] text-white'
+                            : 'text-[#B5B5B5]'
+                        }`}
+                      >
+                        Velocidade (km/h)
+                      </button>
                     </div>
-                    <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5">
-                      <p className="text-[10px] font-bold text-emerald-400 uppercase">Melhor</p>
-                      <p className="mt-0.5 text-sm font-extrabold text-emerald-400 sm:text-base">
-                        {formatStageDuration(sessionOptimal.bestRunTotalMs)}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5">
-                      <p className="text-[10px] font-bold text-amber-400 uppercase">Ideal</p>
-                      <p className="mt-0.5 text-sm font-extrabold text-amber-300 sm:text-base">
-                        {formatStageDuration(sessionOptimal.optimalTotalMs)}
-                      </p>
-                    </div>
-                  </div>
-                )}
 
-                {/* 1. GRÁFICO DE VELOCIDADE SOBREPOSTO (Eixo X = Distância em m + Ícones de Frenagem e Ápice) */}
-                <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-                      Gráfico de Velocidade Sobreposto
-                    </h3>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]">
-                      <span className="inline-flex items-center gap-1 text-[#FF4D47] font-bold">
-                        <span className="inline-block h-[2px] w-3.5 bg-[#E10600]" />
-                        Volta #{lapA?.runNumber ?? '-'}
-                      </span>
-                      <span className="inline-flex items-center gap-1 text-emerald-400 font-bold">
-                        <span className="inline-block w-3.5 border-t-2 border-dashed border-emerald-400" />
-                        Volta #{lapB?.runNumber ?? '-'}
-                      </span>
-                      <span className="inline-flex items-center gap-1 text-amber-300">
-                        ▼ Frenagem
-                      </span>
-                      <span className="inline-flex items-center gap-1 text-sky-400">
-                        ● Ápice
-                      </span>
+                    <div className="inline-flex rounded-lg border border-zinc-800 bg-[#0A0C10] p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setHeatmapCompareMode('single')}
+                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
+                          heatmapCompareMode === 'single'
+                            ? 'bg-zinc-800 text-white'
+                            : 'text-[#B5B5B5]'
+                        }`}
+                      >
+                        Mapa Único
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHeatmapCompareMode('side-by-side')}
+                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
+                          heatmapCompareMode === 'side-by-side'
+                            ? 'bg-zinc-800 text-white'
+                            : 'text-[#B5B5B5]'
+                        }`}
+                      >
+                        Lado a Lado
+                      </button>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-2">
-                    {lapASamples.length > 2 ? (
-                      <svg viewBox={`0 0 ${chartW} ${chartH}`} className="h-48 w-full sm:h-56">
-                        {/* Speed Y grid */}
-                        {yTicksKmh.map((spdVal) => {
-                          const y = yAtKmh(spdVal);
-                          return (
-                            <g key={spdVal}>
-                              <line
-                                x1={padL}
-                                y1={y}
-                                x2={chartW - padR}
-                                y2={y}
-                                stroke="#27272a"
-                                strokeDasharray={spdVal === 0 ? undefined : '3 3'}
-                              />
-                              <text
-                                x={padL - 4}
-                                y={y + 3}
-                                textAnchor="end"
-                                fill="#71717a"
-                                fontSize="8.5"
-                                fontFamily="monospace"
-                              >
-                                {spdVal}
-                              </text>
-                            </g>
-                          );
-                        })}
-
-                        {/* Distance X grid (meters) */}
-                        {xTicksM.map((mVal, i) => {
-                          const x = xAtM(mVal);
-                          return (
-                            <g key={`${mVal}_${i}`}>
-                              <line
-                                x1={x}
-                                y1={padT}
-                                x2={x}
-                                y2={padT + plotH}
-                                stroke="#1f2024"
-                              />
-                              <text
-                                x={x}
-                                y={chartH - 7}
-                                textAnchor={i === 0 ? 'start' : i === xTicksM.length - 1 ? 'end' : 'middle'}
-                                fill="#a1a1aa"
-                                fontSize="8.5"
-                                fontFamily="monospace"
-                              >
-                                {mVal}m
-                              </text>
-                            </g>
-                          );
-                        })}
-
-                        {/* Volta B (Dashed Line) */}
-                        {lapBSamples.length > 1 && (
-                          <polyline
-                            fill="none"
-                            stroke="#10b981"
-                            strokeWidth="2"
-                            strokeDasharray="6 4"
-                            strokeOpacity="0.88"
-                            points={polyB}
-                          />
-                        )}
-
-                        {/* Volta A (Solid Line) */}
-                        <polyline
-                          fill="none"
-                          stroke="#E10600"
-                          strokeWidth="2.4"
-                          points={polyA}
-                        />
-
-                        {/* Corner Brake & Apex Markers */}
-                        {comparisonSummary?.corners.map((c) => {
-                          const bx = xAtM(c.lapABrakeStartM);
-                          const by = yAtKmh(c.lapABrakeStartKmh);
-                          const ax = xAtM(c.lapAApexDistM);
-                          const ay = yAtKmh(c.lapAApexKmh);
-                          return (
-                            <g key={c.cornerIndex}>
-                              {/* Braking icon (inverted triangle + badge) */}
-                              <polygon
-                                points={`${bx},${by + 4} ${bx - 4.5},${by - 4} ${bx + 4.5},${by - 4}`}
-                                fill="#f59e0b"
-                                stroke="#000000"
-                                strokeWidth="1"
-                              />
-                              <text
-                                x={bx}
-                                y={Math.max(10, by - 7)}
-                                textAnchor="middle"
-                                fill="#fcd34d"
-                                fontSize="8"
-                                fontWeight="bold"
-                                fontFamily="monospace"
-                              >
-                                F{c.cornerIndex}
-                              </text>
-
-                              {/* Apex icon (circle + badge) */}
-                              <circle
-                                cx={ax}
-                                cy={ay}
-                                r="3.8"
-                                fill="#38bdf8"
-                                stroke="#000000"
-                                strokeWidth="1"
-                              />
-                              <text
-                                x={ax}
-                                y={Math.min(padT + plotH - 3, ay + 12)}
-                                textAnchor="middle"
-                                fill="#7dd3fc"
-                                fontSize="8"
-                                fontWeight="bold"
-                                fontFamily="monospace"
-                              >
-                                A{c.cornerIndex}
-                              </text>
-                            </g>
-                          );
-                        })}
-                      </svg>
-                    ) : (
-                      <p className="py-10 text-center text-xs text-zinc-500">
-                        Dados insuficientes para plotar a curva de velocidade.
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* 2. TABELA CURVA A CURVA (Frenagem m, Ápice km/h, Saída km/h com setas verdes/vermelhas) */}
-                <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-                      Tabela Curva a Curva (#{lapA?.runNumber ?? '-'} vs #{lapB?.runNumber ?? '-'})
-                    </h3>
-                    <span className="font-mono text-[10px] text-[#B5B5B5]">
-                      Volta A / Volta B
+                  <div className="flex items-center gap-2 font-mono text-[10px]">
+                    <span className="text-[#10B981]">
+                      ■ {heatmapMode === 'accel' ? 'Acelerando' : 'Alta'}
+                    </span>
+                    <span className="text-amber-400">■ Médio</span>
+                    <span className="text-[#FF2A2A]">
+                      ■ {heatmapMode === 'accel' ? 'Freando' : 'Baixa'}
                     </span>
                   </div>
-
-                  {comparisonSummary && comparisonSummary.corners.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums sm:text-xs">
-                        <thead>
-                          <tr className="border-b border-zinc-800 text-[#B5B5B5]">
-                            <th className="py-2 pr-1.5">Curva</th>
-                            <th className="px-1.5 py-2 text-right">Frenagem (m)</th>
-                            <th className="px-1.5 py-2 text-right">Ápice (km/h)</th>
-                            <th className="px-1.5 py-2 text-right">Saída (km/h)</th>
-                            <th className="py-2 pl-1.5 text-right">Delta</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-zinc-800/70">
-                          {comparisonSummary.corners.map((c) => {
-                            const brakeDiffM = c.lapABrakeDistM - c.lapBBrakeDistM;
-                            const brakeGood = brakeDiffM <= 0;
-                            const apexDiff = c.lapAApexKmh - c.lapBApexKmh;
-                            const apexGood = apexDiff >= 0;
-                            const exitDiff = c.lapAExitKmh - c.lapBExitKmh;
-                            const exitGood = exitDiff >= 0;
-                            const timeGood = c.timeDeltaSec <= 0;
-
-                            return (
-                              <tr key={c.cornerIndex}>
-                                <td className="py-2 pr-1.5 font-sans font-bold text-white whitespace-nowrap">
-                                  C{c.cornerIndex}{' '}
-                                  <span className="font-mono text-[10px] font-normal text-zinc-500">
-                                    {Math.round(c.distKm * 1000)}m
-                                  </span>
-                                </td>
-
-                                <td className="px-1.5 py-2 text-right whitespace-nowrap">
-                                  <span className="text-white font-bold">{c.lapABrakeDistM}</span>
-                                  <span className="text-zinc-500"> / {c.lapBBrakeDistM}</span>{' '}
-                                  <span className={brakeGood ? 'text-emerald-400' : 'text-[#FF4D47]'}>
-                                    {brakeGood ? '▲' : '▼'}
-                                  </span>
-                                </td>
-
-                                <td className="px-1.5 py-2 text-right whitespace-nowrap">
-                                  <span className="text-white font-bold">{c.lapAApexKmh}</span>
-                                  <span className="text-zinc-500"> / {c.lapBApexKmh}</span>{' '}
-                                  <span className={apexGood ? 'text-emerald-400' : 'text-[#FF4D47]'}>
-                                    {apexGood ? '▲' : '▼'}
-                                  </span>
-                                </td>
-
-                                <td className="px-1.5 py-2 text-right whitespace-nowrap">
-                                  <span className="text-white font-bold">{c.lapAExitKmh}</span>
-                                  <span className="text-zinc-500"> / {c.lapBExitKmh}</span>{' '}
-                                  <span className={exitGood ? 'text-emerald-400' : 'text-[#FF4D47]'}>
-                                    {exitGood ? '▲' : '▼'}
-                                  </span>
-                                </td>
-
-                                <td
-                                  className={`py-2 pl-1.5 text-right font-extrabold whitespace-nowrap ${
-                                    timeGood ? 'text-emerald-400' : 'text-[#FF4D47]'
-                                  }`}
-                                >
-                                  {timeGood ? '▲ ' : '▼ '}
-                                  {c.timeDeltaSec > 0 ? '+' : ''}
-                                  {c.timeDeltaSec.toFixed(2)}s
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="py-3 text-xs text-zinc-500">
-                      Selecione duas voltas gravadas com trechos de frenagem e retomada para exibir o comparativo curva a curva.
-                    </p>
-                  )}
                 </div>
 
-                {/* 3. CARD DO TREINADOR IA (Logo abaixo da tabela) */}
-                <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 text-white space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                        Treinador IA
-                      </h3>
-                      <p className="text-xs text-[#B5B5B5]">
-                        Feedback tático direto comparando Volta #{lapA?.runNumber ?? '-'} com Volta #{lapB?.runNumber ?? '-'}.
-                      </p>
+                {heatmapCompareMode === 'side-by-side' ? (
+                  <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+                    {/* Mapa Volta A */}
+                    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0A0C10]">
+                      <div className="flex items-center justify-between border-b border-zinc-800 px-2.5 py-2 font-mono text-[11px] tabular-nums">
+                        <span className="font-extrabold text-[#10B981]">
+                          VOLTA A #{lapA?.runNumber ?? '-'} ·{' '}
+                          <span className="text-white">
+                            {formatStageDuration(lapA?.totalMs)}
+                          </span>
+                        </span>
+                        <span className="font-bold text-white">
+                          {spdA} km/h · {Math.round((activeSampleA?.distKm ?? 0) * 1000)}m
+                        </span>
+                      </div>
+                      <VelocityMapboxView
+                        trackId={`${selectedSessionTrackId}_cmp_a`}
+                        editableTrace={lapASamples}
+                        orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+                        postEditIdx={0}
+                        vehicleStyle="lapA"
+                        currentPos={
+                          activeSampleA
+                            ? { lat: activeSampleA.lat, lon: activeSampleA.lon }
+                            : null
+                        }
+                        navHeadingDeg={activeSampleA?.headingDeg ?? null}
+                        heatmapMode={heatmapMode}
+                        topLeftOverlay={replayLegendOverlay}
+                        containerClassName="relative h-[260px] w-full overflow-hidden bg-[#000000] sm:h-[340px]"
+                      />
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={coachLoading || !comparisonSummary}
-                      onClick={handleRequestAiCoach}
-                      className="pitstop-btn-red inline-flex min-h-[42px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold text-white disabled:opacity-50"
-                    >
-                      <Cpu className="h-4 w-4" />
-                      <span>
-                        {coachLoading ? 'Gerando Análise...' : 'Gerar Análise Tática'}
-                      </span>
-                    </button>
-                  </div>
-
-                  {coachError && (
-                    <div className="rounded-lg border border-amber-500/40 bg-amber-950/20 p-3 text-xs text-amber-200">
-                      {coachError}
-                    </div>
-                  )}
-
-                  {coachAdvice && (
-                    <div className="rounded-xl border border-emerald-500/40 bg-emerald-950/20 p-3.5 text-xs leading-relaxed text-emerald-100 whitespace-pre-line">
-                      <p className="mb-1.5 font-mono text-[10px] font-bold tracking-wider text-emerald-400 uppercase">
-                        Análise Tática do Engenheiro
-                      </p>
-                      {coachAdvice}
-                    </div>
-                  )}
-                </div>
-
-                {/* Volta Ideal por Setores & Lista de Voltas da Sessão */}
-                {sessionOptimal.sectors.length > 0 && (
-                  <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 text-white">
-                    <h3 className="text-xs font-bold tracking-wider text-amber-400 uppercase">
-                      Volta Ideal por Setores
-                    </h3>
-                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      {sessionOptimal.sectors.map((sec) => (
-                        <div
-                          key={sec.sectorIndex}
-                          className="rounded-lg border border-zinc-800 bg-[#080B0D] px-3 py-2 font-mono"
-                        >
-                          <p className="font-sans text-xs font-bold text-[#C0C4C9]">{sec.label}</p>
-                          <p className="mt-0.5 text-lg font-extrabold text-amber-300 tabular-nums">
-                            {formatStageDuration(sec.bestMs)}
-                          </p>
-                          <p className="text-[10px] text-zinc-500">
-                            {sec.bestRunNumber ? `Volta #${sec.bestRunNumber}` : 'Sem registro'}
-                          </p>
+                    {/* Mapa Volta B */}
+                    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0A0C10]">
+                      <div className="flex items-center justify-between border-b border-zinc-800 px-2.5 py-2 font-mono text-[11px] tabular-nums">
+                        <span className="font-extrabold text-[#F59E0B]">
+                          VOLTA B #{lapB?.runNumber ?? '-'} ·{' '}
+                          <span className="text-white">
+                            {formatStageDuration(lapB?.totalMs)}
+                          </span>
+                        </span>
+                        <span className="font-bold text-white">
+                          {spdB} km/h · {Math.round((activeSampleB?.distKm ?? 0) * 1000)}m
+                        </span>
+                      </div>
+                      {lapBSamples.length > 1 ? (
+                        <VelocityMapboxView
+                          trackId={`${selectedSessionTrackId}_cmp_b`}
+                          editableTrace={lapBSamples}
+                          orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+                          postEditIdx={0}
+                          vehicleStyle="lapB"
+                          currentPos={
+                            activeSampleB
+                              ? { lat: activeSampleB.lat, lon: activeSampleB.lon }
+                              : null
+                          }
+                          navHeadingDeg={activeSampleB?.headingDeg ?? null}
+                          heatmapMode={heatmapMode}
+                          containerClassName="relative h-[260px] w-full overflow-hidden bg-[#000000] sm:h-[340px]"
+                        />
+                      ) : (
+                        <div className="flex h-[260px] items-center justify-center p-4 text-center text-xs text-zinc-500 sm:h-[340px]">
+                          Grave pelo menos duas voltas na mesma especial para comparar os traçados lado a lado.
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
+                ) : (
+                  <VelocityMapboxView
+                    trackId={selectedSessionTrackId}
+                    editableTrace={lapASamples}
+                    ghostTrace={hasDistinctLapB ? lapBSamples : undefined}
+                    offsetGhostTrace={hasDistinctLapB}
+                    orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+                    postEditIdx={0}
+                    vehicleStyle="lapA"
+                    currentPos={
+                      activeSampleA
+                        ? {
+                            lat: activeSampleA.lat,
+                            lon: activeSampleA.lon,
+                          }
+                        : null
+                    }
+                    navHeadingDeg={activeSampleA?.headingDeg ?? null}
+                    ghostCar={
+                      hasDistinctLapB && activeSampleB
+                        ? {
+                            lat: activeSampleB.lat,
+                            lon: activeSampleB.lon,
+                            headingDeg: activeSampleB.headingDeg,
+                          }
+                        : null
+                    }
+                    heatmapMode={heatmapMode}
+                    topLeftOverlay={replayLegendOverlay}
+                    containerClassName="relative h-[320px] w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[410px]"
+                  />
                 )}
 
-                <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 text-white">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-['Barlow_Condensed'] text-lg font-bold uppercase">
-                      Voltas da Sessão ({sessionRuns.length})
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRuns((prev) =>
-                          prev.filter((r) => r.trackId !== selectedSessionTrackId)
-                        );
-                        setScreen('sessions');
+                {lapASamples.length > 1 && (
+                  <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0A0C10] p-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!replayPlaying && replayElapsedMs >= maxReplayElapsedMs - 50) {
+                              setReplayElapsedMs(0);
+                            }
+                            setReplayPlaying((v) => !v);
+                          }}
+                          className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#E10600] px-3 text-xs font-bold text-white"
+                        >
+                          {replayPlaying ? (
+                            <>
+                              <Pause className="h-3.5 w-3.5" />
+                              <span>Pausar</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="h-3.5 w-3.5" />
+                              <span>Replay</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setReplaySpeed((s) => (s === 1 ? 2 : s === 2 ? 4 : 1))
+                          }
+                          className="inline-flex h-9 min-w-[40px] items-center justify-center rounded-lg border border-zinc-700 bg-[#050608] px-2 text-[11px] font-extrabold text-amber-300 hover:border-zinc-500"
+                          title="Velocidade do Replay"
+                        >
+                          {replaySpeed}x
+                        </button>
+                      </div>
+
+                      <span className="font-extrabold text-white">
+                        {formatStageDuration(replayElapsedMs)}
+                      </span>
+
+                      <span className="font-bold text-white">
+                        <span className="text-[#10B981]">A: {spdA}</span>
+                        {hasDistinctLapB && (
+                          <span className="text-[#F59E0B]"> vs B: {spdB}</span>
+                        )}
+                        <span className="text-zinc-400"> km/h</span>
+                        {spdDelta !== null && (
+                          <span
+                            className={`ml-1.5 ${
+                              spdDelta >= 0 ? 'text-[#10B981]' : 'text-[#FF2A2A]'
+                            }`}
+                          >
+                            ({spdDelta > 0 ? '+' : ''}
+                            {spdDelta})
+                          </span>
+                        )}
+                      </span>
+
+                      {leadMeters !== null && (
+                        <span
+                          className={`font-extrabold ${
+                            leadMeters > 0
+                              ? 'text-[#10B981]'
+                              : leadMeters < 0
+                                ? 'text-[#F59E0B]'
+                                : 'text-zinc-300'
+                          }`}
+                        >
+                          Vantagem: {leadMeters > 0 ? `+${leadMeters}m` : `${leadMeters}m`}
+                        </span>
+                      )}
+                    </div>
+
+                    <input
+                      type="range"
+                      aria-label="Linha do tempo do replay sincronizado"
+                      min={0}
+                      max={maxReplayElapsedMs}
+                      step={50}
+                      value={Math.min(maxReplayElapsedMs, replayElapsedMs)}
+                      onChange={(e) => {
+                        setReplayPlaying(false);
+                        setReplayElapsedMs(Number(e.target.value));
                       }}
-                      className="text-xs font-semibold text-red-400 hover:text-red-300"
-                    >
-                      Excluir Sessão
-                    </button>
+                      className="w-full accent-[#E10600]"
+                    />
                   </div>
-                  <div className="mt-2 overflow-x-auto">
-                    <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
-                      <thead>
-                        <tr className="border-b border-zinc-800 text-[#B5B5B5]">
-                          <th className="py-2 pr-2">Volta</th>
-                          <th className="px-2 py-2">Tempo</th>
-                          <th className="px-2 py-2 text-right">Dist.</th>
-                          <th className="py-2 pl-2 text-right">Máx</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-800/70">
-                        {sessionRuns.map((run) => {
-                          const isBest = run.id === sessionOptimal.bestRunId;
-                          return (
-                            <tr key={run.id} className={isBest ? 'bg-emerald-950/25' : ''}>
-                              <td className="py-2 pr-2 font-sans font-bold text-white">
-                                #{run.runNumber}{' '}
-                                {isBest && <span className="text-emerald-400">(Melhor)</span>}
-                              </td>
-                              <td className="px-2 py-2 font-extrabold text-white">
-                                {formatStageDuration(run.totalMs)}
-                              </td>
-                              <td className="px-2 py-2 text-right text-[#C0C4C9]">
-                                {run.distanceKm.toFixed(2)} km
-                              </td>
-                              <td className="py-2 pl-2 text-right text-amber-300">
-                                {run.maxSpeedKmh} km/h
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                )}
               </div>
             );
           })()}
-
-          {/* 5B. MAPA DE CALOR NO TRAÇADO */}
-          {detailTab === 'heatmap' && (
-            <div className="space-y-2.5 rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setHeatmapMode('accel')}
-                    className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
-                      heatmapMode === 'accel'
-                        ? 'bg-[#E10600] text-white'
-                        : 'text-[#B5B5B5]'
-                    }`}
-                  >
-                    Aceleração / Freio
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHeatmapMode('speed')}
-                    className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
-                      heatmapMode === 'speed'
-                        ? 'bg-[#E10600] text-white'
-                        : 'text-[#B5B5B5]'
-                    }`}
-                  >
-                    Velocidade (km/h)
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2 font-mono text-[10px]">
-                  <span className="text-emerald-400">
-                    ■ {heatmapMode === 'accel' ? 'Acelerando' : 'Alta'}
-                  </span>
-                  <span className="text-amber-400">■ Médio</span>
-                  <span className="text-[#FF2A2A]">
-                    ■ {heatmapMode === 'accel' ? 'Freando' : 'Baixa'}
-                  </span>
-                </div>
-              </div>
-
-              <VelocityMapboxView
-                trackId={selectedSessionTrackId}
-                editableTrace={lapASamples}
-                orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
-                postEditIdx={replayIdx}
-                currentPos={
-                  lapASamples[replayIdx]
-                    ? {
-                        lat: lapASamples[replayIdx].lat,
-                        lon: lapASamples[replayIdx].lon,
-                      }
-                    : null
-                }
-                navHeadingDeg={lapASamples[replayIdx]?.headingDeg ?? null}
-                heatmapMode={heatmapMode}
-                containerClassName="relative h-[300px] w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[380px]"
-              />
-
-              {lapASamples.length > 1 && (
-                <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#080B0D] p-2.5">
-                  <div className="flex items-center justify-between gap-2 font-mono text-xs tabular-nums">
-                    <button
-                      type="button"
-                      onClick={() => setReplayPlaying((v) => !v)}
-                      className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#E10600] px-3 text-xs font-bold text-white"
-                    >
-                      {replayPlaying ? (
-                        <>
-                          <Pause className="h-3.5 w-3.5" />
-                          <span>Pausar</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="h-3.5 w-3.5" />
-                          <span>Replay</span>
-                        </>
-                      )}
-                    </button>
-                    <span className="text-white font-bold">
-                      {Math.round(lapASamples[replayIdx]?.speedKmh ?? 0)} km/h
-                    </span>
-                    <span className="text-amber-300">
-                      {formatStageDuration(lapASamples[replayIdx]?.stageElapsedMs ?? 0)}
-                    </span>
-                    <span className="text-zinc-400">
-                      {(lapASamples[replayIdx]?.accelLongG ?? 0).toFixed(2)} G
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0, lapASamples.length - 1)}
-                    value={replayIdx}
-                    onChange={(e) => setReplayIdx(Number(e.target.value))}
-                    className="w-full accent-[#E10600]"
-                  />
-                </div>
-              )}
-            </div>
-          )}
 
           {/* 5C. SINCRONIZAÇÃO DE VÍDEO + OVERLAY TELEMETRIA */}
           {detailTab === 'video' && (() => {
