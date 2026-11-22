@@ -1938,8 +1938,11 @@ export interface SectorRunMetrics {
   shortLabel: string;
   durationMs: number | null;
   maxSpeedKmh: number | null;
+  minSpeedKmh: number | null;
   avgSpeedKmh: number | null;
   exitSpeedKmh: number | null;
+  peakBrakeG: number | null;
+  peakAccelG: number | null;
   fromDistKm: number;
   toDistKm: number;
 }
@@ -1955,8 +1958,31 @@ export interface SectorComparisonRow {
   lapB: SectorRunMetrics;
   timeDeltaSec: number | null;
   maxSpeedDeltaKmh: number | null;
+  minSpeedDeltaKmh: number | null;
   avgSpeedDeltaKmh: number | null;
   exitSpeedDeltaKmh: number | null;
+}
+
+export interface MultiLapSectorEntry {
+  slot: 1 | 2 | 3;
+  runId: string;
+  runNumber: number;
+  metrics: SectorRunMetrics;
+  timeDeltaSec: number | null;
+  maxSpeedDeltaKmh: number | null;
+  minSpeedDeltaKmh: number | null;
+  avgSpeedDeltaKmh: number | null;
+  exitSpeedDeltaKmh: number | null;
+}
+
+export interface MultiLapSectorRow {
+  index: number;
+  label: string;
+  shortLabel: string;
+  fromDistM: number;
+  toDistM: number;
+  isTrapBased: boolean;
+  entries: MultiLapSectorEntry[];
 }
 
 export interface LiveSectorCardStatus {
@@ -2129,8 +2155,11 @@ export function computeRunSectorMetrics(
             ? endElapsedMs - startElapsedMs
             : null,
         maxSpeedKmh: null,
+        minSpeedKmh: null,
         avgSpeedKmh: null,
         exitSpeedKmh: null,
+        peakBrakeG: null,
+        peakAccelG: null,
         fromDistKm: sec.fromDistKm,
         toDistKm: sec.toDistKm,
       };
@@ -2155,8 +2184,11 @@ export function computeRunSectorMetrics(
         shortLabel: sec.shortLabel,
         durationMs: null,
         maxSpeedKmh: null,
+        minSpeedKmh: null,
         avgSpeedKmh: null,
         exitSpeedKmh: null,
+        peakBrakeG: null,
+        peakAccelG: null,
         fromDistKm: sec.fromDistKm,
         toDistKm: sec.toDistKm,
       };
@@ -2174,6 +2206,13 @@ export function computeRunSectorMetrics(
     const maxSpeedKmh = Math.round(
       pool.reduce((m, s) => Math.max(m, s.speedKmh || 0), 0)
     );
+    const minSpeedKmh = Math.round(
+      pool.reduce((m, s) => Math.min(m, Number.isFinite(s.speedKmh) ? s.speedKmh : m), Infinity)
+    );
+
+    const longGs = pool.map((s) => (typeof s.accelLongG === 'number' ? s.accelLongG : 0));
+    const peakBrakeG = Number(Math.min(0, ...longGs).toFixed(2));
+    const peakAccelG = Number(Math.max(0, ...longGs).toFixed(2));
 
     const spanDistKm = Math.max(0, endSample.distKm - startSample.distKm);
     const avgSpeedKmh =
@@ -2191,8 +2230,11 @@ export function computeRunSectorMetrics(
       shortLabel: sec.shortLabel,
       durationMs,
       maxSpeedKmh,
+      minSpeedKmh: Number.isFinite(minSpeedKmh) ? minSpeedKmh : null,
       avgSpeedKmh,
       exitSpeedKmh,
+      peakBrakeG,
+      peakAccelG,
       fromDistKm: startSample.distKm,
       toDistKm: endSample.distKm,
     };
@@ -2223,6 +2265,10 @@ export function computeSectorComparisonRows(
       a.maxSpeedKmh !== null && b.maxSpeedKmh !== null
         ? Math.round(a.maxSpeedKmh - b.maxSpeedKmh)
         : null;
+    const minSpeedDeltaKmh =
+      a.minSpeedKmh !== null && b.minSpeedKmh !== null
+        ? Math.round(a.minSpeedKmh - b.minSpeedKmh)
+        : null;
     const avgSpeedDeltaKmh =
       a.avgSpeedKmh !== null && b.avgSpeedKmh !== null
         ? Math.round(a.avgSpeedKmh - b.avgSpeedKmh)
@@ -2243,8 +2289,77 @@ export function computeSectorComparisonRows(
       lapB: b,
       timeDeltaSec,
       maxSpeedDeltaKmh,
+      minSpeedDeltaKmh,
       avgSpeedDeltaKmh,
       exitSpeedDeltaKmh,
+    };
+  });
+
+  return { sectors, rows };
+}
+
+export function computeMultiLapSectorComparison(
+  track: VelocityTrack | null,
+  laps: Array<{ slot: 1 | 2 | 3; run: VelocityRun }>
+): { sectors: TrackSectorDef[]; rows: MultiLapSectorRow[] } {
+  if (laps.length === 0) return { sectors: [], rows: [] };
+  const runsList = laps.map((l) => l.run);
+  const maxDistKm = runsList.reduce((m, r) => Math.max(m, r.distanceKm || 0), 0);
+  const sectors = buildTrackSectors(track, runsList, maxDistKm);
+  const metricsBySlot = laps.map((l) => ({
+    slot: l.slot,
+    run: l.run,
+    metrics: computeRunSectorMetrics(l.run, sectors),
+  }));
+
+  const refSlot = metricsBySlot[0];
+  const rows: MultiLapSectorRow[] = sectors.map((sec, idx) => {
+    const refMetrics = refSlot.metrics[idx];
+    const entries: MultiLapSectorEntry[] = metricsBySlot.map((item, itemIdx) => {
+      const m = item.metrics[idx];
+      const isRef = itemIdx === 0;
+      const timeDeltaSec =
+        !isRef && m.durationMs !== null && refMetrics.durationMs !== null
+          ? Number(((m.durationMs - refMetrics.durationMs) / 1000).toFixed(2))
+          : null;
+      const maxSpeedDeltaKmh =
+        !isRef && m.maxSpeedKmh !== null && refMetrics.maxSpeedKmh !== null
+          ? Math.round(m.maxSpeedKmh - refMetrics.maxSpeedKmh)
+          : null;
+      const minSpeedDeltaKmh =
+        !isRef && m.minSpeedKmh !== null && refMetrics.minSpeedKmh !== null
+          ? Math.round(m.minSpeedKmh - refMetrics.minSpeedKmh)
+          : null;
+      const avgSpeedDeltaKmh =
+        !isRef && m.avgSpeedKmh !== null && refMetrics.avgSpeedKmh !== null
+          ? Math.round(m.avgSpeedKmh - refMetrics.avgSpeedKmh)
+          : null;
+      const exitSpeedDeltaKmh =
+        !isRef && m.exitSpeedKmh !== null && refMetrics.exitSpeedKmh !== null
+          ? Math.round(m.exitSpeedKmh - refMetrics.exitSpeedKmh)
+          : null;
+
+      return {
+        slot: item.slot,
+        runId: item.run.id,
+        runNumber: item.run.runNumber,
+        metrics: m,
+        timeDeltaSec,
+        maxSpeedDeltaKmh,
+        minSpeedDeltaKmh,
+        avgSpeedDeltaKmh,
+        exitSpeedDeltaKmh,
+      };
+    });
+
+    return {
+      index: sec.index,
+      label: sec.label,
+      shortLabel: sec.shortLabel,
+      fromDistM: Math.round(sec.fromDistKm * 1000),
+      toDistM: Math.round(sec.toDistKm * 1000),
+      isTrapBased: sec.isTrapBased,
+      entries,
     };
   });
 
@@ -2368,3 +2483,221 @@ export function computeLiveSectorCards(params: {
     };
   });
 }
+
+export interface TelemetryCriticalPoint {
+  type: 'TOP' | 'BRK' | 'APEX';
+  distM: number;
+  speedKmh: number;
+  longG: number;
+}
+
+/**
+ * Detecta automaticamente os pontos críticos de telemetria sobre a curva:
+ * - TOP: pico de velocidade máxima
+ * - BRK: início de frenagem forte (accelLongG < -0.35G)
+ * - APEX: menor velocidade no fundo de cada curva
+ */
+export function detectTelemetryCriticalPoints(
+  rawSamples: VelocitySample[]
+): TelemetryCriticalPoint[] {
+  const samples = ensureTraceGForces(rawSamples);
+  if (samples.length < 4) return [];
+
+  const totalDistM = Math.max(100, samples[samples.length - 1].distKm * 1000);
+  const minSpacingM = Math.max(70, totalDistM * 0.08);
+  const points: TelemetryCriticalPoint[] = [];
+
+  // 1. TOP SPEED
+  let topIdx = 0;
+  for (let i = 1; i < samples.length; i += 1) {
+    if ((samples[i].speedKmh || 0) > (samples[topIdx].speedKmh || 0)) {
+      topIdx = i;
+    }
+  }
+  const topSample = samples[topIdx];
+  if ((topSample.speedKmh || 0) >= 20) {
+    points.push({
+      type: 'TOP',
+      distM: Math.round(topSample.distKm * 1000),
+      speedKmh: Math.round(topSample.speedKmh),
+      longG: Number((topSample.accelLongG ?? 0).toFixed(2)),
+    });
+  }
+
+  // 2. BRK (Strong Braking Onset: accelLongG < -0.35G)
+  const brkCandidates: Array<{ distM: number; speedKmh: number; longG: number; severity: number }> = [];
+  for (let i = 1; i < samples.length; i += 1) {
+    const prevG = samples[i - 1].accelLongG ?? 0;
+    const currG = samples[i].accelLongG ?? 0;
+    if (currG < -0.35 && prevG >= -0.35) {
+      // Scan forward slightly for peak deceleration within this braking zone
+      let minG = currG;
+      for (let k = i; k < Math.min(samples.length, i + 6); k += 1) {
+        const g = samples[k].accelLongG ?? 0;
+        if (g >= -0.15) break;
+        if (g < minG) minG = g;
+      }
+      brkCandidates.push({
+        distM: Math.round(samples[i].distKm * 1000),
+        speedKmh: Math.round(samples[i].speedKmh),
+        longG: Number(minG.toFixed(2)),
+        severity: Math.abs(minG),
+      });
+    }
+  }
+
+  const chosenBrk: TelemetryCriticalPoint[] = [];
+  for (const cand of brkCandidates.sort((a, b) => b.severity - a.severity)) {
+    if (chosenBrk.length >= 5) break;
+    const tooClose =
+      chosenBrk.some((p) => Math.abs(p.distM - cand.distM) < minSpacingM) ||
+      points.some((p) => p.type === 'TOP' && Math.abs(p.distM - cand.distM) < totalDistM * 0.035);
+    if (!tooClose) {
+      chosenBrk.push({
+        type: 'BRK',
+        distM: cand.distM,
+        speedKmh: cand.speedKmh,
+        longG: cand.longG,
+      });
+    }
+  }
+  points.push(...chosenBrk);
+
+  // 3. APEX (Local curve speed minima after noticeable deceleration)
+  const apexCandidates: Array<{ distM: number; speedKmh: number; longG: number; drop: number }> = [];
+  for (let i = 2; i < samples.length - 2; i += 1) {
+    const curr = samples[i].speedKmh || 0;
+    const prev = samples[i - 1].speedKmh || 0;
+    const next = samples[i + 1].speedKmh || 0;
+    if (curr <= prev && curr < next && curr >= 8) {
+      let localMaxBefore = curr;
+      for (let b = Math.max(0, i - 12); b < i; b += 1) {
+        localMaxBefore = Math.max(localMaxBefore, samples[b].speedKmh || 0);
+      }
+      const drop = localMaxBefore - curr;
+      if (drop >= 10) {
+        apexCandidates.push({
+          distM: Math.round(samples[i].distKm * 1000),
+          speedKmh: Math.round(curr),
+          longG: Number((samples[i].accelLongG ?? 0).toFixed(2)),
+          drop,
+        });
+      }
+    }
+  }
+
+  const chosenApex: TelemetryCriticalPoint[] = [];
+  for (const cand of apexCandidates.sort((a, b) => b.drop - a.drop)) {
+    if (chosenApex.length >= 5) break;
+    const tooClose =
+      chosenApex.some((p) => Math.abs(p.distM - cand.distM) < minSpacingM) ||
+      points.some((p) => Math.abs(p.distM - cand.distM) < totalDistM * 0.03);
+    if (!tooClose) {
+      chosenApex.push({
+        type: 'APEX',
+        distM: cand.distM,
+        speedKmh: cand.speedKmh,
+        longG: cand.longG,
+      });
+    }
+  }
+  points.push(...chosenApex);
+
+  return points.sort((a, b) => a.distM - b.distM);
+}
+
+export interface LapDeltaSample {
+  distM: number;
+  timeDeltaSec: number; // < 0 = ganho (mais rápido), > 0 = atraso (mais lento)
+  speedDeltaKmh: number;
+}
+
+export function computeLapDeltaSeries(
+  refSamples: VelocitySample[],
+  targetSamples: VelocitySample[],
+  stepCount = 130
+): LapDeltaSample[] {
+  if (refSamples.length < 2 || targetSamples.length < 2) return [];
+  const refMaxKm = refSamples[refSamples.length - 1].distKm;
+  const tgtMaxKm = targetSamples[targetSamples.length - 1].distKm;
+  const commonMaxKm = Math.min(refMaxKm, tgtMaxKm);
+  if (commonMaxKm <= 0.02) return [];
+
+  const out: LapDeltaSample[] = [];
+  for (let i = 0; i <= stepCount; i += 1) {
+    const dKm = (i / stepCount) * commonMaxKm;
+    const sRef = interpolateSampleAtDist(refSamples, dKm);
+    const sTgt = interpolateSampleAtDist(targetSamples, dKm);
+    if (!sRef || !sTgt) continue;
+    out.push({
+      distM: Math.round(dKm * 1000),
+      timeDeltaSec: Number(((sTgt.stageElapsedMs - sRef.stageElapsedMs) / 1000).toFixed(2)),
+      speedDeltaKmh: Math.round(sTgt.speedKmh - sRef.speedKmh),
+    });
+  }
+  return out;
+}
+
+export interface LapTelemetrySummaryCard {
+  maxSpeedKmh: number;
+  avgSpeedKmh: number;
+  bestAdvantageSec: number | null;
+  worstDelaySec: number | null;
+  accelPct: number;
+  brakePct: number;
+}
+
+export function computeLapTelemetrySummary(
+  run: VelocityRun,
+  deltaSeries?: LapDeltaSample[]
+): LapTelemetrySummaryCard {
+  const samples = ensureTraceGForces(run.samples);
+  let totalTimeMs = 0;
+  let accelTimeMs = 0;
+  let brakeTimeMs = 0;
+
+  for (let i = 1; i < samples.length; i += 1) {
+    const dt = Math.max(10, samples[i].stageElapsedMs - samples[i - 1].stageElapsedMs);
+    const g = samples[i].accelLongG ?? 0;
+    totalTimeMs += dt;
+    if (g > 0.05) accelTimeMs += dt;
+    else if (g < -0.05) brakeTimeMs += dt;
+  }
+
+  const accelPct = totalTimeMs > 0 ? Math.round((accelTimeMs / totalTimeMs) * 100) : 0;
+  const brakePct = totalTimeMs > 0 ? Math.round((brakeTimeMs / totalTimeMs) * 100) : 0;
+
+  let bestAdvantageSec: number | null = null;
+  let worstDelaySec: number | null = null;
+  if (deltaSeries && deltaSeries.length > 0) {
+    let minD = 0;
+    let maxD = 0;
+    for (const pt of deltaSeries) {
+      if (pt.timeDeltaSec < minD) minD = pt.timeDeltaSec;
+      if (pt.timeDeltaSec > maxD) maxD = pt.timeDeltaSec;
+    }
+    bestAdvantageSec = Number(minD.toFixed(2));
+    worstDelaySec = Number(maxD.toFixed(2));
+  }
+
+  const maxSpeedKmh =
+    run.maxSpeedKmh > 0
+      ? Math.round(run.maxSpeedKmh)
+      : Math.round(samples.reduce((m, s) => Math.max(m, s.speedKmh || 0), 0));
+  const avgSpeedKmh =
+    run.avgSpeedKmh > 0
+      ? Math.round(run.avgSpeedKmh)
+      : samples.length > 0
+        ? Math.round(samples.reduce((sum, s) => sum + (s.speedKmh || 0), 0) / samples.length)
+        : 0;
+
+  return {
+    maxSpeedKmh,
+    avgSpeedKmh,
+    bestAdvantageSec,
+    worstDelaySec,
+    accelPct,
+    brakePct,
+  };
+}
+

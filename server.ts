@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { WebSocket, WebSocketServer } from 'ws';
 
@@ -548,106 +547,6 @@ async function startServer(): Promise<void> {
     res.json({ ok: true, snapshot: match });
   });
 
-  app.post('/api/velocity/coach', async (req, res) => {
-    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-      res.status(503).json({
-        ok: false,
-        error:
-          'Coach por IA indisponível no momento: configure a variável GEMINI_API_KEY no ambiente do servidor.',
-      });
-      return;
-    }
-
-    const body = req.body as {
-      trackName?: string;
-      lapA?: {
-        runNumber: number;
-        totalMs: number;
-        avgSpeedKmh: number;
-        maxSpeedKmh: number;
-        distanceKm: number;
-      };
-      lapB?: {
-        runNumber: number;
-        totalMs: number;
-        avgSpeedKmh: number;
-        maxSpeedKmh: number;
-        distanceKm: number;
-      };
-      comparison?: {
-        totalDeltaSec: number;
-        maxSpeedDeltaKmh: number;
-        avgSpeedDeltaKmh: number;
-        corners?: Array<{
-          cornerIndex: number;
-          distKm: number;
-          lapAApexKmh: number;
-          lapBApexKmh: number;
-          lapAExitKmh: number;
-          lapBExitKmh: number;
-          timeDeltaSec: number;
-          brakeShiftM: number;
-        }>;
-      };
-    };
-
-    if (!body?.lapA || !body?.lapB || !body?.comparison) {
-      res.status(400).json({
-        ok: false,
-        error: 'Informe duas passagens válidas (Volta A e Volta B) para análise.',
-      });
-      return;
-    }
-
-    try {
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
-
-      const prompt = [
-        `Pista/Especial: ${String(body.trackName || 'Circuito').slice(0, 100)}`,
-        `Volta analisada (#${body.lapA.runNumber}): ${(body.lapA.totalMs / 1000).toFixed(2)}s · Vel Méd ${body.lapA.avgSpeedKmh} km/h · Vel Máx ${body.lapA.maxSpeedKmh} km/h`,
-        `Volta referência (#${body.lapB.runNumber}): ${(body.lapB.totalMs / 1000).toFixed(2)}s · Vel Méd ${body.lapB.avgSpeedKmh} km/h · Vel Máx ${body.lapB.maxSpeedKmh} km/h`,
-        `Delta total: ${body.comparison.totalDeltaSec >= 0 ? '+' : ''}${body.comparison.totalDeltaSec}s`,
-        `Curvas e zonas de frenagem detectadas no GPS: ${JSON.stringify(body.comparison.corners || [])}`,
-        'Gere 3 a 4 dicas diretas e objetivas em português do Brasil comparando ponto de frenagem (metros antes/depois), velocidade de ápice e saída de curva, citando números reais dos dados acima.',
-      ].join('\n');
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: prompt,
-        config: {
-          systemInstruction:
-            'Você é um engenheiro de pista e coach de pilotagem para rally e track-day. Seja conciso (máximo 140 palavras), direto em tópicos curtos, usando exclusivamente os números fornecidos.',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
-
-      const advice = (response.text || '').trim();
-      if (!advice) {
-        res.status(502).json({
-          ok: false,
-          error: 'O modelo não retornou análise de telemetria. Tente novamente.',
-        });
-        return;
-      }
-
-      res.json({ ok: true, advice });
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : 'Erro desconhecido';
-      res.status(502).json({
-        ok: false,
-        error: `Falha ao consultar Coach por IA: ${detail}`,
-      });
-    }
-  });
-
   const SATCRON_ALLOWED_HOSTS = new Set(['satcron.com', 'www.satcron.com']);
 
   function sanitizeSatcronText(raw: string): string {
@@ -902,29 +801,66 @@ async function startServer(): Promise<void> {
         return (await r.json()) as Record<string, unknown>;
       };
 
-      const [crewsData, raceTimesData, stageTimesData] = await Promise.all([
+      const staticUrl =
+        activeMod?.staticJSONFile && !activeMod.staticJSONFile.includes('..')
+          ? `https://satcron.com/stages/${activeMod.staticJSONFile.replace(/^\/+/, '')}`
+          : null;
+
+      const [crewsData, raceTimesData, stageTimesData, staticJsonData] = await Promise.all([
         fetchSatcronEndpoint('crews').catch(() => null),
         fetchSatcronEndpoint('racetimes').catch(() => null),
         fetchSatcronEndpoint('stagetimes').catch(() => null),
+        staticUrl
+          ? fetch(staticUrl, {
+              signal: AbortSignal.timeout(5000),
+              headers: { Accept: 'application/json' },
+            })
+              .then((r) => (r.ok ? (r.json() as Promise<Record<string, unknown>>) : null))
+              .catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       const errorPayload = [crewsData, raceTimesData, stageTimesData].find(
         (d) => d && d.status === 'error' && typeof d.message === 'string'
       );
       if (errorPayload && typeof errorPayload.message === 'string') {
-        liveStatusMessage = errorPayload.message;
+        liveStatusMessage = /live data disabled/i.test(errorPayload.message)
+          ? 'Prova sem tempos ativos no momento ou encerrada (Live data disabled for this race).'
+          : errorPayload.message;
       }
+
+      const extractRows = (payload: unknown): Array<Record<string, unknown>> => {
+        if (!payload) return [];
+        if (Array.isArray(payload)) {
+          return payload.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === 'object'));
+        }
+        if (typeof payload !== 'object') return [];
+        const obj = payload as Record<string, unknown>;
+        for (const k of ['data', 'rows', 'crews', 'racetimes', 'stagetimes', 'standings']) {
+          const v = obj[k];
+          if (Array.isArray(v)) {
+            return v.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === 'object'));
+          }
+          if (v && typeof v === 'object') {
+            const mapObj = v as Record<string, unknown>;
+            if (ss && ss !== 'G' && Array.isArray(mapObj[ss])) {
+              return (mapObj[ss] as unknown[]).filter(
+                (x): x is Record<string, unknown> => Boolean(x && typeof x === 'object')
+              );
+            }
+            const vals = Object.entries(mapObj)
+              .filter(([, item]) => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+              .map(([key, item]) => ({ car: key, ...(item as Record<string, unknown>) }));
+            if (vals.length > 0) return vals;
+          }
+        }
+        return [];
+      };
 
       // Normalize rows if live JSON arrays or maps are returned
       const crewsMap = new Map<string, { crew: string; category: string }>();
-      const rawCrewList = Array.isArray(crewsData?.data)
-        ? crewsData.data
-        : Array.isArray(crewsData?.crews)
-          ? crewsData.crews
-          : Array.isArray(crewsData)
-            ? crewsData
-            : [];
-      for (const item of rawCrewList as Array<Record<string, unknown>>) {
+      const rawCrewList = extractRows(crewsData ?? staticJsonData);
+      for (const item of rawCrewList) {
         const carNo = String(item.car ?? item.carNo ?? item.num ?? item.id ?? '');
         if (!carNo) continue;
         const driver = String(item.driver ?? item.piloto ?? item.crew ?? '');
@@ -934,27 +870,29 @@ async function startServer(): Promise<void> {
         crewsMap.set(carNo, { crew: crewName, category: cat });
       }
 
-      const timeSource = ss === 'G' ? raceTimesData : stageTimesData || raceTimesData;
-      const rawTimeRows = Array.isArray(timeSource?.data)
-        ? timeSource.data
-        : Array.isArray(timeSource?.rows)
-          ? timeSource.rows
-          : Array.isArray(timeSource)
-            ? timeSource
-            : [];
-      for (let i = 0; i < (rawTimeRows as Array<Record<string, unknown>>).length; i += 1) {
-        const row = (rawTimeRows as Array<Record<string, unknown>>)[i];
+      const timeSource =
+        (ss === 'G' ? raceTimesData : stageTimesData || raceTimesData) ?? staticJsonData;
+      const rawTimeRows = extractRows(timeSource);
+      for (let i = 0; i < rawTimeRows.length; i += 1) {
+        const row = rawTimeRows[i];
         const carNo = String(row.car ?? row.carNo ?? row.num ?? '');
         const crewInfo = crewsMap.get(carNo);
+        const stageT = String(row.stagetime ?? row.ss_time ?? row.time ?? '-');
+        const totalT = String(row.total ?? row.racetime ?? row.accumulated ?? row.time ?? '-');
+        if (stageT === '-' && totalT === '-' && !row.crew && !crewInfo) continue;
         standings.push({
           pos: String(row.pos ?? row.rank ?? i + 1),
           carNo: carNo || '-',
           crew: String(row.crew ?? crewInfo?.crew ?? `Carro #${carNo || i + 1}`),
           category: String(row.cat ?? row.category ?? crewInfo?.category ?? '-'),
-          stageTime: String(row.stagetime ?? row.ss_time ?? row.time ?? '-'),
-          totalTime: String(row.total ?? row.racetime ?? row.accumulated ?? row.time ?? '-'),
+          stageTime: stageT,
+          totalTime: totalT,
           diffLeader: String(row.diff ?? row.diff_first ?? row.gap ?? '-'),
         });
+      }
+
+      if (standings.length === 0 && !liveStatusMessage) {
+        liveStatusMessage = 'Prova sem tempos publicados para esta etapa no momento.';
       }
 
       res.json({

@@ -7,56 +7,14 @@ import {
   Trophy,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react';
+import {
+  DEFAULT_SATCRON_URL,
+  fetchSatcronStagesClient,
+  type SatcronStagesResponse,
+} from '../utils/satcronClient';
 
-interface SatcronCategory {
-  cat: string;
-  desc: string;
-}
-
-interface SatcronModality {
-  id: string;
-  name: string;
-  apiArgs: string;
-  stageIds: string[];
-  categories: SatcronCategory[];
-}
-
-interface SatcronStandingRow {
-  pos: string;
-  carNo: string;
-  crew: string;
-  category: string;
-  stageTime: string;
-  totalTime: string;
-  diffLeader: string;
-}
-
-interface SatcronParsedTable {
-  headers: string[];
-  rows: string[][];
-}
-
-interface SatcronStagesResponse {
-  ok: boolean;
-  error?: string;
-  sourceUrl?: string;
-  race?: string;
-  mod?: string;
-  ss?: string;
-  eventTitle?: string;
-  subtitle?: string;
-  stageTitle?: string;
-  liveStatusMessage?: string;
-  modalities?: SatcronModality[];
-  categories?: SatcronCategory[];
-  stageIds?: string[];
-  tables?: SatcronParsedTable[];
-  standings?: SatcronStandingRow[];
-  fetchedAtMs?: number;
-}
-
-const DEFAULT_SATCRON_URL = 'https://satcron.com/stages/?race=novaitalia26&mod=1&ss=G';
 const SATCRON_URL_STORAGE_KEY = 'pitstop_satcron_last_url_v1';
 
 function loadSavedSatcronUrl(): string {
@@ -76,7 +34,7 @@ export const SatcronLivePanel: React.FC = () => {
   const [selectedCat, setSelectedCat] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
-  const [showEmbeddedWeb, setShowEmbeddedWeb] = useState<boolean>(false);
+  const [showOfficialModal, setShowOfficialModal] = useState<boolean>(false);
 
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -105,14 +63,12 @@ export const SatcronLivePanel: React.FC = () => {
       setLoading(true);
       setErrorMsg(null);
       try {
-        const params = new URLSearchParams();
-        params.set('url', targetUrl.trim() || DEFAULT_SATCRON_URL);
-        if (modOverride) params.set('mod', modOverride);
-        if (ssOverride) params.set('ss', ssOverride);
-
-        const resp = await fetch(`/api/satcron/stages?${params.toString()}`);
-        const payload = (await resp.json()) as SatcronStagesResponse;
-        if (!resp.ok || !payload.ok) {
+        const payload = await fetchSatcronStagesClient(
+          targetUrl.trim() || DEFAULT_SATCRON_URL,
+          modOverride,
+          ssOverride
+        );
+        if (!payload.ok) {
           setErrorMsg(payload.error || 'Não foi possível carregar dados do Satcron.');
           return;
         }
@@ -127,7 +83,7 @@ export const SatcronLivePanel: React.FC = () => {
           }
         }
       } catch {
-        setErrorMsg('Falha ao consultar tempos ao vivo do Satcron.');
+        setErrorMsg('Não foi possível consultar o Satcron no momento.');
       } finally {
         setLoading(false);
       }
@@ -322,7 +278,7 @@ export const SatcronLivePanel: React.FC = () => {
       </div>
 
       {errorMsg && (
-        <div className="rounded-xl border border-red-700/60 bg-red-950/40 p-3 text-xs font-semibold text-red-200">
+        <div className="rounded-xl border border-amber-600/60 bg-amber-950/35 p-3 text-xs font-semibold text-amber-200">
           {errorMsg}
         </div>
       )}
@@ -343,15 +299,11 @@ export const SatcronLivePanel: React.FC = () => {
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => setShowEmbeddedWeb((v) => !v)}
-                className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2.5 text-[11px] font-bold ${
-                  showEmbeddedWeb
-                    ? 'border-[#E10600] bg-[#E10600]/20 text-white'
-                    : 'border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
-                }`}
+                onClick={() => setShowOfficialModal(true)}
+                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-[#E10600]/70 bg-[#1A0D0E] px-3 text-xs font-extrabold text-white hover:bg-[#E10600]"
               >
-                <Globe className="h-3.5 w-3.5 text-[#E10600]" />
-                <span>{showEmbeddedWeb ? 'Ver Tabela App' : 'Abrir Painel Web'}</span>
+                <Globe className="h-3.5 w-3.5 text-[#FF4D47]" />
+                <span>Abrir Painel Oficial</span>
               </button>
             </div>
           </div>
@@ -389,112 +341,147 @@ export const SatcronLivePanel: React.FC = () => {
         </div>
       )}
 
-      {/* Optional Embedded Satcron Web View inside App */}
-      {showEmbeddedWeb ? (
-        <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#080B0D]">
-          <iframe
-            title="Satcron Resultados Ao Vivo"
-            src={activeSourceHref}
-            className="h-[65dvh] w-full bg-white"
-            referrerPolicy="no-referrer"
-          />
-        </div>
-      ) : (
-        <>
-          {/* Search Crew / Car Filter */}
-          <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar nº do carro, piloto ou navegador..."
-              className="min-h-[40px] w-full rounded-xl border border-zinc-800 bg-[#111214] pr-3 pl-9 text-xs text-white focus:border-[#E10600] focus:outline-none"
-            />
-          </div>
+      {/* Search Crew / Car Filter */}
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Buscar nº do carro, piloto ou navegador..."
+          className="min-h-[40px] w-full rounded-xl border border-zinc-800 bg-[#111214] pr-3 pl-9 text-xs text-white focus:border-[#E10600] focus:outline-none"
+        />
+      </div>
 
-          {/* Parsed Live Standings Table */}
-          {filteredStandings.length > 0 ? (
-            <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-[#111214]">
+      {/* Parsed Live Standings Table */}
+      {filteredStandings.length > 0 ? (
+        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-[#111214]">
+          <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
+            <thead>
+              <tr className="border-b border-zinc-800 bg-[#080B0D] text-[10px] text-[#B5B5B5] uppercase">
+                <th className="px-2.5 py-2">Pos</th>
+                <th className="px-2 py-2">Nº</th>
+                <th className="px-2 py-2 font-sans">Dupla</th>
+                <th className="px-2 py-2">Cat</th>
+                <th className="px-2 py-2 text-right">SS</th>
+                <th className="px-2 py-2 text-right">Acum.</th>
+                <th className="px-2.5 py-2 text-right">Dif.</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/70">
+              {filteredStandings.map((row, idx) => (
+                <tr key={`${row.carNo}-${idx}`} className="hover:bg-[#17191D]">
+                  <td className="px-2.5 py-2 font-extrabold text-amber-300">{row.pos}</td>
+                  <td className="px-2 py-2 font-bold text-white">{row.carNo}</td>
+                  <td className="px-2 py-2 font-sans font-semibold text-white">
+                    {row.crew}
+                  </td>
+                  <td className="px-2 py-2 text-zinc-400">{row.category}</td>
+                  <td className="px-2 py-2 text-right text-emerald-400">{row.stageTime}</td>
+                  <td className="px-2 py-2 text-right font-bold text-white">
+                    {row.totalTime}
+                  </td>
+                  <td className="px-2.5 py-2 text-right text-zinc-400">{row.diffLeader}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : data?.tables && data.tables.length > 0 ? (
+        <div className="space-y-3">
+          {data.tables.map((tbl, tIdx) => (
+            <div
+              key={tIdx}
+              className="overflow-x-auto rounded-xl border border-zinc-800 bg-[#111214]"
+            >
               <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
-                <thead>
-                  <tr className="border-b border-zinc-800 bg-[#080B0D] text-[10px] text-[#B5B5B5] uppercase">
-                    <th className="px-2.5 py-2">Pos</th>
-                    <th className="px-2 py-2">Nº</th>
-                    <th className="px-2 py-2 font-sans">Dupla</th>
-                    <th className="px-2 py-2">Cat</th>
-                    <th className="px-2 py-2 text-right">SS</th>
-                    <th className="px-2 py-2 text-right">Acum.</th>
-                    <th className="px-2.5 py-2 text-right">Dif.</th>
-                  </tr>
-                </thead>
+                {tbl.headers.length > 0 && (
+                  <thead>
+                    <tr className="border-b border-zinc-800 bg-[#080B0D] text-[10px] text-[#B5B5B5] uppercase">
+                      {tbl.headers.map((h, hIdx) => (
+                        <th key={hIdx} className="px-2.5 py-2">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                )}
                 <tbody className="divide-y divide-zinc-800/70">
-                  {filteredStandings.map((row, idx) => (
-                    <tr key={`${row.carNo}-${idx}`} className="hover:bg-[#17191D]">
-                      <td className="px-2.5 py-2 font-extrabold text-amber-300">{row.pos}</td>
-                      <td className="px-2 py-2 font-bold text-white">{row.carNo}</td>
-                      <td className="px-2 py-2 font-sans font-semibold text-white">
-                        {row.crew}
-                      </td>
-                      <td className="px-2 py-2 text-zinc-400">{row.category}</td>
-                      <td className="px-2 py-2 text-right text-emerald-400">{row.stageTime}</td>
-                      <td className="px-2 py-2 text-right font-bold text-white">
-                        {row.totalTime}
-                      </td>
-                      <td className="px-2.5 py-2 text-right text-zinc-400">{row.diffLeader}</td>
+                  {tbl.rows.map((cells, rIdx) => (
+                    <tr key={rIdx} className="hover:bg-[#17191D]">
+                      {cells.map((c, cIdx) => (
+                        <td key={cIdx} className="px-2.5 py-2 text-white">
+                          {c}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          ) : data?.tables && data.tables.length > 0 ? (
-            <div className="space-y-3">
-              {data.tables.map((tbl, tIdx) => (
-                <div
-                  key={tIdx}
-                  className="overflow-x-auto rounded-xl border border-zinc-800 bg-[#111214]"
-                >
-                  <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
-                    {tbl.headers.length > 0 && (
-                      <thead>
-                        <tr className="border-b border-zinc-800 bg-[#080B0D] text-[10px] text-[#B5B5B5] uppercase">
-                          {tbl.headers.map((h, hIdx) => (
-                            <th key={hIdx} className="px-2.5 py-2">
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                    )}
-                    <tbody className="divide-y divide-zinc-800/70">
-                      {tbl.rows.map((cells, rIdx) => (
-                        <tr key={rIdx} className="hover:bg-[#17191D]">
-                          {cells.map((c, cIdx) => (
-                            <td key={cIdx} className="px-2.5 py-2 text-white">
-                              {c}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 text-center space-y-2">
-              <p className="text-xs font-bold text-amber-300">
-                {data?.liveStatusMessage
-                  ? `Satcron: ${data.liveStatusMessage}`
-                  : 'Aguardando tempos oficiais publicados para esta etapa.'}
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 text-center space-y-2.5">
+          <p className="text-xs font-bold text-amber-300">
+            {data?.liveStatusMessage
+              ? data.liveStatusMessage
+              : 'Prova sem tempos ativos no momento ou encerrada.'}
+          </p>
+          <p className="text-[11px] text-zinc-400">
+            As modalidades, especiais e categorias da prova foram carregadas acima. Para conferir históricos ou resultados oficiais completos no site da cronometragem, toque em{' '}
+            <strong className="text-white">Abrir Painel Oficial</strong>.
+          </p>
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setShowOfficialModal(true)}
+              className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-4 text-xs font-extrabold text-white uppercase"
+            >
+              <Globe className="h-4 w-4" />
+              <span>Abrir Painel Oficial</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Embedded Official Satcron Panel inside App */}
+      {showOfficialModal && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#050608]">
+          <div className="flex items-center justify-between gap-2 border-b border-zinc-800 bg-[#111214] px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate font-['Barlow_Condensed'] text-base font-extrabold tracking-wide text-white uppercase">
+                Painel Oficial Satcron · {data?.eventTitle || 'Ao Vivo'}
               </p>
-              <p className="text-[11px] text-zinc-400">
-                As categorias e especiais da prova foram carregadas acima. Quando a apuração estiver ativa, os tempos aparecem aqui automaticamente ou toque em{' '}
-                <strong className="text-white">Abrir Painel Web</strong>.
-              </p>
+              <p className="truncate font-mono text-[10px] text-zinc-400">{activeSourceHref}</p>
             </div>
-          )}
-        </>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <a
+                href={activeSourceHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-9 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 text-xs font-bold text-[#C0C4C9] hover:text-white"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                <span>Navegador</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => setShowOfficialModal(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
+                aria-label="Fechar Painel Oficial"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <iframe
+            title="Painel Oficial Satcron"
+            src={activeSourceHref}
+            className="flex-1 w-full bg-white"
+            referrerPolicy="no-referrer"
+          />
+        </div>
       )}
     </section>
   );

@@ -15,7 +15,7 @@ export const GOPRO_QRY_RSP_UUID = 'b5f90077-aa8d-11e3-9046-0002a5d5c51b';
 
 const SAVED_GOPRO_KEY = 'pitstop_saved_gopro_devices_v1';
 const GOPRO_ALIASES_KEY = 'pitstop_gopro_aliases_v1';
-const NAV_SETTINGS_KEY = 'pitstop_sports_nav_settings_v1';
+const NAV_SETTINGS_KEY = 'pitstop_nav_settings_v1';
 
 export type GoProResolution = '4K' | '2.7K' | '1080p';
 export type GoProFps = 30 | 60 | 120;
@@ -736,21 +736,31 @@ export async function modeAllGoPro(mode: GoProCaptureMode): Promise<void> {
   }
 }
 
+export async function wakeSingleGoPro(cam: GoProCameraState): Promise<void> {
+  if (!cam.sleeping && cam.connected) return;
+  if (!cam.isSimulated) {
+    await wakeOrReconnectGoProById(cam.id, cam.name, updateCameraInFleet).catch((err) => {
+      fleetState.errorMsg =
+        err instanceof Error ? err.message : 'Falha ao acordar GoPro.';
+      notifyFleet();
+    });
+  } else {
+    updateCameraInFleet(cam.id, { sleeping: false, connected: true, reconnecting: false });
+  }
+}
+
+export async function sleepSingleGoPro(cam: GoProCameraState): Promise<void> {
+  if (cam.sleeping && !cam.connected) return;
+  if (!cam.isSimulated) await sendGoProSleep(cam.id).catch(() => {});
+  updateCameraInFleet(cam.id, { sleeping: true, connected: false, recording: false });
+}
+
 export async function toggleSingleGoProPower(cam: GoProCameraState): Promise<void> {
   const disconnectedOrSleeping = cam.sleeping || !cam.connected;
   if (disconnectedOrSleeping) {
-    if (!cam.isSimulated) {
-      await wakeOrReconnectGoProById(cam.id, cam.name, updateCameraInFleet).catch((err) => {
-        fleetState.errorMsg =
-          err instanceof Error ? err.message : 'Falha ao acordar GoPro.';
-        notifyFleet();
-      });
-    } else {
-      updateCameraInFleet(cam.id, { sleeping: false, connected: true, reconnecting: false });
-    }
+    await wakeSingleGoPro(cam);
   } else {
-    if (!cam.isSimulated) await sendGoProSleep(cam.id).catch(() => {});
-    updateCameraInFleet(cam.id, { sleeping: true, connected: false, recording: false });
+    await sleepSingleGoPro(cam);
   }
 }
 

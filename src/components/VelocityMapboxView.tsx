@@ -43,16 +43,20 @@ interface ReplayVehiclePose {
   headingDeg: number | null;
 }
 
+type VehicleVariant = 'default' | 'lapA' | 'lapB' | 'lap1' | 'lap2' | 'lap3';
+
 interface VelocityMapboxViewProps {
   trackId: string;
   editableTrace: VelocitySample[];
   ghostTrace?: VelocitySample[];
+  thirdTrace?: VelocitySample[];
   offsetGhostTrace?: boolean;
   orderedTraps: VelocityTrap[];
   postEditIdx: number;
   currentPos: { lat: number; lon: number } | null;
-  vehicleStyle?: 'default' | 'lapA' | 'lapB';
+  vehicleStyle?: VehicleVariant;
   ghostCar?: ReplayVehiclePose | null;
+  thirdCar?: ReplayVehiclePose | null;
   navigationMode?: boolean;
   headingUp?: boolean;
   onToggleHeadingUp?: () => void;
@@ -167,7 +171,7 @@ function createMarcoPinElement(
 
 function createVehicleMarkerElement(
   headingDeg: number | null,
-  variant: 'default' | 'lapA' | 'lapB' = 'default'
+  variant: VehicleVariant = 'default'
 ): HTMLDivElement {
   const el = document.createElement('div');
   el.style.width = '34px';
@@ -179,9 +183,28 @@ function createVehicleMarkerElement(
   el.style.pointerEvents = 'none';
 
   const fillColor =
-    variant === 'lapA' ? '#10B981' : variant === 'lapB' ? '#F59E0B' : '#E10600';
+    variant === 'lap1' || variant === 'lapA'
+      ? '#10B981'
+      : variant === 'lap2'
+        ? '#FF2A2A'
+        : variant === 'lap3'
+          ? '#38BDF8'
+          : variant === 'lapB'
+            ? '#F59E0B'
+            : '#E10600';
   const strokeColor = variant === 'lapB' ? '#111214' : '#FFFFFF';
-  const badgeText = variant === 'lapA' ? 'A' : variant === 'lapB' ? 'B' : '';
+  const badgeText =
+    variant === 'lap1'
+      ? 'V1'
+      : variant === 'lap2'
+        ? 'V2'
+        : variant === 'lap3'
+          ? 'V3'
+          : variant === 'lapA'
+            ? 'A'
+            : variant === 'lapB'
+              ? 'B'
+              : '';
 
   const svgNS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNS, 'svg');
@@ -208,21 +231,21 @@ function createVehicleMarkerElement(
     badge.textContent = badgeText;
     badge.style.position = 'absolute';
     badge.style.top = '-4px';
-    badge.style.right = '-2px';
-    badge.style.minWidth = '15px';
+    badge.style.right = '-3px';
+    badge.style.minWidth = '16px';
     badge.style.height = '15px';
     badge.style.display = 'inline-flex';
     badge.style.alignItems = 'center';
     badge.style.justifyContent = 'center';
     badge.style.borderRadius = '4px';
     badge.style.fontFamily = 'monospace';
-    badge.style.fontSize = '9.5px';
+    badge.style.fontSize = '9px';
     badge.style.fontWeight = '900';
     badge.style.lineHeight = '1';
     badge.style.padding = '0 3px';
-    badge.style.background = variant === 'lapA' ? '#050608' : '#111214';
-    badge.style.color = variant === 'lapA' ? '#10B981' : '#F59E0B';
-    badge.style.border = `1.5px solid ${variant === 'lapA' ? '#FFFFFF' : '#F59E0B'}`;
+    badge.style.background = '#050608';
+    badge.style.color = fillColor;
+    badge.style.border = `1.5px solid ${fillColor}`;
     badge.style.boxShadow = '0 1px 4px rgba(0,0,0,0.85)';
     el.appendChild(badge);
   }
@@ -294,12 +317,14 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   trackId,
   editableTrace,
   ghostTrace,
+  thirdTrace,
   offsetGhostTrace = false,
   orderedTraps,
   postEditIdx,
   currentPos,
   vehicleStyle = 'default',
   ghostCar = null,
+  thirdCar = null,
   navigationMode = false,
   headingUp,
   onToggleHeadingUp,
@@ -332,6 +357,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     variant: string;
   } | null>(null);
   const ghostMarkerRef = useRef<{
+    marker: L.Marker;
+    el: HTMLDivElement;
+  } | null>(null);
+  const thirdMarkerRef = useRef<{
     marker: L.Marker;
     el: HTMLDivElement;
   } | null>(null);
@@ -429,6 +458,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       carLayerRef.current = null;
       primaryMarkerRef.current = null;
       ghostMarkerRef.current = null;
+      thirdMarkerRef.current = null;
     };
   }, []);
 
@@ -467,13 +497,35 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     return () => window.clearTimeout(t);
   }, [isFullscreen]);
 
-  // Renderiza traçado Volta B (tracejada 6px por baixo com deslocamento) e Volta A (Mapa de Calor 4px por cima)
+  // Renderiza traçados: V3 (ciano tracejada -2.6m), V2 (vermelha tracejada +2.6m) e V1 (Mapa de Calor por cima)
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
     if (!routeLayer) return;
     routeLayer.clearLayers();
 
-    // 1. Linha da Volta B por baixo (tracejada branca/âmbar de 6px, deslocada lateralmente no Mapa Único)
+    // 1. Linha da Volta 3 (Ciano tracejada por baixo, deslocamento -2.6m)
+    if (thirdTrace && thirdTrace.length > 1) {
+      const thirdLatLngs = offsetTraceLatLngs(
+        thirdTrace,
+        offsetGhostTrace ? -2.6 : 0
+      );
+      L.polyline(thirdLatLngs, {
+        color: '#050608',
+        weight: 7,
+        opacity: 0.65,
+        dashArray: '8 8',
+        lineCap: 'round',
+      }).addTo(routeLayer);
+      L.polyline(thirdLatLngs, {
+        color: '#38BDF8',
+        weight: 5,
+        opacity: 0.9,
+        dashArray: '8 8',
+        lineCap: 'round',
+      }).addTo(routeLayer);
+    }
+
+    // 2. Linha da Volta 2 por baixo (vermelha tracejada, deslocamento +2.6m no Mapa Único)
     if (ghostTrace && ghostTrace.length > 1) {
       const ghostLatLngs = offsetTraceLatLngs(
         ghostTrace,
@@ -487,25 +539,27 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         lineCap: 'round',
       }).addTo(routeLayer);
       L.polyline(ghostLatLngs, {
-        color: '#F59E0B',
-        weight: 6,
+        color: '#FF2A2A',
+        weight: 5.5,
         opacity: 0.92,
         dashArray: '10 8',
         lineCap: 'round',
       }).addTo(routeLayer);
       L.polyline(ghostLatLngs, {
         color: '#FFFFFF',
-        weight: 2,
-        opacity: 0.55,
+        weight: 1.5,
+        opacity: 0.45,
         dashArray: '10 8',
         lineCap: 'round',
       }).addTo(routeLayer);
     }
 
-    // 2. Linha da Volta A por cima (4px no modo comparativo com Ghost, ou 4.5px padrão)
+    // 3. Linha da Volta 1 (ou principal) por cima
     if (editableTrace.length > 1) {
-      const hasGhost = Boolean(ghostTrace && ghostTrace.length > 1);
-      const topWeight = hasGhost ? 4 : 4.5;
+      const hasComparison = Boolean(
+        (ghostTrace && ghostTrace.length > 1) || (thirdTrace && thirdTrace.length > 1)
+      );
+      const topWeight = hasComparison ? 4 : 4.5;
 
       if (heatmapMode === 'none') {
         const latLngs: [number, number][] = editableTrace.map((s) => [s.lat, s.lon]);
@@ -559,14 +613,14 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         }
       }
     }
-  }, [editableTrace, ghostTrace, offsetGhostTrace, heatmapMode]);
+  }, [editableTrace, ghostTrace, thirdTrace, offsetGhostTrace, heatmapMode]);
 
   // Scrubber estático para editor de pista (separado do routeLayer para manter 60fps no Replay)
   useEffect(() => {
     const scrubberLayer = scrubberLayerRef.current;
     if (!scrubberLayer) return;
     scrubberLayer.clearLayers();
-    if (vehicleStyle !== 'default' || ghostCar) return;
+    if (vehicleStyle !== 'default' || ghostCar || thirdCar) return;
     const scrubber = editableTrace[postEditIdx];
     if (scrubber) {
       L.circleMarker([scrubber.lat, scrubber.lon], {
@@ -577,7 +631,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         fillOpacity: 1,
       }).addTo(scrubberLayer);
     }
-  }, [editableTrace, postEditIdx, vehicleStyle, ghostCar]);
+  }, [editableTrace, postEditIdx, vehicleStyle, ghostCar, thirdCar]);
 
   // Renderiza cada Marco (@turf/turf linha transversal + seta perpendicular + marcador central no mesmo ponto)
   const gatesDataKey = useMemo(
@@ -730,12 +784,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     }
   }, [orderedTraps, selectedTrapId, gatesDataKey]);
 
-  // Renderiza marcadores persistentes de Alta Taxa (30/60fps) para Carro A e Carro Fantasma B
+  // Renderiza marcadores persistentes de Alta Taxa (30/60fps) para V1, V2 e V3
   useEffect(() => {
     const carLayer = carLayerRef.current;
     if (!carLayer) return;
 
-    // Carro Principal (Padrão ou Volta A Verde Esmeralda)
+    // Carro 1 (Padrão ou Volta 1 Verde Esmeralda)
     if (currentPos) {
       if (
         !primaryMarkerRef.current ||
@@ -771,14 +825,14 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       primaryMarkerRef.current = null;
     }
 
-    // Carro Fantasma (Volta B Laranja/Âmbar com badge "B")
+    // Carro 2 (Volta 2 Vermelho com badge "V2")
     if (ghostCar) {
       const [gLat, gLon] = offsetGhostTrace
         ? offsetPointAlongTrace(ghostTrace, ghostCar.lat, ghostCar.lon, 2.6)
         : [ghostCar.lat, ghostCar.lon];
 
       if (!ghostMarkerRef.current) {
-        const el = createVehicleMarkerElement(ghostCar.headingDeg, 'lapB');
+        const el = createVehicleMarkerElement(ghostCar.headingDeg, 'lap2');
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
@@ -804,7 +858,50 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       carLayer.removeLayer(ghostMarkerRef.current.marker);
       ghostMarkerRef.current = null;
     }
-  }, [currentPos, navHeadingDeg, vehicleStyle, ghostCar, ghostTrace, offsetGhostTrace]);
+
+    // Carro 3 (Volta 3 Ciano com badge "V3")
+    if (thirdCar) {
+      const [tLat, tLon] = offsetGhostTrace
+        ? offsetPointAlongTrace(thirdTrace, thirdCar.lat, thirdCar.lon, -2.6)
+        : [thirdCar.lat, thirdCar.lon];
+
+      if (!thirdMarkerRef.current) {
+        const el = createVehicleMarkerElement(thirdCar.headingDeg, 'lap3');
+        const icon = L.divIcon({
+          html: el,
+          className: 'pitstop-car-divicon',
+          iconSize: [34, 38],
+          iconAnchor: [17, 19],
+        });
+        const marker = L.marker([tLat, tLon], {
+          icon,
+          interactive: false,
+          zIndexOffset: 1030,
+        }).addTo(carLayer);
+        thirdMarkerRef.current = { marker, el };
+      } else {
+        thirdMarkerRef.current.marker.setLatLng([tLat, tLon]);
+        const svg = thirdMarkerRef.current.el.querySelector(
+          'svg[data-car-arrow="1"]'
+        ) as SVGElement | null;
+        if (svg) {
+          svg.style.transform = `rotate(${typeof thirdCar.headingDeg === 'number' ? thirdCar.headingDeg : 0}deg)`;
+        }
+      }
+    } else if (thirdMarkerRef.current) {
+      carLayer.removeLayer(thirdMarkerRef.current.marker);
+      thirdMarkerRef.current = null;
+    }
+  }, [
+    currentPos,
+    navHeadingDeg,
+    vehicleStyle,
+    ghostCar,
+    ghostTrace,
+    thirdCar,
+    thirdTrace,
+    offsetGhostTrace,
+  ]);
 
   const fitMapToTrackOrCenter = (force = false) => {
     const map = mapRef.current;
@@ -813,10 +910,11 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     const pts: [number, number][] = [
       ...editableTrace.map((s): [number, number] => [s.lat, s.lon]),
       ...(ghostTrace ? ghostTrace.map((s): [number, number] => [s.lat, s.lon]) : []),
+      ...(thirdTrace ? thirdTrace.map((s): [number, number] => [s.lat, s.lon]) : []),
       ...orderedTraps.map((t): [number, number] => [t.lat, t.lon]),
     ];
 
-    const key = `${trackId}:${editableTrace.length}:${ghostTrace?.length ?? 0}:${orderedTraps.length}`;
+    const key = `${trackId}:${editableTrace.length}:${ghostTrace?.length ?? 0}:${thirdTrace?.length ?? 0}:${orderedTraps.length}`;
     if (!force && lastFittedKeyRef.current === key) return;
 
     if (pts.length >= 2) {
@@ -842,7 +940,14 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     if (navigationMode) return;
     fitMapToTrackOrCenter(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackId, editableTrace.length, ghostTrace?.length, orderedTraps.length, navigationMode]);
+  }, [
+    trackId,
+    editableTrace.length,
+    ghostTrace?.length,
+    thirdTrace?.length,
+    orderedTraps.length,
+    navigationMode,
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
