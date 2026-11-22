@@ -4,7 +4,6 @@ import { Geolocation } from '@capacitor/geolocation';
 import {
   Activity,
   ArrowLeft,
-  Battery,
   Camera,
   Check,
   ChevronDown,
@@ -35,6 +34,7 @@ import {
   Trophy,
   Upload,
   X,
+  Zap,
 } from 'lucide-react';
 import { FuelTechAnalysisPanel } from './FuelTechAnalysisPanel';
 import { SatcronLivePanel } from './SatcronLivePanel';
@@ -44,7 +44,6 @@ import { useNavSettings } from '../utils/navSettings';
 import {
   clearGoProFleetError,
   getGoProDisplayName,
-  modeSingleGoPro,
   renameGoProInFleet,
   shutterAllGoPro,
   shutterSingleGoPro,
@@ -219,6 +218,8 @@ function estimateSatellites(accuracyM: number | null, gpsActive: boolean): numbe
 interface VelocityLiveStagePanelProps {
   activeTrackName: string;
   hasTraps: boolean;
+  orderedTraps: VelocityTrap[];
+  currentSplitTimesMs: Record<string, number>;
   stageState: 'idle' | 'armed' | 'running' | 'finished';
   stageStartMs: number | null;
   lastFinishedMs: number | null;
@@ -238,6 +239,8 @@ interface VelocityLiveStagePanelProps {
 const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
   activeTrackName,
   hasTraps,
+  orderedTraps,
+  currentSplitTimesMs,
   stageState,
   stageStartMs,
   lastFinishedMs,
@@ -303,6 +306,32 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
     return null;
   }, [stageState, bestRun, predictiveDeltaSec, liveSamples, totalDistKm, speedKmh]);
 
+  const splitTrapItems = useMemo(() => {
+    const checkpoints = orderedTraps.filter((t) => t.kind !== 'start');
+    if (checkpoints.length === 0) return [];
+    let foundActive = false;
+    return checkpoints.map((trap, idx) => {
+      const currMs = currentSplitTimesMs[trap.id] ?? null;
+      const bestMs = bestRun?.splitTimesMs[trap.id] ?? null;
+      const diffSec =
+        currMs !== null && bestMs !== null ? (currMs - bestMs) / 1000 : null;
+      const crossed = currMs !== null;
+      let isActive = false;
+      if (!crossed && !foundActive && stageState === 'running') {
+        isActive = true;
+        foundActive = true;
+      }
+      return {
+        id: trap.id,
+        code: `P${idx + 1}`,
+        name: trap.name,
+        crossed,
+        isActive,
+        diffSec,
+      };
+    });
+  }, [orderedTraps, currentSplitTimesMs, bestRun, stageState]);
+
   const deltaClampedPct =
     predictiveDeltaSec === null
       ? 0
@@ -330,14 +359,19 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
     setEditingTrip(false);
   };
 
+  const formattedGiantDelta =
+    predictiveDeltaSec === null
+      ? '--.--s'
+      : `${predictiveDeltaSec > 0 ? '+' : ''}${predictiveDeltaSec.toFixed(2)}s`;
+
   return (
-    <div className="flex flex-1 min-h-0 flex-col justify-between gap-2 rounded-xl border border-zinc-800 bg-[#000000] p-2.5 text-white shadow-xl sm:p-3.5">
-      {/* 1. BARRA DE DELTA EM TEMPO REAL */}
+    <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 rounded-xl border border-zinc-800 bg-[#000000] p-2 text-white shadow-xl sm:p-3">
+      {/* 1. BARRA SUPERIOR DE DELTA EM TEMPO REAL */}
       <div className="shrink-0">
         <div className="flex items-center justify-between font-mono text-[10px] sm:text-xs tabular-nums">
           <span className="font-bold text-emerald-400">RÁPIDO (-s)</span>
           <span
-            className={`inline-flex items-center gap-1 text-sm font-black sm:text-base ${
+            className={`inline-flex items-center gap-1 text-xs font-black sm:text-sm ${
               isFaster
                 ? 'text-emerald-400'
                 : isSlower
@@ -360,7 +394,7 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
           <span className="font-bold text-[#FF2A2A]">LENTO (+s)</span>
         </div>
 
-        <div className="relative mt-1 h-2.5 w-full overflow-hidden rounded-lg border border-zinc-800 bg-[#111214]">
+        <div className="relative mt-1 h-2 w-full overflow-hidden rounded-lg border border-zinc-800 bg-[#111214]">
           <div className="absolute inset-y-0 left-1/2 z-10 w-[2px] -translate-x-1/2 bg-zinc-400/80" />
           {isFaster && (
             <div
@@ -377,36 +411,37 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
         </div>
       </div>
 
-      {/* 2. GRID FOCAL DE 3 BLOCOS PRINCIPAIS: VELOCIDADE + METROS + TEMPO DA ESPECIAL */}
-      <div className="flex flex-1 min-h-0 flex-col justify-between gap-2">
-        <div className="grid flex-1 min-h-0 grid-cols-2 gap-2">
-          {/* Bloco 1: VELOCIDADE ATUAL (Destaque Máximo) */}
-          <div className="flex flex-col items-center justify-center rounded-xl border border-zinc-800 bg-[#050608] px-2 py-2 text-center">
-            <span className="text-[10px] font-bold tracking-wider text-zinc-400 uppercase">
-              Velocidade
-            </span>
-            <div className="mt-1 flex items-baseline justify-center gap-1 font-mono tabular-nums">
-              <span className="text-6xl font-black leading-none tracking-tight text-white sm:text-7xl">
-                {Math.round(speedKmh)}
-              </span>
-              <span className="text-xs font-extrabold text-[#E10600] sm:text-sm">km/h</span>
-            </div>
-            <p className="mt-1.5 font-mono text-[10px] text-zinc-400 tabular-nums sm:text-[11px]">
+      {/* 2. GRID FOCAL VELOCIDADE: VELOCIDADE NO TOPO + (METROS | DELTA) + CRONÔMETRO + (CH | MELHOR | ÚLTIMA) */}
+      <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5">
+        {/* Bloco 1: VELOCIDADE ATUAL (Destaque Superior) */}
+        <div className="flex flex-1 min-h-0 flex-col items-center justify-center rounded-xl border border-zinc-800 bg-[#050608] px-3 py-1.5 text-center">
+          <div className="flex w-full items-center justify-between font-mono text-[10px] font-bold tracking-wider text-zinc-400 uppercase">
+            <span>Velocidade</span>
+            <span className="tabular-nums">
               G:{' '}
-              <strong className={longG < -0.1 ? 'text-[#FF4D47]' : 'text-emerald-400'}>
+              <strong className={longG < -0.1 ? 'text-[#FF2A2A]' : 'text-[#10B981]'}>
                 {longG >= 0 ? `+${longG.toFixed(2)}` : longG.toFixed(2)}
               </strong>{' '}
               · Lat {latG.toFixed(2)}
-            </p>
+            </span>
           </div>
+          <div className="mt-0.5 flex items-baseline justify-center gap-1.5 font-mono tabular-nums">
+            <span className="text-5xl font-black leading-none tracking-tight text-white sm:text-6xl">
+              {Math.round(speedKmh)}
+            </span>
+            <span className="text-xs font-extrabold text-[#E10600] sm:text-sm">km/h</span>
+          </div>
+        </div>
 
-          {/* Bloco 2: METROS PERCORRIDOS / ODÔMETRO (Toque para editar) */}
-          <div className="flex flex-col items-center justify-center rounded-xl border border-zinc-800 bg-[#050608] px-2 py-2 text-center">
+        {/* Grid 2 Colunas Iguais: Metros Percorridos (Esquerda) + Delta MAIS RÁPIDO / MAIS LENTO (Direita) */}
+        <div className="grid shrink-0 grid-cols-2 gap-1.5">
+          {/* Coluna Esquerda: METROS PERCORRIDOS / ODÔMETRO (Toque para editar) */}
+          <div className="flex flex-col items-center justify-center rounded-xl border border-zinc-800 bg-[#050608] px-2 py-1.5 text-center">
             <span className="text-[10px] font-bold tracking-wider text-zinc-400 uppercase">
               Metros (Odômetro)
             </span>
             {editingTrip ? (
-              <div className="mt-1 w-full max-w-[160px] space-y-1">
+              <div className="mt-1 w-full max-w-[150px] space-y-1">
                 <div className="flex items-center gap-1 rounded-lg border border-[#E10600] bg-[#14161A] px-1.5 py-1">
                   <input
                     type="number"
@@ -420,7 +455,7 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
                       if (e.key === 'Escape') setEditingTrip(false);
                     }}
                     aria-label="Editar odômetro Trip"
-                    className="min-w-0 flex-1 bg-transparent text-center font-mono text-base font-black text-amber-300 focus:outline-none"
+                    className="min-w-0 flex-1 bg-transparent text-center font-mono text-sm font-black text-amber-300 focus:outline-none"
                   />
                   <button
                     type="button"
@@ -458,26 +493,48 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
                   setEditingTrip(true);
                 }}
                 title="Toque para digitar metragem do odômetro"
-                className="group mt-1 flex flex-col items-center justify-center rounded-lg px-2 py-0.5 hover:bg-[#0D0F12]"
+                className="group mt-0.5 flex flex-col items-center justify-center rounded-lg px-1.5 py-0.5 hover:bg-[#0D0F12]"
               >
-                <span className="font-mono text-5xl font-black leading-none tracking-tight text-amber-300 tabular-nums sm:text-6xl">
+                <span className="font-mono text-3xl font-black leading-none tracking-tight text-amber-300 tabular-nums sm:text-4xl">
                   {Math.round(displayedTripKm * 1000)}
-                  <span className="ml-0.5 text-lg font-extrabold text-amber-400">m</span>
+                  <span className="ml-0.5 text-sm font-extrabold text-amber-400">m</span>
                 </span>
-                <span className="mt-1.5 inline-flex items-center gap-1 font-mono text-[10px] text-zinc-400 tabular-nums sm:text-[11px]">
+                <span className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] text-zinc-400 tabular-nums">
                   <span>{displayedTripKm.toFixed(2)} km</span>
                   <Pencil className="h-2.5 w-2.5 text-zinc-500 group-hover:text-[#E10600]" />
                 </span>
               </button>
             )}
           </div>
+
+          {/* Coluna Direita: DELTA COMPACTO (MAIS RÁPIDO / MAIS LENTO) */}
+          <div
+            className={`flex flex-col items-center justify-center rounded-xl border-2 px-2 py-1.5 text-center transition-colors ${
+              isFaster
+                ? 'border-[#10B981] bg-[#10B981]/20 text-[#10B981]'
+                : isSlower
+                  ? 'border-[#FF2A2A] bg-[#FF2A2A]/20 text-[#FF2A2A]'
+                  : 'border-zinc-800 bg-[#090B0E] text-zinc-400'
+            }`}
+          >
+            <div className="flex items-center justify-center gap-1 font-mono text-[10px] font-black tracking-wider uppercase sm:text-xs">
+              <span>{isFaster ? '▲' : isSlower ? '▼' : '●'}</span>
+              <span>{isFaster ? 'MAIS RÁPIDO' : isSlower ? 'MAIS LENTO' : 'DELTA TIME'}</span>
+            </div>
+            <div className="mt-0.5 font-mono text-3xl font-black leading-none tracking-tight tabular-nums sm:text-4xl">
+              {formattedGiantDelta}
+            </div>
+            <p className="mt-1 font-mono text-[9px] font-semibold opacity-85 uppercase truncate max-w-full">
+              {bestRun ? `vs Volta #${bestRun.runNumber}` : 'Sem referência'}
+            </p>
+          </div>
         </div>
 
-        {/* Bloco 3: TEMPO DA ESPECIAL (Cronômetro Principal) */}
-        <div className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#050608] px-3.5 py-2.5 sm:py-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase text-zinc-400">
-              <span className="truncate max-w-[140px] text-white">{activeTrackName}</span>
+        {/* Bloco 3: TEMPO DA ESPECIAL (Cronômetro Principal) + Grid 3 Colunas CH / MELHOR / ÚLTIMA */}
+        <div className="shrink-0 space-y-1.5 rounded-xl border border-zinc-800 bg-[#050608] px-2.5 py-2 sm:px-3">
+          <div className="flex flex-col items-center text-center">
+            <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-bold uppercase text-zinc-400">
+              <span className="truncate max-w-[180px] text-white">{activeTrackName}</span>
               <span aria-hidden="true">·</span>
               <span
                 className={
@@ -492,7 +549,7 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
               </span>
             </div>
             <div
-              className={`mt-0.5 font-mono text-5xl font-black leading-none tracking-tight tabular-nums sm:text-6xl ${
+              className={`mt-0.5 font-mono text-4xl font-black leading-none tracking-tight tabular-nums sm:text-5xl ${
                 stageState === 'running'
                   ? 'text-white'
                   : stageState === 'finished'
@@ -504,18 +561,68 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
             </div>
           </div>
 
-          <div className="shrink-0 text-right font-mono text-[10px] tabular-nums space-y-0.5 sm:text-[11px]">
-            <p className="text-zinc-400">
-              CH <strong className="text-white">{formatClockTime(clockAdjustedNow)}</strong>
-            </p>
-            <p className="text-emerald-400">
-              Mel <strong className="text-emerald-300">{formatStageDuration(optimalSummary.bestRunTotalMs)}</strong>
-            </p>
-            <p className="text-amber-400">
-              Últ <strong className="text-white">{formatStageDuration(optimalSummary.lastRunTotalMs)}</strong>
-            </p>
+          <div className="grid grid-cols-3 gap-1.5">
+            <div className="rounded-lg border border-zinc-800/90 bg-[#0B0D10] px-2 py-1.5 text-center">
+              <p className="font-mono text-[9px] font-bold tracking-wider text-zinc-400 uppercase sm:text-[10px]">
+                CH
+              </p>
+              <p className="font-mono text-base font-extrabold leading-tight text-white tabular-nums sm:text-xl">
+                {formatClockTime(clockAdjustedNow)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-zinc-800/90 bg-[#0B0D10] px-2 py-1.5 text-center">
+              <p className="font-mono text-[9px] font-bold tracking-wider text-emerald-400 uppercase sm:text-[10px]">
+                MELHOR
+              </p>
+              <p className="font-mono text-base font-extrabold leading-tight text-emerald-400 tabular-nums sm:text-xl">
+                {formatStageDuration(optimalSummary.bestRunTotalMs)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-zinc-800/90 bg-[#0B0D10] px-2 py-1.5 text-center">
+              <p className="font-mono text-[9px] font-bold tracking-wider text-zinc-400 uppercase sm:text-[10px]">
+                ÚLTIMA
+              </p>
+              <p className="font-mono text-base font-extrabold leading-tight text-zinc-200 tabular-nums sm:text-xl">
+                {formatStageDuration(optimalSummary.lastRunTotalMs)}
+              </p>
+            </div>
           </div>
         </div>
+
+        {/* 3. FAIXA DISCRETA DE PARCIAIS (P1, P2, P3...) BASEADA NOS MARCOS CADASTRADOS */}
+        {splitTrapItems.length > 0 && (
+          <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto rounded-lg border border-zinc-800/80 bg-[#050608] px-2 py-1 font-mono text-[10px] tabular-nums">
+            <span className="shrink-0 font-bold text-zinc-500 uppercase">Parciais</span>
+            {splitTrapItems.map((sp) => (
+              <span
+                key={sp.id}
+                title={sp.name}
+                className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-extrabold ${
+                  sp.isActive
+                    ? 'border border-amber-400/70 bg-amber-950/35 text-amber-300'
+                    : sp.crossed
+                      ? sp.diffSec !== null
+                        ? sp.diffSec <= 0
+                          ? 'bg-emerald-950/40 text-emerald-300'
+                          : 'bg-red-950/40 text-red-300'
+                        : 'bg-zinc-900 text-zinc-200'
+                      : 'text-zinc-500'
+                }`}
+              >
+                <span>{sp.code}</span>
+                {sp.crossed ? (
+                  <span>
+                    {sp.diffSec !== null ? formatDeltaSeconds(sp.diffSec) : 'OK'}
+                  </span>
+                ) : sp.isActive ? (
+                  <span className="text-amber-300">●</span>
+                ) : (
+                  <span>--</span>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2168,9 +2275,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
     if (forceShowInLive) {
       return (
-        <div className="rounded-xl border border-zinc-800 bg-[#0E1014] px-2 py-1.5 text-white space-y-1.5 shrink-0">
+        <div className="rounded-xl border border-zinc-800 bg-[#0E1014] px-2 py-1 text-white space-y-1 shrink-0 overflow-hidden">
           {goproFleet.errorMsg && (
-            <div className="flex items-center justify-between gap-2 rounded border border-red-700/60 bg-red-950/40 px-2 py-1 text-[10px] text-red-200">
+            <div className="flex items-center justify-between gap-2 rounded border border-red-700/60 bg-red-950/40 px-2 py-0.5 text-[10px] text-red-200">
               <span className="truncate">{goproFleet.errorMsg}</span>
               <button
                 type="button"
@@ -2183,167 +2290,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </div>
           )}
 
-          {/* Controle Remoto Minimalista GoPro: Mini-Visores LCD + Comando Mestre ao Lado */}
-          <div className="flex items-stretch gap-2">
-            {/* Mini-Visores LCD por Câmera */}
-            <div className="flex min-w-0 flex-1 items-stretch gap-1.5 overflow-x-auto">
-              {!hasAnyGoPro && (
-                <div className="flex min-h-[60px] flex-1 items-center justify-center rounded-lg border border-dashed border-zinc-800 bg-[#080A0D] px-3 font-mono text-[10px] text-zinc-500">
-                  Nenhuma GoPro pareada · conecte em Config.
-                </div>
-              )}
-
-              {goproFleet.cameras.map((cam, idx) => {
-                const rawName = getGoProDisplayName(cam);
-                const shortLabel = rawName
-                  ? rawName.length > 14
-                    ? `${rawName.slice(0, 14)}…`
-                    : rawName
-                  : `Cam ${idx + 1}`;
-                const asleep = cam.sleeping || !cam.connected;
-
-                return (
-                  <div
-                    key={cam.id}
-                    className={`flex min-w-[144px] shrink-0 flex-col justify-between rounded-lg border px-2 py-1.5 ${
-                      cam.recording
-                        ? 'border-[#E10600]/80 bg-[#1B0809]'
-                        : asleep
-                          ? 'border-zinc-800 bg-[#07090C] opacity-75'
-                          : 'border-zinc-700 bg-[#090B0F]'
-                    }`}
-                  >
-                    {/* Topo LCD: Nome curto + Bateria + Status */}
-                    <div className="flex items-center justify-between gap-1.5 font-mono text-[10px]">
-                      <span className="flex items-center gap-1 min-w-0 font-extrabold text-white">
-                        <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${
-                            cam.recording
-                              ? 'bg-[#FF2A2A] animate-pulse'
-                              : asleep
-                                ? 'bg-zinc-600'
-                                : 'bg-emerald-400'
-                          }`}
-                        />
-                        <span className="truncate">{shortLabel}</span>
-                      </span>
-                      <span
-                        className={`inline-flex shrink-0 items-center gap-0.5 tabular-nums ${
-                          cam.batteryPct <= 20 ? 'text-[#FF2A2A]' : 'text-zinc-400'
-                        }`}
-                      >
-                        <Battery className="h-3 w-3" />
-                        <span>{asleep ? '--' : `${cam.batteryPct}%`}</span>
-                      </span>
-                    </div>
-
-                    {/* Visor Principal LCD: 00:00 quando gravando, Modo/Resolução quando em espera */}
-                    <div className="my-0.5 flex items-center justify-between gap-1.5">
-                      {cam.recording ? (
-                        <span className="font-mono text-base font-black leading-none text-[#FF3B30] tabular-nums">
-                          {formatGoProRecTimer(cam.encodingDurationSec)}
-                        </span>
-                      ) : asleep ? (
-                        <span className="font-mono text-xs font-extrabold leading-none text-zinc-500 uppercase">
-                          OFF
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void modeSingleGoPro(
-                              cam,
-                              cam.captureMode === 'video' ? 'photo' : 'video'
-                            );
-                          }}
-                          title="Alternar modo Vídeo/Foto"
-                          className="font-mono text-xs font-black leading-none text-zinc-200 hover:text-amber-300 tabular-nums"
-                        >
-                          {cam.captureMode === 'photo'
-                            ? 'FOTO'
-                            : `${cam.resolution}-${cam.fps}`}
-                        </button>
-                      )}
-
-                      {/* 2 Botões Diretos estilo Controle Remoto GoPro: REC/STOP + POWER */}
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          disabled={asleep}
-                          onClick={() => {
-                            void shutterSingleGoPro(cam, !cam.recording);
-                          }}
-                          title={cam.recording ? `Parar ${shortLabel}` : `Gravar ${shortLabel}`}
-                          aria-label={cam.recording ? `Parar ${shortLabel}` : `Gravar ${shortLabel}`}
-                          className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors disabled:opacity-30 ${
-                            cam.recording
-                              ? 'border-white/40 bg-zinc-800 text-white'
-                              : 'border-[#E10600]/80 bg-[#1B090A] hover:bg-[#2E0D0F]'
-                          }`}
-                        >
-                          {cam.recording ? (
-                            <span className="h-3 w-3 rounded-[2px] bg-white" />
-                          ) : (
-                            <span className="h-3.5 w-3.5 rounded-full bg-[#FF2A2A]" />
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={cam.reconnecting}
-                          onClick={() => {
-                            if (asleep) void wakeSingleGoPro(cam);
-                            else void sleepSingleGoPro(cam);
-                          }}
-                          title={asleep ? `Ligar ${shortLabel}` : `Desligar ${shortLabel}`}
-                          aria-label={asleep ? `Ligar ${shortLabel}` : `Desligar ${shortLabel}`}
-                          className={`inline-flex h-8 w-8 items-center justify-center rounded-md border ${
-                            asleep
-                              ? 'border-emerald-500/60 bg-emerald-950/40 text-emerald-300'
-                              : 'border-zinc-700 bg-[#14171D] text-zinc-300 hover:text-white'
-                          }`}
-                        >
-                          <Power className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {savedMissingGoPros.map((sd, idx) => {
-                const shortLabel = getGoProDisplayName(sd) || `Cam ${idx + 1}`;
-                return (
-                  <div
-                    key={sd.deviceId}
-                    className="flex min-w-[126px] shrink-0 flex-col justify-between rounded-lg border border-zinc-800 bg-[#07090C] px-2 py-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-1 font-mono text-[10px]">
-                      <span className="truncate font-bold text-zinc-300">{shortLabel}</span>
-                      <span className="text-zinc-600">Salva</span>
-                    </div>
-                    <div className="my-0.5 flex items-center justify-between gap-1">
-                      <span className="font-mono text-xs font-extrabold text-zinc-500">OFF</span>
-                      <button
-                        type="button"
-                        disabled={goproFleet.wakingId === sd.deviceId}
-                        onClick={() => {
-                          void wakeSavedGoProInFleet(sd);
-                        }}
-                        title={`Ligar ${shortLabel}`}
-                        className="inline-flex h-8 items-center gap-1 rounded-md border border-emerald-500/50 bg-emerald-950/40 px-2 font-mono text-[10px] font-extrabold text-emerald-300 uppercase"
-                      >
-                        <Power className="h-3 w-3" />
-                        <span>{goproFleet.wakingId === sd.deviceId ? '...' : 'Ligar'}</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Comando Mestre Simples ao Lado (REC TODAS / PARAR TODAS + Auto-REC) */}
-            <div className="flex shrink-0 flex-col justify-between gap-1">
+          {/* Barra das GoPros em 1 Única Linha Compacta (Sem Rolagem Lateral) */}
+          <div className="flex items-center justify-between gap-1.5">
+            {/* À esquerda: Botão mestre REC ALL + ícone Auto-REC */}
+            <div className="flex items-center gap-1 shrink-0">
               {hasAnyGoPro ? (
                 activeGoProsReady.length > 0 ? (
                   <button
@@ -2351,20 +2301,19 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     onClick={() => {
                       void shutterAllGoPro(recordingGoProCount === 0);
                     }}
-                    className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-2.5 font-mono text-[10px] font-black uppercase whitespace-nowrap ${
+                    title={recordingGoProCount > 0 ? 'Parar todas as câmeras' : 'Gravar todas as câmeras'}
+                    className={`inline-flex min-h-[34px] items-center gap-1 rounded-lg px-2 font-mono text-[10px] font-black uppercase whitespace-nowrap ${
                       recordingGoProCount > 0
                         ? 'border border-zinc-600 bg-zinc-800 text-white'
                         : 'pitstop-btn-red text-white'
                     }`}
                   >
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        recordingGoProCount > 0
-                          ? 'bg-[#FF2A2A] animate-pulse'
-                          : 'bg-white'
-                      }`}
-                    />
-                    <span>{recordingGoProCount > 0 ? 'PARAR TODAS' : 'REC TODAS'}</span>
+                    {recordingGoProCount > 0 ? (
+                      <span className="h-2.5 w-2.5 rounded-[2px] bg-[#FF2A2A] animate-pulse" />
+                    ) : (
+                      <span className="h-2.5 w-2.5 rounded-full bg-white" />
+                    )}
+                    <span>REC ALL</span>
                   </button>
                 ) : (
                   <button
@@ -2372,20 +2321,20 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     onClick={() => {
                       void wakeAllGoPro();
                     }}
-                    className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-950/40 px-2.5 font-mono text-[10px] font-black text-emerald-300 uppercase whitespace-nowrap"
+                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-950/40 px-2 font-mono text-[10px] font-black text-emerald-300 uppercase whitespace-nowrap"
                   >
                     <Power className="h-3 w-3" />
-                    <span>LIGAR TODAS</span>
+                    <span>ON ALL</span>
                   </button>
                 )
               ) : (
                 <button
                   type="button"
                   onClick={() => setScreen('settings')}
-                  className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-[#14171D] px-2.5 font-mono text-[10px] font-bold text-zinc-300 uppercase whitespace-nowrap"
+                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#14171D] px-2 font-mono text-[10px] font-bold text-zinc-300 uppercase whitespace-nowrap"
                 >
-                  <Camera className="h-3 w-3 text-[#E10600]" />
-                  <span>Parear</span>
+                  <Camera className="h-3.5 w-3.5 text-[#E10600]" />
+                  <span>GoPro</span>
                 </button>
               )}
 
@@ -2394,15 +2343,136 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 onClick={() =>
                   updateNavSettings({ goproAutoRecOnStart: !navSettings.goproAutoRecOnStart })
                 }
-                title="Auto-REC automático na Largada e parada na Chegada"
-                className={`inline-flex h-6 items-center justify-center rounded border px-2 font-mono text-[9px] font-extrabold uppercase whitespace-nowrap ${
+                title={
+                  navSettings.goproAutoRecOnStart
+                    ? 'Auto-REC na Largada: ATIVO'
+                    : 'Auto-REC na Largada: DESATIVADO'
+                }
+                aria-label="Alternar Auto-REC na largada"
+                className={`inline-flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border transition-colors ${
                   navSettings.goproAutoRecOnStart
                     ? 'border-emerald-500/70 bg-emerald-950/40 text-emerald-300'
-                    : 'border-zinc-700 bg-[#080B0D] text-zinc-400'
+                    : 'border-zinc-800 bg-[#080B0D] text-zinc-500 hover:text-zinc-300'
                 }`}
               >
-                Auto-REC {navSettings.goproAutoRecOnStart ? 'ON' : 'OFF'}
+                <Zap className="h-3.5 w-3.5" />
               </button>
+            </div>
+
+            {/* À direita: Câmeras lado a lado na mesma linha sem scroll horizontal */}
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+              {!hasAnyGoPro && (
+                <span className="truncate font-mono text-[10px] text-zinc-500">
+                  Parear em Config.
+                </span>
+              )}
+
+              {goproFleet.cameras.slice(0, 4).map((cam, idx) => {
+                const fullLabel = getGoProDisplayName(cam) || `Câmera ${idx + 1}`;
+                const shortCode = `C${idx + 1}`;
+                const asleep = cam.sleeping || !cam.connected;
+
+                return (
+                  <div
+                    key={cam.id}
+                    title={fullLabel}
+                    className={`flex min-w-0 items-center gap-1 rounded-full border px-1.5 py-0.5 ${
+                      cam.recording
+                        ? 'border-[#E10600]/80 bg-[#1B0809]'
+                        : asleep
+                          ? 'border-zinc-800 bg-[#07090C] opacity-75'
+                          : 'border-zinc-700 bg-[#090B0F]'
+                    }`}
+                  >
+                    <div className="min-w-[26px] text-center font-mono leading-tight">
+                      <p className="text-[9px] font-black text-white">{shortCode}</p>
+                      <p
+                        className={`text-[9px] font-bold tabular-nums ${
+                          cam.recording
+                            ? 'text-[#FF3B30] animate-pulse'
+                            : asleep
+                              ? 'text-zinc-500'
+                              : 'text-emerald-400'
+                        }`}
+                      >
+                        {cam.recording
+                          ? formatGoProRecTimer(cam.encodingDurationSec)
+                          : asleep
+                            ? 'OFF'
+                            : 'ON'}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={asleep}
+                      onClick={() => {
+                        void shutterSingleGoPro(cam, !cam.recording);
+                      }}
+                      title={cam.recording ? `Parar ${fullLabel}` : `Gravar ${fullLabel}`}
+                      aria-label={cam.recording ? `Parar ${fullLabel}` : `Gravar ${fullLabel}`}
+                      className={`inline-flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-full border disabled:opacity-30 ${
+                        cam.recording
+                          ? 'border-white/50 bg-zinc-800'
+                          : 'border-[#E10600]/80 bg-[#1B090A]'
+                      }`}
+                    >
+                      {cam.recording ? (
+                        <span className="h-2.5 w-2.5 rounded-[2px] bg-white" />
+                      ) : (
+                        <span className="h-3 w-3 rounded-full bg-[#FF2A2A]" />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={cam.reconnecting}
+                      onClick={() => {
+                        if (asleep) void wakeSingleGoPro(cam);
+                        else void sleepSingleGoPro(cam);
+                      }}
+                      title={asleep ? `Ligar ${fullLabel}` : `Desligar ${fullLabel}`}
+                      aria-label={asleep ? `Ligar ${fullLabel}` : `Desligar ${fullLabel}`}
+                      className={`inline-flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-full border ${
+                        asleep
+                          ? 'border-emerald-500/60 bg-emerald-950/40 text-emerald-300'
+                          : 'border-zinc-700 bg-[#14171D] text-zinc-300 hover:text-white'
+                      }`}
+                    >
+                      <Power className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+
+              {goproFleet.cameras.length === 0 &&
+                savedMissingGoPros.slice(0, 4).map((sd, idx) => {
+                  const fullLabel = getGoProDisplayName(sd) || `Câmera ${idx + 1}`;
+                  return (
+                    <div
+                      key={sd.deviceId}
+                      title={fullLabel}
+                      className="flex min-w-0 items-center gap-1 rounded-full border border-zinc-800 bg-[#07090C] px-1.5 py-0.5"
+                    >
+                      <div className="min-w-[24px] text-center font-mono leading-tight">
+                        <p className="text-[9px] font-black text-zinc-300">C{idx + 1}</p>
+                        <p className="text-[9px] font-bold text-zinc-500">OFF</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={goproFleet.wakingId === sd.deviceId}
+                        onClick={() => {
+                          void wakeSavedGoProInFleet(sd);
+                        }}
+                        title={`Ligar ${fullLabel}`}
+                        aria-label={`Ligar ${fullLabel}`}
+                        className="inline-flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-950/40 text-emerald-300"
+                      >
+                        <Power className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
             </div>
           </div>
         </div>
@@ -3175,6 +3245,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 <VelocityLiveStagePanel
                   activeTrackName={activeStageBannerName}
                   hasTraps={Boolean(activeTrack && activeTrack.traps.length > 0)}
+                  orderedTraps={orderedTraps}
+                  currentSplitTimesMs={currentSplitTimesMs}
                   stageState={stageState}
                   stageStartMs={stageStartMs}
                   lastFinishedMs={lastFinishedMs}
@@ -3190,36 +3262,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   liveSamples={liveSamples}
                   onEditTripDistanceKm={handleEditTripFromLive}
                 />
-
-                {orderedTraps.filter((t) => t.kind !== 'start').length > 0 && (
-                  <div className="shrink-0 rounded-xl border border-zinc-800 bg-[#111214] px-2.5 py-1.5 text-white">
-                    <div className="flex items-center gap-2 overflow-x-auto font-mono text-[10px] tabular-nums">
-                      <span className="font-bold text-zinc-400 uppercase shrink-0">Splits:</span>
-                      {orderedTraps
-                        .filter((t) => t.kind !== 'start')
-                        .map((trap) => {
-                          const currMs = currentSplitTimesMs[trap.id] ?? null;
-                          const bestMs = bestRun?.splitTimesMs[trap.id] ?? null;
-                          const diffSec =
-                            currMs !== null && bestMs !== null ? (currMs - bestMs) / 1000 : null;
-                          return (
-                            <span
-                              key={trap.id}
-                              className="inline-flex items-center gap-1 rounded border border-zinc-800 bg-[#080B0D] px-2 py-0.5 shrink-0"
-                            >
-                              <span className="text-zinc-300">{trap.name}:</span>
-                              <strong className="text-white">{formatStageDuration(currMs)}</strong>
-                              {diffSec !== null && (
-                                <strong className={diffSec <= 0 ? 'text-emerald-400' : 'text-[#FF2A2A]'}>
-                                  {formatDeltaSeconds(diffSec)}
-                                </strong>
-                              )}
-                            </span>
-                          );
-                        })}
-                    </div>
-                  </div>
-                )}
               </div>
             ) : (
               <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 overflow-hidden">

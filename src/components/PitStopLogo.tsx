@@ -20,8 +20,8 @@ export const PitStopLogo: React.FC<PitStopLogoProps> = ({
   if (variant === 'icon') {
     return (
       <svg
-        viewBox="0 0 64 64"
-        className={`select-none ${className}`}
+        viewBox="6 9 52 47"
+        className={`select-none bg-transparent ${className}`}
         role="img"
         aria-label="PitStop Sports"
       >
@@ -37,23 +37,10 @@ export const PitStopLogo: React.FC<PitStopLogoProps> = ({
             <stop offset="100%" stopColor="#8F0400" />
           </linearGradient>
         </defs>
-        <rect
-          x="2"
-          y="2"
-          width="60"
-          height="60"
-          rx="13"
-          fill="#080B0D"
-          stroke="#2E323A"
-          strokeWidth="2"
-        />
         <path
-          d="M14 50 L25 13 L45 13 C52 13 55 18 53 26 C51 34 44 38 35 38 L26 38 L22 50 Z"
+          d="M14 50 L25 13 L45 13 C52 13 55 18 53 26 C51 34 44 38 35 38 L26 38 L22 50 Z M27 21 L39 21 C43 21 44 23 43 27 C42 30 39 32 34 32 L24 32 Z"
           fill={`url(#${silverId})`}
-        />
-        <path
-          d="M27 21 L39 21 C43 21 44 23 43 27 C42 30 39 32 34 32 L24 32 Z"
-          fill="#080B0D"
+          fillRule="evenodd"
         />
         <path
           d="M39 13 L51 13 C56 17 57 25 51 33 L42 36 C48 31 49 23 44 17 Z"

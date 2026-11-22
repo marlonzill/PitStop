@@ -159,8 +159,8 @@ const SurveyClockBadge: React.FC<{ clockOffsetMs: number }> = ({ clockOffsetMs }
     return () => window.clearInterval(id);
   }, []);
   return (
-    <span className="font-mono text-xs font-bold text-[#C0C4C9] tabular-nums">
-      <Satellite className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />
+    <span className="font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
+      <Satellite className="mr-1 inline h-3.5 w-3.5 text-emerald-500" />
       {formatClockTime(nowMs + clockOffsetMs)}
     </span>
   );
@@ -679,31 +679,33 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
 
   return (
     <div
-      className={`mx-auto max-w-5xl space-y-2.5 text-white rounded-2xl transition-all ${
+      className={`mx-auto max-w-5xl space-y-2.5 text-[var(--ps-text)] rounded-2xl transition-all ${
         recceZone === 'over'
           ? 'ring-2 ring-red-500 bg-red-950/20 p-1.5 shadow-[0_0_32px_rgba(239,68,68,0.45)]'
           : ''
       }`}
     >
       {/* Top Header: Levantamento & Hodômetro + GPS/Simulador + Importar KML/KMZ */}
-      <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Compass className="h-4 w-4 text-[#E10600]" />
-          <h1 className="font-['Barlow_Condensed'] text-lg font-extrabold italic tracking-wide uppercase">
+      <section className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <Compass className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
+          <h1 className="truncate font-['Barlow_Condensed'] text-lg font-extrabold italic tracking-wide uppercase">
             Levantamento &amp; Hodômetro
           </h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-0.5">
+          <div className="inline-flex rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
             <button
               type="button"
               onClick={() => {
                 setSource('gps');
                 setSimRunning(false);
               }}
-              className={`min-h-[34px] rounded-md px-2.5 text-xs font-bold ${
-                source === 'gps' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
+              className={`min-h-[34px] rounded-lg px-2.5 text-xs font-bold whitespace-nowrap ${
+                source === 'gps'
+                  ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                  : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
               }`}
             >
               GPS {gpsAccuracy !== null ? `±${gpsAccuracy}m` : ''}
@@ -711,8 +713,10 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             <button
               type="button"
               onClick={() => setSource('simulator')}
-              className={`min-h-[34px] rounded-md px-2.5 text-xs font-bold ${
-                source === 'simulator' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
+              className={`min-h-[34px] rounded-lg px-2.5 text-xs font-bold whitespace-nowrap ${
+                source === 'simulator'
+                  ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                  : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
               }`}
             >
               Sim
@@ -729,9 +733,9 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-bold text-white hover:border-[#E10600]"
+            className="inline-flex min-h-[34px] items-center gap-1.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] whitespace-nowrap"
           >
-            <Upload className="h-3.5 w-3.5 text-[#E10600]" />
+            <Upload className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
             <span>KML/KMZ</span>
           </button>
 
@@ -742,45 +746,47 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       {/* Compact Top Alert Strip (only shown when warning/exceeding limit) */}
       {(recceZone === 'over' || recceZone === 'warning') && (
         <section
-          className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${
+          className={`flex items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${
             recceZone === 'over'
-              ? 'animate-pulse border-red-500 bg-red-950/85 text-red-200'
-              : 'border-amber-400 bg-amber-950/60 text-amber-200'
+              ? 'animate-pulse border-red-500 bg-red-950/90 text-red-100'
+              : 'border-amber-400 bg-amber-950/80 text-amber-100'
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>
+            <span className="truncate">
               {recceZone === 'over'
                 ? `ACIMA DO LIMITE: ${speedKmh} / ${reccePrefs.speedLimitKmh} km/h — REDUZA!`
                 : `Próximo do limite: ${speedKmh} / ${reccePrefs.speedLimitKmh} km/h`}
             </span>
           </div>
-          <span className="font-mono text-[11px] tabular-nums">
+          <span className="shrink-0 font-mono text-[11px] tabular-nums">
             Pico {Math.max(reccePeakSpeedKmh, speedKmh)}
           </span>
         </section>
       )}
 
       {importError && (
-        <div className="rounded-lg border border-red-500/40 bg-red-950/30 px-3.5 py-2 text-xs text-red-200">
+        <div className="rounded-xl border border-red-500/40 bg-red-950/30 px-3.5 py-2 text-xs text-red-400">
           {importError}
         </div>
       )}
 
       {source === 'simulator' && (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-[#111214] px-4 py-3">
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-4 py-3">
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setSimRunning((v) => !v)}
-              className={`min-h-[38px] rounded-lg px-4 text-xs font-extrabold uppercase ${
-                simRunning ? 'bg-zinc-700 text-white' : 'pitstop-btn-red text-white'
+              className={`min-h-[38px] rounded-xl px-4 text-xs font-extrabold uppercase ${
+                simRunning
+                  ? 'border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)]'
+                  : 'pitstop-btn-red'
               }`}
             >
               {simRunning ? 'Pausar Simulador' : 'Iniciar Simulador'}
             </button>
-            <span className="font-mono text-xs font-bold text-amber-300 tabular-nums">
+            <span className="font-mono text-xs font-bold text-[var(--ps-amber)] tabular-nums">
               {simSpeedKmh} km/h
             </span>
           </div>
@@ -791,24 +797,24 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             step={2}
             value={simSpeedKmh}
             onChange={(e) => setSimSpeedKmh(Number(e.target.value))}
-            className="flex-1 min-w-[160px] accent-[#E10600]"
+            className="flex-1 min-w-[160px] accent-[var(--ps-accent)]"
             aria-label="Velocidade do simulador"
           />
         </section>
       )}
 
       {gpsError && source === 'gps' && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 px-3.5 py-2 text-xs text-amber-200">
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2 text-xs text-[var(--ps-amber)]">
           {gpsError}
         </div>
       )}
 
       {/* Compact Map & Navegar HUD */}
-      <section className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 sm:p-3">
-        <div className="flex items-center justify-between gap-2 pb-2 border-b border-zinc-800">
+      <section className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3">
+        <div className="flex items-center justify-between gap-2 pb-2 border-b border-[var(--ps-border)]">
           <div className="flex items-center gap-1.5 min-w-0">
-            <MapPin className="h-3.5 w-3.5 shrink-0 text-[#E10600]" />
-            <p className="truncate text-xs font-bold text-white">
+            <MapPin className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
+            <p className="truncate text-xs font-bold text-[var(--ps-text)]">
               {loadedTrack
                 ? `${loadedTrack.name} · ${loadedTrack.referenceDistanceKm.toFixed(1).replace('.', ',')} km`
                 : 'Mapa (Erechim / GPS)'}
@@ -821,10 +827,10 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 type="button"
                 onClick={() => setWazeVoiceEnabled((v) => !v)}
                 title={wazeVoiceEnabled ? 'Silenciar voz' : 'Ativar voz'}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 {wazeVoiceEnabled ? (
-                  <Volume2 className="h-3.5 w-3.5 text-emerald-400" />
+                  <Volume2 className="h-3.5 w-3.5 text-emerald-500" />
                 ) : (
                   <VolumeX className="h-3.5 w-3.5" />
                 )}
@@ -837,7 +843,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-extrabold uppercase transition-colors ${
                 wazeNavActive
                   ? 'bg-sky-500 text-slate-950'
-                  : 'pitstop-btn-red text-white'
+                  : 'pitstop-btn-red'
               }`}
             >
               <Navigation className="h-3 w-3" />
@@ -893,7 +899,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           currentPos={currentPos}
           navigationMode={wazeNavActive}
           navHeadingDeg={headingDeg}
-          containerClassName="relative mt-2 h-56 w-full overflow-hidden rounded-lg border border-zinc-800 bg-[#000000] sm:h-72"
+          containerClassName="relative mt-2 h-52 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-72"
         />
       </section>
 
@@ -908,21 +914,21 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               return next;
             });
           }}
-          className={`flex min-h-[50px] items-center justify-center gap-2 rounded-xl border px-4 text-sm font-extrabold tracking-wider uppercase transition-colors ${
+          className={`flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border px-3 text-xs sm:text-sm font-extrabold tracking-wider uppercase transition-colors ${
             isCounting
-              ? 'border-amber-500/70 bg-amber-600/20 text-amber-300 hover:bg-amber-600/30'
-              : 'border-emerald-500/70 bg-emerald-600/25 text-emerald-300 hover:bg-emerald-600/35'
+              ? 'border-amber-500/60 bg-amber-500/15 text-[var(--ps-amber)] hover:bg-amber-500/25'
+              : 'border-emerald-500/60 bg-emerald-500/15 text-[var(--ps-emerald)] hover:bg-emerald-500/25'
           }`}
         >
           {isCounting ? (
             <>
-              <Pause className="h-4 w-4 fill-current" />
-              <span>Pausar Contagem</span>
+              <Pause className="h-4 w-4 fill-current shrink-0" />
+              <span className="truncate">Pausar Contagem</span>
             </>
           ) : (
             <>
-              <Play className="h-4 w-4 fill-current" />
-              <span>Play Contagem</span>
+              <Play className="h-4 w-4 fill-current shrink-0" />
+              <span className="truncate">Play Contagem</span>
             </>
           )}
         </button>
@@ -930,27 +936,25 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
         <button
           type="button"
           onClick={handleResetAllSurvey}
-          className="pitstop-btn-metal flex min-h-[50px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-extrabold tracking-wider text-white uppercase"
+          className="pitstop-btn-metal flex min-h-[48px] items-center justify-center gap-2 rounded-2xl px-3 text-xs sm:text-sm font-extrabold tracking-wider uppercase"
         >
-          <RotateCcw className="h-4 w-4 text-[#E10600]" />
-          <span>Zerar Tudo</span>
+          <RotateCcw className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
+          <span className="truncate">Zerar Tudo</span>
         </button>
       </section>
 
       {/* Unified Odometer Total & Trip Blocks (Meters + KM, Tap-to-Edit Keyboard Input) */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 flex flex-col justify-between">
+        <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-mono text-xs font-bold tracking-widest text-[#B5B5B5] uppercase">
-              Odômetro Total
-            </span>
+            <span className="ps-label">Odômetro Total</span>
             <button
               type="button"
               onClick={() => {
                 setTotalKm(0);
                 simProgressKmRef.current = 0;
               }}
-              className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-[#14161A] px-2.5 py-1 text-[11px] font-bold text-[#C0C4C9] hover:text-white"
+              className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
             >
               <RotateCcw className="h-3 w-3" />
               <span>Zerar</span>
@@ -972,7 +976,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                     if (e.key === 'Escape') setEditingTotalOdo(false);
                   }}
                   aria-label="Editar Odômetro Total"
-                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[#E10600] bg-[#14161A] px-3 text-center font-mono text-2xl font-black text-white focus:outline-none"
+                  className="min-h-[44px] min-w-0 flex-1 rounded-xl border border-[var(--ps-accent)] bg-[var(--ps-card-deep)] px-3 text-center font-mono text-2xl font-black text-[var(--ps-text)] focus:outline-none"
                 />
                 <button
                   type="button"
@@ -983,7 +987,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                       nextUnit === 'm' ? String(totalMeters) : totalKm.toFixed(3)
                     );
                   }}
-                  className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#14161A] px-3 font-mono text-xs font-extrabold text-amber-300 uppercase"
+                  className="min-h-[44px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 font-mono text-xs font-extrabold text-[var(--ps-amber)] uppercase"
                 >
                   {odoEditUnit}
                 </button>
@@ -992,14 +996,14 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 <button
                   type="button"
                   onClick={() => setEditingTotalOdo(false)}
-                  className="min-h-[36px] rounded-lg border border-zinc-700 bg-[#14161A] text-xs font-bold text-zinc-300"
+                  className="min-h-[38px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-xs font-bold text-[var(--ps-muted)]"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={() => applyOdometerKeyboardValue('total', totalOdoInput)}
-                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold text-white"
+                  className="pitstop-btn-red min-h-[38px] rounded-xl text-xs font-extrabold"
                 >
                   Confirmar
                 </button>
@@ -1013,29 +1017,29 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 setEditingTotalOdo(true);
               }}
               title="Toque para digitar a metragem desejada"
-              className="group my-2 flex flex-col items-center justify-center rounded-xl border border-transparent py-1.5 transition-colors hover:border-zinc-700 hover:bg-[#0D0F12]"
+              className="group my-2 flex min-w-0 flex-col items-center justify-center rounded-xl border border-transparent py-1.5 transition-colors hover:border-[var(--ps-border-strong)] hover:bg-[var(--ps-card)]"
             >
-              <span className="font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
+              <span className="max-w-full truncate font-mono text-[clamp(1.75rem,8.5vw,3rem)] leading-none font-black tracking-tight text-[var(--ps-text)] tabular-nums">
                 {totalMeters.toLocaleString('pt-BR')}{' '}
-                <span className="text-lg font-bold text-zinc-400">m</span>
+                <span className="text-base sm:text-lg font-bold text-[var(--ps-muted)]">m</span>
               </span>
-              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-zinc-400 tabular-nums">
+              <span className="mt-1 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-[var(--ps-muted)] tabular-nums">
                 <span>{totalKm.toFixed(2).replace('.', ',')} km</span>
-                <Pencil className="h-3 w-3 text-zinc-500 group-hover:text-[#E10600]" />
+                <Pencil className="h-3 w-3 opacity-60 group-hover:text-[var(--ps-accent)]" />
               </span>
             </button>
           )}
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 flex flex-col justify-between">
+        <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => setRegressive((v) => !v)}
-              className={`rounded-md border px-2.5 py-1 font-mono text-[11px] font-bold uppercase ${
+              className={`rounded-lg border px-2.5 py-1 font-mono text-[11px] font-bold uppercase ${
                 regressive
-                  ? 'border-[#E10600] bg-[#E10600]/20 text-white'
-                  : 'border-zinc-700 bg-[#14161A] text-amber-300'
+                  ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                  : 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-amber)]'
               }`}
             >
               Trip: {regressive ? 'Regressivo' : 'Progressivo'}
@@ -1063,7 +1067,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                         setEditingTarget(false);
                       }
                     }}
-                    className="w-24 rounded border border-[#E10600] bg-[#14161A] px-2 py-0.5 text-center font-mono text-xs font-bold text-white focus:outline-none"
+                    className="w-24 rounded-lg border border-[var(--ps-accent)] bg-[var(--ps-card-deep)] px-2 py-0.5 text-center font-mono text-xs font-bold text-[var(--ps-text)] focus:outline-none"
                   />
                 ) : (
                   <button
@@ -1072,7 +1076,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                       setTargetInput(targetKm.toFixed(2));
                       setEditingTarget(true);
                     }}
-                    className="rounded border border-zinc-700 bg-[#14161A] px-2 py-0.5 font-mono text-[11px] font-bold text-[#C0C4C9]"
+                    className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 py-0.5 font-mono text-[11px] font-bold text-[var(--ps-muted)]"
                   >
                     Alvo: {targetKm.toFixed(2)} km
                   </button>
@@ -1081,7 +1085,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               <button
                 type="button"
                 onClick={() => setTripKm(0)}
-                className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-[#14161A] px-2.5 py-1 text-[11px] font-bold text-[#C0C4C9] hover:text-white"
+                className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 <RotateCcw className="h-3 w-3" />
                 <span>Zerar Trip</span>
@@ -1104,7 +1108,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                     if (e.key === 'Escape') setEditingTripOdo(false);
                   }}
                   aria-label="Editar Trip Parcial"
-                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[#E10600] bg-[#14161A] px-3 text-center font-mono text-2xl font-black text-amber-300 focus:outline-none"
+                  className="min-h-[44px] min-w-0 flex-1 rounded-xl border border-[var(--ps-accent)] bg-[var(--ps-card-deep)] px-3 text-center font-mono text-2xl font-black text-[var(--ps-amber)] focus:outline-none"
                 />
                 <button
                   type="button"
@@ -1115,7 +1119,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                       nextUnit === 'm' ? String(tripMeters) : displayedTripKm.toFixed(3)
                     );
                   }}
-                  className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#14161A] px-3 font-mono text-xs font-extrabold text-amber-300 uppercase"
+                  className="min-h-[44px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 font-mono text-xs font-extrabold text-[var(--ps-amber)] uppercase"
                 >
                   {odoEditUnit}
                 </button>
@@ -1124,14 +1128,14 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 <button
                   type="button"
                   onClick={() => setEditingTripOdo(false)}
-                  className="min-h-[36px] rounded-lg border border-zinc-700 bg-[#14161A] text-xs font-bold text-zinc-300"
+                  className="min-h-[38px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-xs font-bold text-[var(--ps-muted)]"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={() => applyOdometerKeyboardValue('trip', tripOdoInput)}
-                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold text-white"
+                  className="pitstop-btn-red min-h-[38px] rounded-xl text-xs font-extrabold"
                 >
                   Confirmar
                 </button>
@@ -1147,15 +1151,15 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 setEditingTripOdo(true);
               }}
               title="Toque para digitar a metragem do Trip"
-              className="group my-2 flex flex-col items-center justify-center rounded-xl border border-transparent py-1.5 transition-colors hover:border-zinc-700 hover:bg-[#0D0F12]"
+              className="group my-2 flex min-w-0 flex-col items-center justify-center rounded-xl border border-transparent py-1.5 transition-colors hover:border-[var(--ps-border-strong)] hover:bg-[var(--ps-card)]"
             >
-              <span className="font-mono text-4xl font-black tracking-tight text-amber-300 tabular-nums sm:text-5xl">
+              <span className="max-w-full truncate font-mono text-[clamp(1.75rem,8.5vw,3rem)] leading-none font-black tracking-tight text-[var(--ps-amber)] tabular-nums">
                 {tripMeters.toLocaleString('pt-BR')}{' '}
-                <span className="text-lg font-bold text-amber-200/70">m</span>
+                <span className="text-base sm:text-lg font-bold opacity-75">m</span>
               </span>
-              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-amber-200/80 tabular-nums">
+              <span className="mt-1 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-[var(--ps-amber)] opacity-85 tabular-nums">
                 <span>{displayedTripKm.toFixed(2).replace('.', ',')} km</span>
-                <Pencil className="h-3 w-3 text-amber-300/60 group-hover:text-[#E10600]" />
+                <Pencil className="h-3 w-3 opacity-60 group-hover:text-[var(--ps-accent)]" />
               </span>
             </button>
           )}
@@ -1164,43 +1168,47 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
 
       {/* Live Speed Metrics + Limite de Velocidade (Levantamento) */}
       <section className="space-y-3">
-        <div className="grid grid-cols-3 gap-2.5 font-mono tabular-nums">
+        <div className="grid grid-cols-3 gap-2 sm:gap-2.5 font-mono tabular-nums">
           <div
-            className={`rounded-xl border p-3 text-center transition-colors ${
+            className={`min-w-0 rounded-2xl border p-2.5 sm:p-3 text-center transition-colors ${
               recceZone === 'over'
                 ? 'animate-pulse border-red-500 bg-red-950/80'
-                : 'border-zinc-800 bg-[#111214]'
+                : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
             }`}
           >
-            <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Atual</p>
+            <p className="ps-label truncate">Vel. Atual</p>
             <p
-              className={`mt-0.5 text-3xl font-black sm:text-4xl ${
+              className={`mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black ${
                 recceZone === 'over'
                   ? 'text-[#FF2A2A]'
                   : recceZone === 'warning'
-                    ? 'text-amber-300'
-                    : 'text-white'
+                    ? 'text-[var(--ps-amber)]'
+                    : 'text-[var(--ps-text)]'
               }`}
             >
               {speedKmh}
             </p>
-            <p className="text-[10px] font-bold text-[#E10600]">KM/H</p>
+            <p className="mt-1 text-[10px] font-bold text-[var(--ps-accent)]">KM/H</p>
           </div>
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
-            <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Média</p>
-            <p className="mt-0.5 text-3xl font-black text-emerald-400 sm:text-4xl">{avgSpeedKmh}</p>
-            <p className="text-[10px] text-zinc-400">KM/H</p>
+          <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+            <p className="ps-label truncate">Vel. Média</p>
+            <p className="mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black text-[var(--ps-emerald)]">
+              {avgSpeedKmh}
+            </p>
+            <p className="mt-1 text-[10px] text-[var(--ps-muted)]">KM/H</p>
           </div>
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
-            <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Máxima</p>
-            <p className="mt-0.5 text-3xl font-black text-amber-300 sm:text-4xl">{maxSpeedKmh}</p>
+          <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+            <p className="ps-label truncate">Vel. Máxima</p>
+            <p className="mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black text-[var(--ps-amber)]">
+              {maxSpeedKmh}
+            </p>
             <button
               type="button"
               onClick={() => {
                 setMaxSpeedKmh(0);
                 setAvgSpeedSamples([]);
               }}
-              className="text-[10px] text-zinc-500 hover:text-white underline"
+              className="mt-1 text-[10px] text-[var(--ps-muted)] hover:text-[var(--ps-text)] underline"
             >
               limpar
             </button>
@@ -1209,26 +1217,26 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
 
         {/* Limite de Velocidade (Clean & Simples) */}
         <div
-          className={`rounded-xl border p-3 transition-colors ${
+          className={`rounded-2xl border p-3 transition-colors ${
             recceZone === 'over'
-              ? 'border-red-500 bg-red-950/80'
+              ? 'border-red-500 bg-red-950/80 text-red-100'
               : recceZone === 'warning'
-                ? 'border-amber-400 bg-amber-950/50'
-                : 'border-zinc-800 bg-[#111214]'
+                ? 'border-amber-400 bg-amber-950/45'
+                : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
           }`}
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 min-w-0">
               {recceZone === 'over' || recceZone === 'warning' ? (
                 <AlertTriangle
                   className={`h-4 w-4 shrink-0 ${
-                    recceZone === 'over' ? 'text-red-300' : 'text-amber-300'
+                    recceZone === 'over' ? 'text-red-300' : 'text-[var(--ps-amber)]'
                   }`}
                 />
               ) : (
-                <ShieldAlert className="h-4 w-4 shrink-0 text-[#E10600]" />
+                <ShieldAlert className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
               )}
-              <span className="text-xs font-extrabold tracking-wide uppercase">
+              <span className="truncate text-xs font-extrabold tracking-wide uppercase">
                 Limite de Velocidade
               </span>
             </div>
@@ -1244,7 +1252,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                         speedLimitKmh: Math.max(10, p.speedLimitKmh - 5),
                       }))
                     }
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] font-mono text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                     aria-label="Diminuir limite em 5 km/h"
                   >
                     −
@@ -1265,7 +1273,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                       }
                     }}
                     aria-label="Limite de velocidade em km/h"
-                    className="h-8 w-14 rounded-lg border border-zinc-700 bg-[#080B0D] text-center font-mono text-xs font-extrabold text-white focus:border-[#E10600] focus:outline-none"
+                    className="h-8 w-14 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-center font-mono text-xs font-extrabold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                   />
                   <button
                     type="button"
@@ -1275,7 +1283,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                         speedLimitKmh: Math.min(200, p.speedLimitKmh + 5),
                       }))
                     }
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] font-mono text-sm font-black text-white hover:border-[#E10600]"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] font-mono text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                     aria-label="Aumentar limite em 5 km/h"
                   >
                     +
@@ -1289,12 +1297,12 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                   setReccePrefs((p) => ({ ...p, soundEnabled: !p.soundEnabled }))
                 }
                 title={reccePrefs.soundEnabled ? 'Silenciar alerta' : 'Ativar alerta'}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
               >
                 {reccePrefs.soundEnabled ? (
-                  <Volume2 className="h-3.5 w-3.5 text-emerald-400" />
+                  <Volume2 className="h-3.5 w-3.5 text-emerald-500" />
                 ) : (
-                  <VolumeX className="h-3.5 w-3.5 text-zinc-500" />
+                  <VolumeX className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
                 )}
               </button>
 
@@ -1305,8 +1313,8 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 }
                 className={`h-8 rounded-lg px-2.5 text-[11px] font-extrabold uppercase ${
                   reccePrefs.enabled
-                    ? 'pitstop-btn-red text-white'
-                    : 'border border-zinc-700 bg-[#080B0D] text-zinc-400'
+                    ? 'pitstop-btn-red'
+                    : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                 }`}
               >
                 {reccePrefs.enabled ? 'Ativo' : 'Off'}
@@ -1316,7 +1324,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
 
           {reccePrefs.enabled && (
             <div className="mt-2.5 space-y-1.5">
-              <div className="relative h-2 w-full overflow-hidden rounded-full bg-[#080B0D]">
+              <div className="relative h-2 w-full overflow-hidden rounded-full bg-[var(--ps-card-deep)]">
                 <div
                   className={`h-full transition-all duration-150 ${
                     recceZone === 'over'
@@ -1329,7 +1337,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 />
               </div>
 
-              <div className="flex items-center justify-between font-mono text-[11px] text-[#C0C4C9] tabular-nums">
+              <div className="flex items-center justify-between font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
                 <span>
                   {speedKmh} / {reccePrefs.speedLimitKmh} km/h
                 </span>
@@ -1340,7 +1348,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                       setRecceOverCount(0);
                       setReccePeakSpeedKmh(0);
                     }}
-                    className="text-red-300 underline hover:text-white"
+                    className="text-red-400 underline hover:text-[var(--ps-text)]"
                   >
                     {recceOverCount}x acima (Pico {reccePeakSpeedKmh}) · limpar
                   </button>

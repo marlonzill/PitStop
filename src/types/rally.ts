@@ -153,6 +153,8 @@ export interface PublishedStandingsSnapshot {
   csvReport: string;
 }
 
+export type RallyMode = 'regularidade' | 'velocidade';
+
 export type ActiveTab =
   | 'inicial'
   | 'navegacao'

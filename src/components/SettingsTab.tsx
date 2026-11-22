@@ -31,6 +31,7 @@ import {
   Link2,
   Lock,
   Navigation,
+  Palette,
   Radio,
   RefreshCw,
   RotateCcw,
@@ -57,6 +58,7 @@ import {
 } from '../utils/baseApi';
 import {
   type AlertStyle,
+  type AppThemeId,
   calibrationPctFromWValue,
   getDefaultNavSettings,
   getDefaultPilotDisplay,
@@ -131,6 +133,98 @@ interface NavigatorWithBattery extends Navigator {
     }>;
   };
 }
+
+const APP_THEME_OPTIONS: {
+  id: AppThemeId;
+  name: string;
+  tag: string;
+  description: string;
+  bg: string;
+  surface: string;
+  card: string;
+  accent: string;
+  accent2: string;
+  text: string;
+  muted: string;
+  border: string;
+  fontClass: string;
+}[] = [
+  {
+    id: 'pitstop',
+    name: 'PitStop Original',
+    tag: 'Padrão',
+    description: 'Preto carbono, superfícies foscas e Vermelho Racing de alta definição.',
+    bg: '#090A0D',
+    surface: '#12141A',
+    card: '#1A1D26',
+    accent: '#E10600',
+    accent2: '#FF2A2A',
+    text: '#F4F4F5',
+    muted: '#A1A1AA',
+    border: 'rgba(255,255,255,0.12)',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'fueltech',
+    name: 'FuelTech Pro (OLED)',
+    tag: 'Datalogger',
+    description: 'Preto puro #000000 OLED, azul elétrico + âmbar e dígitos condensados FT600.',
+    bg: '#000000',
+    surface: '#07090E',
+    card: '#0D121B',
+    accent: '#0EA5E9',
+    accent2: '#F59E0B',
+    text: '#F8FAFC',
+    muted: '#94A3B8',
+    border: 'rgba(14,165,233,0.3)',
+    fontClass: "font-['Barlow_Condensed']",
+  },
+  {
+    id: 'night',
+    name: 'Rally Noturno',
+    tag: 'Night Vision',
+    description: 'Grafite escuro com iluminação âmbar/vermelha suave para zero ofuscamento à noite.',
+    bg: '#100C0D',
+    surface: '#181214',
+    card: '#21181A',
+    accent: '#DC2626',
+    accent2: '#F97316',
+    text: '#FCEBE3',
+    muted: '#C29D90',
+    border: 'rgba(249,115,22,0.28)',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'solar',
+    name: 'Solar Dia',
+    tag: 'Alto Contraste',
+    description: 'Fundo claro anti-reflexo, cards brancos e texto preto absoluto para sol forte.',
+    bg: '#F1F5F9',
+    surface: '#FFFFFF',
+    card: '#F8FAFC',
+    accent: '#E10600',
+    accent2: '#B91C1C',
+    text: '#090D16',
+    muted: '#475569',
+    border: 'rgba(15,23,42,0.16)',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'gt',
+    name: 'GT Telemetry',
+    tag: 'Neon',
+    description: 'Cinza titânio profundo com verde-lima vibrante e tipografia geométrica moderna.',
+    bg: '#0F172A',
+    surface: '#172136',
+    card: '#1E293B',
+    accent: '#84CC16',
+    accent2: '#A3E635',
+    text: '#F8FAFC',
+    muted: '#94A3B8',
+    border: 'rgba(132,204,22,0.32)',
+    fontClass: "font-['Outfit']",
+  },
+];
 
 const IMPORT_FORMAT_OPTIONS: {
   id: ImportFormatHint;
@@ -1099,7 +1193,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const activeRoadbookItem = savedRoadbooks.find((r) => r.id === activeRoadbookId) ?? null;
   const pilotActiveCount = Object.values(settings.pilotDisplay).filter(Boolean).length;
 
+  const activeThemeMeta =
+    APP_THEME_OPTIONS.find((t) => t.id === settings.appTheme) ?? APP_THEME_OPTIONS[0];
+
   const menuTitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
+    theme: 'Temas & Visual do Painel',
     collector: 'Coletor & Envio para Admin',
     roadbooks: 'Planilhas & Livros de Bordo',
     clock: 'Ajuste de Hora (Manual / Automática)',
@@ -1113,30 +1211,30 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-3 text-[#F4F4F4]">
+    <div className="mx-auto max-w-4xl space-y-3 text-[var(--ps-text)]">
       {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] pb-2.5">
+        <div className="flex min-w-0 items-center gap-2">
           {activeMenu !== 'hub' && (
             <button
               type="button"
               onClick={() => navigateMenu('hub')}
-              className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#111214] px-2.5 text-xs font-bold text-[#F4F4F4] hover:border-zinc-500"
+              className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
             >
-              <ArrowLeft className="h-4 w-4 text-[#E10600]" />
+              <ArrowLeft className="h-4 w-4 text-[var(--ps-accent)]" />
               <span>Menus</span>
             </button>
           )}
-          <div>
-            <p className="font-mono text-[10px] font-bold tracking-[0.18em] text-[#E10600] uppercase">
+          <div className="min-w-0">
+            <p className="font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--ps-accent)] uppercase">
               Configurações
             </p>
-            <h1 className="font-['Barlow_Condensed'] text-xl font-extrabold italic tracking-wide text-white uppercase sm:text-2xl">
+            <h1 className="truncate font-['Barlow_Condensed'] text-xl font-extrabold italic tracking-wide text-[var(--ps-text)] uppercase sm:text-2xl">
               {activeMenu === 'hub' ? 'Central de Ajustes' : menuTitleMap[activeMenu]}
             </h1>
           </div>
         </div>
-        <span className="font-mono text-xs font-semibold text-[#C0C4C9] tabular-nums">
+        <span className="shrink-0 font-mono text-xs font-semibold text-[var(--ps-muted)] tabular-nums">
           {formatClockOnly(nowMs + settings.clockOffsetMs)}
         </span>
       </div>
@@ -1145,6 +1243,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {activeMenu === 'hub' && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {[
+            {
+              id: 'theme' as const,
+              icon: Palette,
+              title: 'Temas & Visual do Painel',
+              subtitle: `Ativo: ${activeThemeMeta.name} (${activeThemeMeta.tag}) · 5 perfis visuais`,
+              swatches: [activeThemeMeta.bg, activeThemeMeta.surface, activeThemeMeta.accent, activeThemeMeta.accent2],
+            },
             {
               id: 'roadbooks' as const,
               icon: Database,
@@ -1225,38 +1330,183 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 key={item.id}
                 type="button"
                 onClick={() => navigateMenu(item.id)}
-                className="flex min-h-[78px] items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-[#111214] p-4 text-left transition-colors hover:border-[#E10600]/70 hover:bg-[#16181c] active:scale-[0.99]"
+                className="flex min-h-[78px] items-center justify-between gap-3 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-left transition-colors hover:border-[var(--ps-accent)] active:scale-[0.99]"
               >
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-700 bg-[#080B0D] text-[#E10600]">
+                <div className="flex min-w-0 items-center gap-3.5">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-accent)]">
                     <Icon className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <div className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase sm:text-xl">
-                      {item.title}
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase sm:text-xl">
+                        {item.title}
+                      </span>
+                      {'swatches' in item && item.swatches && (
+                        <span className="hidden xs:inline-flex items-center gap-1 shrink-0">
+                          {item.swatches.map((hex, i) => (
+                            <span
+                              key={i}
+                              className="h-2.5 w-2.5 rounded-full border border-white/25"
+                              style={{ backgroundColor: hex }}
+                            />
+                          ))}
+                        </span>
+                      )}
                     </div>
-                    <div className="mt-0.5 truncate text-xs text-[#B5B5B5]">
+                    <div className="mt-0.5 truncate text-xs text-[var(--ps-muted)]">
                       {item.subtitle}
                     </div>
                   </div>
                 </div>
-                <ChevronRight className="h-5 w-5 shrink-0 text-zinc-500" />
+                <ChevronRight className="h-5 w-5 shrink-0 text-[var(--ps-muted)]" />
               </button>
             );
           })}
         </div>
       )}
 
+      {/* SUBMENU 0: TEMAS & VISUAL DO PAINEL */}
+      {activeMenu === 'theme' && (
+        <div className="space-y-3">
+          <section className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                  Escolha o Tema do Cockpit
+                </h2>
+                <p className="text-xs text-[var(--ps-muted)]">
+                  Altera instantaneamente fundo, superfícies, destaques e tipografia dos instrumentos em todo o aplicativo.
+                </p>
+              </div>
+              <span className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-1.5 font-mono text-[11px] font-bold text-[var(--ps-accent)]">
+                Ativo: {activeThemeMeta.name}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {APP_THEME_OPTIONS.map((themeOpt) => {
+                const isActive = settings.appTheme === themeOpt.id;
+                return (
+                  <button
+                    key={themeOpt.id}
+                    type="button"
+                    onClick={() => updateSettings({ appTheme: themeOpt.id })}
+                    className={`group flex flex-col justify-between gap-3 rounded-2xl border p-3.5 text-left transition-all active:scale-[0.99] ${
+                      isActive
+                        ? 'border-[var(--ps-accent)] ring-2 ring-[var(--ps-accent)]/30 bg-[var(--ps-card)]'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                            {themeOpt.name}
+                          </span>
+                          <span
+                            className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase"
+                            style={{
+                              backgroundColor: themeOpt.accent,
+                              color: themeOpt.id === 'gt' ? '#090D16' : '#FFFFFF',
+                            }}
+                          >
+                            {themeOpt.tag}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs leading-snug text-[var(--ps-muted)]">
+                          {themeOpt.description}
+                        </p>
+                      </div>
+                      {isActive && (
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--ps-accent)] text-[var(--ps-accent-text)]">
+                          <Check className="h-3.5 w-3.5" />
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Mini Live Telemetry Preview Card */}
+                    <div
+                      className="w-full rounded-xl border p-2.5"
+                      style={{
+                        backgroundColor: themeOpt.bg,
+                        borderColor: themeOpt.border,
+                        color: themeOpt.text,
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div
+                          className="rounded-lg border px-2.5 py-1.5"
+                          style={{
+                            backgroundColor: themeOpt.surface,
+                            borderColor: themeOpt.border,
+                          }}
+                        >
+                          <div
+                            className="text-[9px] font-semibold tracking-widest uppercase"
+                            style={{ color: themeOpt.muted }}
+                          >
+                            VELOCIDADE
+                          </div>
+                          <div className={`${themeOpt.fontClass} text-xl font-black leading-none tabular-nums`}>
+                            124 <span className="text-[10px] font-bold" style={{ color: themeOpt.muted }}>km/h</span>
+                          </div>
+                        </div>
+
+                        <div
+                          className="rounded-lg border px-2.5 py-1.5 text-right"
+                          style={{
+                            backgroundColor: themeOpt.card,
+                            borderColor: themeOpt.accent,
+                          }}
+                        >
+                          <div
+                            className="text-[9px] font-semibold tracking-widest uppercase"
+                            style={{ color: themeOpt.muted }}
+                          >
+                            DELTA
+                          </div>
+                          <div
+                            className={`${themeOpt.fontClass} text-xl font-black leading-none tabular-nums`}
+                            style={{ color: themeOpt.accent2 }}
+                          >
+                            -0.42s
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between gap-2 pt-1.5" style={{ borderTop: `1px solid ${themeOpt.border}` }}>
+                        <span className="text-[10px] font-semibold" style={{ color: themeOpt.muted }}>
+                          Paleta do Painel
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {[themeOpt.bg, themeOpt.surface, themeOpt.card, themeOpt.accent, themeOpt.accent2].map((hex, idx) => (
+                            <span
+                              key={idx}
+                              className="h-3.5 w-3.5 rounded-full border border-white/20 shadow-xs"
+                              style={{ backgroundColor: hex }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      )}
+
       {/* SUBMENU 1: PLANILHAS & LIVROS DE BORDO */}
       {activeMenu === 'roadbooks' && (
         <div className="space-y-4">
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 sm:p-5 space-y-4">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="font-['Barlow_Condensed'] text-xl font-bold text-white uppercase">
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold text-[var(--ps-text)] uppercase">
                   Importar Planilha (.NBP / .NBP.ZIP / .TXT)
                 </h2>
-                <p className="mt-0.5 text-xs text-[#B5B5B5]">
+                <p className="mt-0.5 text-xs text-[var(--ps-muted)]">
                   Importe ou troque seus livros de bordo em um só lugar para navegar offline.
                 </p>
               </div>
@@ -1266,7 +1516,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 disabled={loadingSample}
                 className="pitstop-btn-metal inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-bold whitespace-nowrap shrink-0"
               >
-                <FileText className="h-4 w-4 text-[#E10600]" />
+                <FileText className="h-4 w-4 text-[var(--ps-accent)]" />
                 <span>{loadingSample ? 'Carregando...' : 'Testar com Modelo'}</span>
               </button>
             </div>
@@ -1284,15 +1534,15 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     }}
                     className={`flex items-center justify-between rounded-lg border px-3.5 py-2.5 text-left transition-colors ${
                       selected
-                        ? 'border-[#E10600] bg-[#E10600]/15 text-white'
-                        : 'border-zinc-800 bg-[#080B0D] text-[#C0C4C9] hover:border-zinc-700'
+                        ? 'border-[var(--ps-accent)] bg-[#E10600]/15 text-[var(--ps-text)]'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:border-[var(--ps-border-strong)]'
                     }`}
                   >
                     <div>
                       <div className="text-xs font-bold">{opt.label}</div>
-                      <div className="mt-0.5 text-[11px] text-[#B5B5B5]">{opt.hint}</div>
+                      <div className="mt-0.5 text-[11px] text-[var(--ps-muted)]">{opt.hint}</div>
                     </div>
-                    <span className="ml-3 font-mono text-[11px] font-bold text-[#E10600] shrink-0">
+                    <span className="ml-3 font-mono text-[11px] font-bold text-[var(--ps-accent)] shrink-0">
                       {opt.ext}
                     </span>
                   </button>
@@ -1300,14 +1550,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               })}
             </div>
 
-            <label className="flex min-h-[120px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-[#080B0D] px-5 py-6 text-center transition-colors hover:border-[#E10600] hover:bg-[#E10600]/5">
-              <Upload className="h-7 w-7 text-[#E10600]" />
-              <span className="mt-2 text-sm font-bold text-white">
+            <label className="flex min-h-[120px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-5 py-6 text-center transition-colors hover:border-[var(--ps-accent)] hover:bg-[#E10600]/5">
+              <Upload className="h-7 w-7 text-[var(--ps-accent)]" />
+              <span className="mt-2 text-sm font-bold text-[var(--ps-text)]">
                 {importFormat === 'nbp'
                   ? 'Selecionar Planilha Digital .NBP / .NBP.ZIP (T15)'
                   : 'Selecionar Planilha (.NBP, .ZIP, .TXT, .CSV, .XML)'}
               </span>
-              <span className="mt-1 text-xs text-[#B5B5B5]">
+              <span className="mt-1 text-xs text-[var(--ps-muted)]">
                 Converte tulipas (desde 0,00), distâncias, médias, tempos ideais e observações.
               </span>
               <input
@@ -1339,7 +1589,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <button
                     type="button"
                     onClick={onOpenNavigation}
-                    className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white uppercase"
+                    className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold uppercase"
                   >
                     <Navigation className="h-3.5 w-3.5" />
                     <span>Ir para Regularidade</span>
@@ -1349,14 +1599,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             )}
 
             {/* Diagnostic .NBP structure inspector */}
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-3.5 py-2.5">
-              <div className="flex items-center gap-2 text-xs text-[#B5B5B5]">
-                <FileSearch className="h-4 w-4 text-[#C0C4C9] shrink-0" />
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5">
+              <div className="flex items-center gap-2 text-xs text-[var(--ps-muted)]">
+                <FileSearch className="h-4 w-4 text-[var(--ps-muted)] shrink-0" />
                 <span>Inspeção técnica do arquivo .NBP / .NBP.ZIP</span>
               </div>
               <div className="flex items-center gap-2">
                 <label className="pitstop-btn-metal inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold">
-                  <FileSearch className="h-3.5 w-3.5 text-[#E10600]" />
+                  <FileSearch className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                   <span>Inspecionar .NBP</span>
                   <input
                     type="file"
@@ -1373,7 +1623,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowStructureReport((v) => !v)}
-                    className="rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 py-1.5 text-[11px] font-semibold text-white"
+                    className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 py-1.5 text-[11px] font-semibold text-[var(--ps-text)]"
                   >
                     {showStructureReport ? 'Ocultar' : 'Ver Estrutura'}
                   </button>
@@ -1382,16 +1632,16 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
 
             {showStructureReport && fileStructureReport && (
-              <div className="rounded-lg border border-zinc-800 bg-black p-3.5">
+              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-mono text-[11px] font-bold text-[#E10600] uppercase">
+                  <span className="font-mono text-[11px] font-bold text-[var(--ps-accent)] uppercase">
                     Estrutura Detectada
                   </span>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
                       onClick={handleDownloadDiagnosticTxt}
-                      className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-[#1E1E22] px-2.5 py-1 text-[11px] font-semibold text-[#C0C4C9]"
+                      className="inline-flex items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ps-muted)]"
                     >
                       <Download className="h-3.5 w-3.5" />
                       <span>Baixar .TXT</span>
@@ -1399,37 +1649,37 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     <button
                       type="button"
                       onClick={handleCopyStructureReport}
-                      className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-[#1E1E22] px-2.5 py-1 text-[11px] font-semibold text-[#C0C4C9]"
+                      className="inline-flex items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ps-muted)]"
                     >
-                      {copiedReport ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-[#E10600]" />}
+                      {copiedReport ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-[var(--ps-accent)]" />}
                       <span>{copiedReport ? 'Copiado' : 'Copiar'}</span>
                     </button>
                   </div>
                 </div>
-                <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[#C0C4C9]">
+                <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[var(--ps-muted)]">
                   {fileStructureReport}
                 </pre>
               </div>
             )}
           </section>
 
-          <section className="overflow-hidden rounded-xl border border-zinc-800 bg-[#111214]">
-            <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+          <section className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)]">
+            <div className="flex items-center justify-between border-b border-[var(--ps-border)] px-4 py-3">
               <div className="flex items-center gap-2">
-                <Database className="h-4 w-4 text-[#E10600]" />
-                <h3 className="font-['Barlow_Condensed'] text-lg font-bold text-white uppercase">
+                <Database className="h-4 w-4 text-[var(--ps-accent)]" />
+                <h3 className="font-['Barlow_Condensed'] text-lg font-bold text-[var(--ps-text)] uppercase">
                   Livros de Bordo Salvos ({savedRoadbooks.length})
                 </h3>
               </div>
-              <span className="text-[11px] text-[#B5B5B5]">Base offline</span>
+              <span className="text-[11px] text-[var(--ps-muted)]">Base offline</span>
             </div>
 
             {savedRoadbooks.length === 0 ? (
-              <div className="p-6 text-center text-xs text-[#B5B5B5]">
+              <div className="p-6 text-center text-xs text-[var(--ps-muted)]">
                 Nenhuma planilha importada ainda. Envie um arquivo .NBP ou carregue o modelo acima.
               </div>
             ) : (
-              <div className="divide-y divide-zinc-800/80">
+              <div className="divide-y divide-[var(--ps-border)]">
                 {savedRoadbooks.map((item) => {
                   const isActive = item.id === activeRoadbookId;
                   return (
@@ -1441,10 +1691,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     >
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-['Barlow_Condensed'] text-lg font-bold text-white truncate">
+                          <span className="font-['Barlow_Condensed'] text-lg font-bold text-[var(--ps-text)] truncate">
                             {item.eventName}
                           </span>
-                          <span className="font-mono text-[10px] font-bold uppercase text-[#E10600]">
+                          <span className="font-mono text-[10px] font-bold uppercase text-[var(--ps-accent)]">
                             {item.sourceFormat || 'TXT'}
                           </span>
                           {isActive && (
@@ -1453,7 +1703,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                             </span>
                           )}
                         </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-[#B5B5B5] tabular-nums">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
                           <span>{item.tulipas.length} refs</span>
                           <span>{item.totalKm.toFixed(2)} km</span>
                           <span>
@@ -1466,7 +1716,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                         <button
                           type="button"
                           onClick={() => handleActivateRoadbook(item, true)}
-                          className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold tracking-wide text-white uppercase"
+                          className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold tracking-wide uppercase"
                         >
                           <Navigation className="h-3.5 w-3.5" />
                           <span>{isActive ? 'Navegar' : 'Trocar e Navegar'}</span>
@@ -1476,7 +1726,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                             type="button"
                             onClick={() => handleDeleteSaved(item.id!)}
                             title="Remover da base interna"
-                            className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#B5B5B5] hover:border-[#E10600] hover:text-[#FF2A2A]"
+                            className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[#FF2A2A]"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -1494,18 +1744,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SUBMENU 2: PAREAMENTO NAVEGADOR <-> PILOTO (MESTRE -> ESCRAVO) */}
       {activeMenu === 'pairing' && (
         <div className="space-y-3">
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 sm:p-4 space-y-3.5">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 sm:p-4 space-y-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase sm:text-xl">
+                <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase sm:text-xl">
                   Droid Piloto · Mestre → Escravo
                 </h2>
-                <p className="text-[11px] text-[#B5B5B5]">
+                <p className="text-[11px] text-[var(--ps-muted)]">
                   Navegador (Mestre) envia hodômetro, PMM, TNAV e alertas para 1 ou 2+ celulares Piloto.
                 </p>
               </div>
 
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-1.5 text-xs font-bold text-white">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-text)]">
                 <input
                   type="checkbox"
                   checked={settings.pairing.enabled}
@@ -1514,7 +1764,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       pairing: { ...settings.pairing, enabled: e.target.checked },
                     })
                   }
-                  className="h-4 w-4 accent-[#E10600]"
+                  className="h-4 w-4 accent-[var(--ps-accent)]"
                 />
                 <span>{settings.pairing.enabled ? 'Ativo' : 'Desligado'}</span>
               </label>
@@ -1522,10 +1772,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
               <div>
-                <span className="block text-[10px] font-semibold text-[#C0C4C9] uppercase">
+                <span className="block text-[10px] font-semibold text-[var(--ps-muted)] uppercase">
                   Papel do Aparelho
                 </span>
-                <div className="mt-1 grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+                <div className="mt-1 grid grid-cols-2 gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
                   <button
                     type="button"
                     onClick={() =>
@@ -1533,8 +1783,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     }
                     className={`min-h-[36px] rounded-md text-xs font-bold whitespace-nowrap ${
                       settings.pairing.role === 'navigator'
-                        ? 'bg-[#E10600] text-white'
-                        : 'text-[#B5B5B5]'
+                        ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                        : 'text-[var(--ps-muted)]'
                     }`}
                   >
                     Navegador
@@ -1546,8 +1796,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     }
                     className={`min-h-[36px] rounded-md text-xs font-bold whitespace-nowrap ${
                       settings.pairing.role === 'pilot'
-                        ? 'bg-[#E10600] text-white'
-                        : 'text-[#B5B5B5]'
+                        ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                        : 'text-[var(--ps-muted)]'
                     }`}
                   >
                     Piloto
@@ -1558,7 +1808,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div>
                 <label
                   htmlFor="pairing-room-code"
-                  className="block text-[10px] font-semibold text-[#C0C4C9] uppercase"
+                  className="block text-[10px] font-semibold text-[var(--ps-muted)] uppercase"
                 >
                   Código da Sala &amp; PIN
                 </label>
@@ -1576,7 +1826,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       })
                     }
                     placeholder="PS-4821"
-                    className="w-24 sm:w-28 min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-sm font-black tracking-wider text-white uppercase focus:border-[#E10600] focus:outline-none"
+                    className="w-24 sm:w-28 min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-sm font-black tracking-wider text-[var(--ps-text)] uppercase focus:border-[var(--ps-accent)] focus:outline-none"
                   />
                   <input
                     id="pairing-room-pin"
@@ -1592,7 +1842,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       })
                     }
                     placeholder="PIN"
-                    className="flex-1 min-w-[74px] min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-sm font-black tracking-wider text-emerald-300 uppercase focus:border-[#E10600] focus:outline-none"
+                    className="flex-1 min-w-[74px] min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-sm font-black tracking-wider text-emerald-300 uppercase focus:border-[var(--ps-accent)] focus:outline-none"
                   />
                   <button
                     type="button"
@@ -1612,9 +1862,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] px-3 py-2 flex flex-col justify-between">
+              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-[#B5B5B5]">Status</span>
+                  <span className="font-semibold text-[var(--ps-muted)]">Status</span>
                   <span
                     className={`font-mono font-bold ${
                       !settings.pairing.enabled
@@ -1639,15 +1889,15 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                           : 'Aguardando'}
                   </span>
                 </div>
-                <div className="mt-1 font-mono text-[11px] text-[#C0C4C9] tabular-nums">
+                <div className="mt-1 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
                   Mestre: {pairingPresence.navigators} · Pilotos: {pairingPresence.pilots}
                 </div>
               </div>
             </div>
 
             {/* Transport Selector + Quick Pilot Launcher */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-3">
-              <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-1 text-[11px] font-bold">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--ps-border)] pt-3">
+              <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1 text-[11px] font-bold">
                 {(
                   [
                     { id: 'auto', label: 'Auto' },
@@ -1665,8 +1915,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     }
                     className={`min-h-[32px] rounded-md px-2.5 transition-colors whitespace-nowrap ${
                       settings.pairing.transportMode === modeOpt.id
-                        ? 'bg-[#E10600] text-white'
-                        : 'text-[#B5B5B5] hover:text-white'
+                        ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                     }`}
                   >
                     {modeOpt.label}
@@ -1698,7 +1948,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <button
                   type="button"
                   onClick={handleOpenPilotDisplay}
-                  className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white whitespace-nowrap"
+                  className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold whitespace-nowrap"
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
                   <span>Abrir Visor Droid Piloto</span>
@@ -1707,12 +1957,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
 
             {/* Bluetooth Pairing Picker (Native SPP Multi-Pilot + Wake Lock) */}
-            <div className="grid grid-cols-1 gap-2.5 border-t border-zinc-800 pt-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3 space-y-2">
+            <div className="grid grid-cols-1 gap-2.5 border-t border-[var(--ps-border)] pt-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
-                    <Bluetooth className="h-4 w-4 text-[#E10600]" />
-                    <span className="text-xs font-bold text-white uppercase">
+                    <Bluetooth className="h-4 w-4 text-[var(--ps-accent)]" />
+                    <span className="text-xs font-bold text-[var(--ps-text)] uppercase">
                       {isNativeBluetoothSppAvailable()
                         ? 'Pilotos Bluetooth (SPP)'
                         : 'Bluetooth / Wi-Fi'}
@@ -1742,7 +1992,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                           className={`rounded-md border px-2.5 py-1 font-mono text-[11px] font-bold transition-colors ${
                             selected
                               ? 'border-emerald-400 bg-emerald-950/50 text-emerald-300'
-                              : 'border-zinc-700 bg-[#111214] text-[#C0C4C9]'
+                              : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
                           }`}
                         >
                           {selected ? '✓ ' : '+ '}
@@ -1752,7 +2002,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     })}
                   </div>
                 ) : (
-                  <p className="font-mono text-[11px] text-[#C0C4C9]">
+                  <p className="font-mono text-[11px] text-[var(--ps-muted)]">
                     {(settings.pairing.bluetoothDevices || []).length > 0
                       ? `Alvos: ${settings.pairing.bluetoothDevices.map((d) => d.name).join(', ')}`
                       : settings.pairing.bluetoothDeviceName
@@ -1764,11 +2014,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 {btStatusMsg && <p className="text-[11px] text-amber-300">{btStatusMsg}</p>}
               </div>
 
-              <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3 flex flex-col justify-between gap-2">
+              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 flex flex-col justify-between gap-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
-                    <Smartphone className="h-4 w-4 text-[#E10600]" />
-                    <span className="text-xs font-bold text-white uppercase">
+                    <Smartphone className="h-4 w-4 text-[var(--ps-accent)]" />
+                    <span className="text-xs font-bold text-[var(--ps-text)] uppercase">
                       Tela Sempre Ativa
                     </span>
                   </div>
@@ -1776,22 +2026,22 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     type="button"
                     onClick={handleToggleWakeLock}
                     className={`rounded-lg px-2.5 py-1 text-xs font-bold ${
-                      wakeLockActive ? 'bg-emerald-600 text-white' : 'pitstop-btn-metal'
+                      wakeLockActive ? 'bg-emerald-600 text-[#FFFFFF]' : 'pitstop-btn-metal'
                     }`}
                   >
                     {wakeLockActive ? 'Ativa' : 'Manter Acesa'}
                   </button>
                 </div>
-                <p className="text-[11px] text-[#B5B5B5]">
+                <p className="text-[11px] text-[var(--ps-muted)]">
                   Impede que o painel do Piloto ou Navegador apague durante a prova.
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-3 py-2 text-[11px] text-[#C0C4C9]">
-              <Wifi className="h-3.5 w-3.5 shrink-0 text-[#E10600]" />
+            <div className="flex items-center gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2 text-[11px] text-[var(--ps-muted)]">
+              <Wifi className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
               <span>
-                No APK Android, <strong className="text-white">Bluetooth Clássico SPP</strong> conecta direto 1 ou 2 Pilotos sem internet; no navegador use Hotspot Wi-Fi + mesma Sala.
+                No APK Android, <strong className="text-[var(--ps-text)]">Bluetooth Clássico SPP</strong> conecta direto 1 ou 2 Pilotos sem internet; no navegador use Hotspot Wi-Fi + mesma Sala.
               </span>
             </div>
           </section>
@@ -1800,13 +2050,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
       {/* SUBMENU 3: TELA DO PILOTO (PERSONALIZAÇÃO) */}
       {activeMenu === 'pilot' && (
-        <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 sm:p-5 space-y-4">
+        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                 Campos Visíveis na Tela do Piloto
               </h2>
-              <p className="text-xs text-[#B5B5B5]">
+              <p className="text-xs text-[var(--ps-muted)]">
                 Escolha exatamente o que aparece para o piloto na aba Regularidade &gt; Piloto.
               </p>
             </div>
@@ -1814,7 +2064,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <button
                 type="button"
                 onClick={() => updateSettings({ pilotDisplay: getDefaultPilotDisplay() })}
-                className="rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-1.5 text-xs font-bold text-[#C0C4C9] hover:text-white"
+                className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 Completo
               </button>
@@ -1837,7 +2087,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     },
                   })
                 }
-                className="rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-1.5 text-xs font-bold text-[#C0C4C9] hover:text-white"
+                className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 Essencial Piloto
               </button>
@@ -1860,7 +2110,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     },
                   })
                 }
-                className="rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-1.5 text-xs font-bold text-[#C0C4C9] hover:text-white"
+                className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 Minimalista (Vel/Média/TNAV)
               </button>
@@ -1883,7 +2133,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             ] as const).map((item) => (
               <label
                 key={item.key}
-                className="flex min-h-[46px] cursor-pointer items-center gap-2.5 rounded-lg border border-zinc-800 bg-[#080B0D] px-3.5 py-2.5 text-xs font-semibold text-[#F4F4F4] hover:border-zinc-700"
+                className="flex min-h-[46px] cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-[var(--ps-border-strong)]"
               >
                 <input
                   type="checkbox"
@@ -1896,7 +2146,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       },
                     })
                   }
-                  className="h-4 w-4 accent-[#E10600]"
+                  className="h-4 w-4 accent-[var(--ps-accent)]"
                 />
                 <span>{item.label}</span>
               </label>
@@ -1907,26 +2157,26 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
       {/* SUBMENU 4: AFERIÇÃO DO HODÔMETRO & W FINO */}
       {activeMenu === 'calibration' && (
-        <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 sm:p-5 space-y-4">
+        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                 Aferição do Hodômetro, W Fino &amp; Pista de Calibração
               </h2>
-              <p className="mt-1 text-xs text-[#B5B5B5]">
-                <strong className="text-white">W maior</strong> → odômetro marca mais distância ·{' '}
-                <strong className="text-white">W menor</strong> → odômetro marca menos distância.
+              <p className="mt-1 text-xs text-[var(--ps-muted)]">
+                <strong className="text-[var(--ps-text)]">W maior</strong> → odômetro marca mais distância ·{' '}
+                <strong className="text-[var(--ps-text)]">W menor</strong> → odômetro marca menos distância.
               </p>
             </div>
 
-            <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-0.5 text-xs">
+            <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5 text-xs">
               <button
                 type="button"
                 onClick={() => updateSettings({ sensorMode: 'gps' })}
                 className={`rounded-md px-3 py-1.5 font-semibold whitespace-nowrap shrink-0 ${
                   settings.sensorMode === 'gps'
-                    ? 'bg-[#E10600] text-white'
-                    : 'text-[#B5B5B5] hover:text-white'
+                    ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                 }`}
               >
                 GPS (CAL%)
@@ -1936,8 +2186,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 onClick={() => updateSettings({ sensorMode: 'blue' })}
                 className={`rounded-md px-3 py-1.5 font-semibold whitespace-nowrap shrink-0 ${
                   settings.sensorMode === 'blue'
-                    ? 'bg-[#E10600] text-white'
-                    : 'text-[#B5B5B5] hover:text-white'
+                    ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                 }`}
               >
                 Sensor Blue (W)
@@ -1946,18 +2196,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-center">
-            <div className="lg:col-span-7 grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 rounded-xl border border-zinc-800 bg-[#080B0D] p-2">
+            <div className="lg:col-span-7 grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2">
               <button
                 type="button"
                 onClick={() => handleAdjustCalPct(-1)}
-                className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 font-mono text-xs font-extrabold text-[#C0C4C9] hover:text-white"
+                className="min-h-[44px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 font-mono text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 -1%
               </button>
               <button
                 type="button"
                 onClick={() => handleAdjustCalPct(-0.1)}
-                className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#1E1E22] px-3.5 font-mono text-base font-black text-white"
+                className="min-h-[44px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3.5 font-mono text-base font-black text-[var(--ps-text)]"
               >
                 −
               </button>
@@ -1974,20 +2224,20 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     if (e.key === 'Escape') setEditingW(false);
                   }}
                   onBlur={handleCommitWEditor}
-                  className="w-full min-h-[44px] rounded-lg border border-[#E10600] bg-black px-2 text-center font-mono text-base font-black text-white focus:outline-none"
+                  className="w-full min-h-[44px] rounded-lg border border-[var(--ps-accent)] bg-[var(--ps-card-deep)] px-2 text-center font-mono text-base font-black text-[var(--ps-text)] focus:outline-none"
                 />
               ) : (
                 <button
                   type="button"
                   onClick={handleOpenWEditor}
-                  className="flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-zinc-700 bg-black px-2 hover:border-[#E10600]"
+                  className="flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2 hover:border-[var(--ps-accent)]"
                 >
-                  <span className="font-mono text-lg font-black text-white tabular-nums">
+                  <span className="font-mono text-lg font-black text-[var(--ps-text)] tabular-nums">
                     {settings.sensorMode === 'blue'
                       ? `W ${activeW}`
                       : `${settings.calibrationPct.toFixed(2)}%`}
                   </span>
-                  <span className="text-[9px] font-semibold tracking-wider text-[#B5B5B5] uppercase">
+                  <span className="text-[9px] font-semibold tracking-wider text-[var(--ps-muted)] uppercase">
                     Toque para digitar
                   </span>
                 </button>
@@ -1996,21 +2246,21 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <button
                 type="button"
                 onClick={() => handleAdjustCalPct(0.1)}
-                className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#1E1E22] px-3.5 font-mono text-base font-black text-white"
+                className="min-h-[44px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3.5 font-mono text-base font-black text-[var(--ps-text)]"
               >
                 +
               </button>
               <button
                 type="button"
                 onClick={() => handleAdjustCalPct(1)}
-                className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 font-mono text-xs font-extrabold text-[#C0C4C9] hover:text-white"
+                className="min-h-[44px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 font-mono text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 +1%
               </button>
             </div>
 
-            <div className="lg:col-span-5 flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 bg-[#080B0D] p-3">
-              <label htmlFor="w-base-cfg" className="text-xs font-semibold text-[#C0C4C9] whitespace-nowrap">
+            <div className="lg:col-span-5 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
+              <label htmlFor="w-base-cfg" className="text-xs font-semibold text-[var(--ps-muted)] whitespace-nowrap">
                 W Base (100%):
               </label>
               <input
@@ -2023,12 +2273,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   const v = Number(e.target.value);
                   if (Number.isFinite(v) && v >= 500) updateSettings({ wBaseValue: v });
                 }}
-                className="w-24 min-h-[38px] rounded-lg border border-zinc-700 bg-[#111214] px-2.5 font-mono text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                className="w-24 min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 font-mono text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
               />
               <button
                 type="button"
                 onClick={() => updateSettings({ calibrationPct: 100 })}
-                className="ml-auto inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 text-xs font-semibold text-[#C0C4C9] hover:text-white whitespace-nowrap shrink-0"
+                className="ml-auto inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-xs font-semibold text-[var(--ps-muted)] hover:text-[var(--ps-text)] whitespace-nowrap shrink-0"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span>Zerar 100%</span>
@@ -2036,9 +2286,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
           </div>
 
-          <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3.5">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-bold tracking-wider text-[#C0C4C9] uppercase">
+              <span className="text-xs font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                 Passagens em Pista de Aferição (Passagem 1 / 2 / 3)
               </span>
               {settings.wPasses.length > 0 && (
@@ -2059,7 +2309,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 placeholder="Distância oficial (m) ex: 1000"
                 value={passOfficialM}
                 onChange={(e) => setPassOfficialM(e.target.value)}
-                className="min-h-[42px] rounded-lg border border-zinc-700 bg-[#111214] px-3 font-mono text-xs text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                className="min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 font-mono text-xs text-[var(--ps-text)] placeholder:text-zinc-500 focus:border-[var(--ps-accent)] focus:outline-none"
               />
               <input
                 type="number"
@@ -2067,7 +2317,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 placeholder="Medida no hodômetro (m) ex: 992"
                 value={passMeasuredM}
                 onChange={(e) => setPassMeasuredM(e.target.value)}
-                className="min-h-[42px] rounded-lg border border-zinc-700 bg-[#111214] px-3 font-mono text-xs text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                className="min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 font-mono text-xs text-[var(--ps-text)] placeholder:text-zinc-500 focus:border-[var(--ps-accent)] focus:outline-none"
               />
               <button
                 type="button"
@@ -2079,15 +2329,15 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
 
             {settings.wPasses.length > 0 && (
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-3">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ps-border)] pt-3">
                 <div className="flex flex-wrap gap-2">
                   {settings.wPasses.map((p, idx) => (
                     <span
                       key={p.id}
-                      className="rounded-md border border-zinc-700 bg-[#111214] px-2.5 py-1 font-mono text-[11px] text-[#C0C4C9]"
+                      className="rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 py-1 font-mono text-[11px] text-[var(--ps-muted)]"
                     >
                       P{idx + 1}: {p.measuredM}m / {p.officialM}m →{' '}
-                      <strong className="text-white">W {p.suggestedW}</strong>
+                      <strong className="text-[var(--ps-text)]">W {p.suggestedW}</strong>
                     </span>
                   ))}
                 </div>
@@ -2095,7 +2345,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <button
                     type="button"
                     onClick={handleApplyAverageW}
-                    className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold text-white whitespace-nowrap shrink-0"
+                    className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold whitespace-nowrap shrink-0"
                   >
                     <span>
                       Aplicar Média W {averageCalibrationSuggestion.avgW} ({averageCalibrationSuggestion.avgPct.toFixed(2)}% · Erro{' '}
@@ -2113,11 +2363,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SUBMENU 5: ALERTAS, ROAD BOOK & ATALHOS */}
       {activeMenu === 'alerts' && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Volume2 className="h-4 w-4 text-[#E10600]" />
-                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+                <Volume2 className="h-4 w-4 text-[var(--ps-accent)]" />
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                   Alertas Sonoros &amp; Cantada
                 </h2>
               </div>
@@ -2143,8 +2393,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   onClick={() => updateSettings({ alertStyle: opt.id, voiceEnabled: true })}
                   className={`min-h-[38px] rounded-lg text-xs font-bold whitespace-nowrap ${
                     settings.alertStyle === opt.id
-                      ? 'bg-[#E10600] text-white'
-                      : 'border border-zinc-800 bg-[#080B0D] text-[#C0C4C9]'
+                      ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                      : 'border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                   }`}
                 >
                   {opt.label}
@@ -2156,7 +2406,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div>
                 <label
                   htmlFor="cfg-cantada-dist"
-                  className="block text-[11px] font-semibold text-[#B5B5B5]"
+                  className="block text-[11px] font-semibold text-[var(--ps-muted)]"
                 >
                   Distâncias / Gatilhos
                 </label>
@@ -2167,18 +2417,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   onChange={(e) => setThresholdsInput(e.target.value)}
                   onBlur={() => handleCommitThresholds(thresholdsInput)}
                   placeholder="100, 50, 20"
-                  className="mt-1 w-full min-h-[40px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3 font-mono text-xs text-white focus:border-[#E10600] focus:outline-none"
+                  className="mt-1 w-full min-h-[40px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 font-mono text-xs text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                 />
               </div>
 
               <div>
-                <span className="block text-[11px] font-semibold text-[#B5B5B5]">Unidade</span>
-                <div className="mt-1 grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+                <span className="block text-[11px] font-semibold text-[var(--ps-muted)]">Unidade</span>
+                <div className="mt-1 grid grid-cols-2 gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
                   <button
                     type="button"
                     onClick={() => updateSettings({ voiceUnit: 'meters' })}
                     className={`min-h-[32px] rounded-md text-xs font-bold ${
-                      settings.voiceUnit === 'meters' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5]'
+                      settings.voiceUnit === 'meters' ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]' : 'text-[var(--ps-muted)]'
                     }`}
                   >
                     Metros
@@ -2187,7 +2437,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     type="button"
                     onClick={() => updateSettings({ voiceUnit: 'seconds' })}
                     className={`min-h-[32px] rounded-md text-xs font-bold ${
-                      settings.voiceUnit === 'seconds' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5]'
+                      settings.voiceUnit === 'seconds' ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]' : 'text-[var(--ps-muted)]'
                     }`}
                   >
                     Segundos
@@ -2196,29 +2446,29 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </div>
             </div>
 
-            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[#C0C4C9]">
+            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[var(--ps-muted)]">
               <input
                 type="checkbox"
                 checked={settings.voiceEnabled}
                 onChange={(e) => updateSettings({ voiceEnabled: e.target.checked })}
-                className="h-4 w-4 accent-[#E10600]"
+                className="h-4 w-4 accent-[var(--ps-accent)]"
               />
               <span>Ativar alertas automáticos antes das referências</span>
             </label>
           </div>
 
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Keyboard className="h-4 w-4 text-[#E10600]" />
-                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+                <Keyboard className="h-4 w-4 text-[var(--ps-accent)]" />
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                   Teclas de Atalho / Controle Bluetooth
                 </h2>
               </div>
               <button
                 type="button"
                 onClick={() => updateSettings({ shortcuts: getDefaultShortcuts() })}
-                className="text-[11px] font-semibold text-[#C0C4C9] hover:text-white"
+                className="text-[11px] font-semibold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 Padrão
               </button>
@@ -2241,14 +2491,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     onClick={() => setCapturingShortcut(isCap ? null : item.key)}
                     className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-colors ${
                       isCap
-                        ? 'border-[#E10600] bg-[#E10600]/15'
-                        : 'border-zinc-800 bg-[#080B0D] hover:border-zinc-600'
+                        ? 'border-[var(--ps-accent)] bg-[#E10600]/15'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-zinc-600'
                     }`}
                   >
-                    <span className="text-[10px] font-semibold text-[#B5B5B5] uppercase">
+                    <span className="text-[10px] font-semibold text-[var(--ps-muted)] uppercase">
                       {item.label}
                     </span>
-                    <span className="mt-0.5 font-mono text-xs font-bold text-white">
+                    <span className="mt-0.5 font-mono text-xs font-bold text-[var(--ps-text)]">
                       {isCap ? 'Pressione uma tecla...' : formatKeyLabel(settings.shortcuts[item.key])}
                     </span>
                   </button>
@@ -2257,10 +2507,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
           </div>
 
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3 lg:col-span-2">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3 lg:col-span-2">
             <div className="flex items-center gap-2">
-              <Radio className="h-4 w-4 text-[#E10600]" />
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+              <Radio className="h-4 w-4 text-[var(--ps-accent)]" />
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                 Exibição do Road Book Digital
               </h2>
             </div>
@@ -2271,8 +2521,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 onClick={() => updateSettings({ activeRowLine: 1 })}
                 className={`min-h-[38px] rounded-lg text-xs font-bold ${
                   settings.activeRowLine === 1
-                    ? 'bg-[#E10600] text-white'
-                    : 'border border-zinc-800 bg-[#080B0D] text-[#C0C4C9]'
+                    ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                    : 'border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                 }`}
               >
                 Ref. da Vez: Linha 1 (Topo)
@@ -2282,21 +2532,21 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 onClick={() => updateSettings({ activeRowLine: 2 })}
                 className={`min-h-[38px] rounded-lg text-xs font-bold ${
                   settings.activeRowLine === 2
-                    ? 'bg-[#E10600] text-white'
-                    : 'border border-zinc-800 bg-[#080B0D] text-[#C0C4C9]'
+                    ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                    : 'border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                 }`}
               >
                 Ref. da Vez: Linha 2
               </button>
             </div>
 
-            <div className="flex flex-wrap items-center gap-4 text-xs text-[#C0C4C9]">
+            <div className="flex flex-wrap items-center gap-4 text-xs text-[var(--ps-muted)]">
               <label className="inline-flex cursor-pointer items-center gap-1.5">
                 <input
                   type="checkbox"
                   checked={settings.reducePassedRow}
                   onChange={(e) => updateSettings({ reducePassedRow: e.target.checked })}
-                  className="h-4 w-4 accent-[#E10600]"
+                  className="h-4 w-4 accent-[var(--ps-accent)]"
                 />
                 <span>Reduzir passada</span>
               </label>
@@ -2305,14 +2555,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   type="checkbox"
                   checked={settings.showPassedTick}
                   onChange={(e) => updateSettings({ showPassedTick: e.target.checked })}
-                  className="h-4 w-4 accent-[#E10600]"
+                  className="h-4 w-4 accent-[var(--ps-accent)]"
                 />
                 <span>✓ Verde na passada</span>
               </label>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <span className="text-xs font-semibold text-[#B5B5B5]">Tema da Referência:</span>
+              <span className="text-xs font-semibold text-[var(--ps-muted)]">Tema da Referência:</span>
               <div className="flex gap-1.5">
                 {([
                   { id: 'yellow', label: 'Amarelo' },
@@ -2325,8 +2575,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     onClick={() => updateSettings({ highlightTheme: t.id })}
                     className={`rounded-lg px-2.5 py-1 text-xs font-bold ${
                       settings.highlightTheme === t.id
-                        ? 'bg-[#E10600] text-white'
-                        : 'border border-zinc-800 bg-[#080B0D] text-[#C0C4C9]'
+                        ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                        : 'border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                     }`}
                   >
                     {t.label}
@@ -2336,9 +2586,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
 
             <div>
-              <div className="flex items-center justify-between text-xs font-semibold text-[#B5B5B5]">
+              <div className="flex items-center justify-between text-xs font-semibold text-[var(--ps-muted)]">
                 <span>Troca Antecipada</span>
-                <span className="font-mono text-white">{settings.transitionAdvanceM} m</span>
+                <span className="font-mono text-[var(--ps-text)]">{settings.transitionAdvanceM} m</span>
               </div>
               <div className="mt-1.5 grid grid-cols-4 gap-1.5">
                 {[0, 5, 10, 20].map((m) => (
@@ -2348,8 +2598,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     onClick={() => updateSettings({ transitionAdvanceM: m })}
                     className={`min-h-[34px] rounded-lg font-mono text-xs font-bold ${
                       settings.transitionAdvanceM === m
-                        ? 'bg-[#E10600] text-white'
-                        : 'border border-zinc-800 bg-[#080B0D] text-[#C0C4C9]'
+                        ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                        : 'border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                     }`}
                   >
                     {m}m
@@ -2364,22 +2614,22 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SUBMENU: AJUSTE DE HORA (MANUAL OU AUTOMÁTICA) */}
       {activeMenu === 'clock' && (
         <div className="space-y-4">
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 sm:p-5 space-y-4">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                   Hora Oficial da Prova
                 </h2>
-                <p className="text-xs text-[#B5B5B5]">
+                <p className="text-xs text-[var(--ps-muted)]">
                   Escolha entre sincronização automática (GPS / Rede) ou ajuste manual até o segundo para alinhar com a cronometragem.
                 </p>
               </div>
-              <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-1 text-xs">
+              <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1 text-xs">
                 <button
                   type="button"
                   onClick={handleSyncGpsClock}
                   className={`min-h-[36px] rounded-md px-3 font-bold ${
-                    clockMode === 'auto' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
+                    clockMode === 'auto' ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]' : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                   }`}
                 >
                   Automática (GPS)
@@ -2388,7 +2638,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   type="button"
                   onClick={() => setClockMode('manual')}
                   className={`min-h-[36px] rounded-md px-3 font-bold ${
-                    clockMode === 'manual' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
+                    clockMode === 'manual' ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]' : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                   }`}
                 >
                   Manual
@@ -2397,38 +2647,38 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
 
             {/* Live Big Clock Preview */}
-            <div className="rounded-xl border border-zinc-800 bg-[#000000] p-5 text-center">
-              <p className="font-mono text-[11px] font-bold tracking-widest text-[#E10600] uppercase">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-5 text-center">
+              <p className="font-mono text-[11px] font-bold tracking-widest text-[var(--ps-accent)] uppercase">
                 {clockMode === 'auto' && settings.clockOffsetMs === 0
                   ? 'RELÓGIO AUTOMÁTICO ATIVO'
                   : `MODO ${clockMode === 'auto' ? 'GPS' : 'MANUAL'} · DESVIO ${settings.clockOffsetMs >= 0 ? '+' : ''}${(settings.clockOffsetMs / 1000).toFixed(1)}s`}
               </p>
-              <div className="mt-1 font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
+              <div className="mt-1 font-mono text-4xl font-black tracking-tight text-[var(--ps-text)] tabular-nums sm:text-5xl">
                 {formatClockOnly(nowMs + settings.clockOffsetMs)}
               </div>
             </div>
 
             {clockMode === 'auto' ? (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#080B0D] p-4">
-                <div className="text-xs text-[#C0C4C9]">
-                  <strong className="text-white block">Sincronização Automática</strong>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-4">
+                <div className="text-xs text-[var(--ps-muted)]">
+                  <strong className="text-[var(--ps-text)] block">Sincronização Automática</strong>
                   Usa o timestamp preciso do satélite GPS ou do relógio oficial do aparelho.
                 </div>
                 <button
                   type="button"
                   onClick={handleSyncGpsClock}
-                  className="pitstop-btn-red min-h-[40px] rounded-lg px-4 text-xs font-extrabold text-white uppercase"
+                  className="pitstop-btn-red min-h-[40px] rounded-lg px-4 text-xs font-extrabold uppercase"
                 >
                   Sincronizar Agora
                 </button>
               </div>
             ) : (
-              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-4 space-y-3">
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-4 space-y-3">
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="flex-1 min-w-[160px]">
                     <label
                       htmlFor="manual-clock-input"
-                      className="block text-[11px] font-bold text-[#B5B5B5] uppercase"
+                      className="block text-[11px] font-bold text-[var(--ps-muted)] uppercase"
                     >
                       Digitar Hora Manual (HH:MM:SS)
                     </label>
@@ -2438,13 +2688,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       value={manualTimeInput}
                       onChange={(e) => setManualTimeInput(e.target.value)}
                       placeholder="14:30:00"
-                      className="mt-1 w-full min-h-[42px] rounded-lg border border-zinc-700 bg-[#111214] px-3 font-mono text-base font-bold text-white focus:border-[#E10600] focus:outline-none"
+                      className="mt-1 w-full min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 font-mono text-base font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={() => handleApplyManualClock(manualTimeInput)}
-                    className="pitstop-btn-red min-h-[42px] rounded-lg px-4 text-xs font-extrabold text-white uppercase"
+                    className="pitstop-btn-red min-h-[42px] rounded-lg px-4 text-xs font-extrabold uppercase"
                   >
                     Aplicar Hora
                   </button>
@@ -2463,7 +2713,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 </div>
 
                 <div>
-                  <span className="block text-[11px] font-semibold text-[#B5B5B5] mb-1.5">
+                  <span className="block text-[11px] font-semibold text-[var(--ps-muted)] mb-1.5">
                     Ajuste Fino Rápido:
                   </span>
                   <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6 font-mono text-xs font-bold">
@@ -2479,7 +2729,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                         key={btn.label}
                         type="button"
                         onClick={() => handleAdjustClockDeltaMs(btn.ms)}
-                        className="min-h-[38px] rounded-lg border border-zinc-700 bg-[#14161A] text-white hover:border-[#E10600]"
+                        className="min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                       >
                         {btn.label}
                       </button>
@@ -2503,11 +2753,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {activeMenu === 'system' && (
         <div className="space-y-4">
           <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <Satellite className="h-4 w-4 text-[#E10600]" />
-                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase">
+                  <Satellite className="h-4 w-4 text-[var(--ps-accent)]" />
+                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
                     Sinal do GPS
                   </h2>
                 </div>
@@ -2515,9 +2765,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   type="button"
                   onClick={readSingleGpsFix}
                   disabled={refreshingGps}
-                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-semibold text-[#F4F4F4] hover:border-[#C0C4C9]/50 whitespace-nowrap shrink-0"
+                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-[#C0C4C9]/50 whitespace-nowrap shrink-0"
                 >
-                  <RefreshCw className={`h-3.5 w-3.5 text-[#C0C4C9] ${refreshingGps ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${refreshingGps ? 'animate-spin' : ''}`} />
                   <span>Atualizar</span>
                 </button>
               </div>
@@ -2527,7 +2777,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <span className={`font-['Barlow_Condensed'] text-2xl font-extrabold italic ${gpsQuality.toneClass}`}>
                     {gps.status === 'active' ? gpsQuality.label : gps.status === 'denied' ? 'Bloqueado' : 'Buscando...'}
                   </span>
-                  <span className="ml-2 font-mono text-xs text-[#C0C4C9] tabular-nums">
+                  <span className="ml-2 font-mono text-xs text-[var(--ps-muted)] tabular-nums">
                     {gps.accuracyM !== null ? `±${gps.accuracyM} m` : '--'}
                   </span>
                 </div>
@@ -2542,38 +2792,38 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-zinc-800/90 pt-2.5 font-mono text-[11px] text-[#B5B5B5] tabular-nums">
+              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[var(--ps-border)] pt-2.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
                 <span className="truncate">Lat: {gps.lat !== null ? gps.lat.toFixed(6) : '--'}</span>
                 <span className="truncate text-right">Lon: {gps.lon !== null ? gps.lon.toFixed(6) : '--'}</span>
               </div>
               {gps.message && <p className="mt-2 text-xs text-amber-300">{gps.message}</p>}
             </div>
 
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 flex flex-col justify-between">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   {renderBatteryIcon()}
-                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase">
+                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
                     Bateria do Aparelho
                   </h2>
                 </div>
-                <span className="font-mono text-[11px] font-semibold text-[#B5B5B5]">
+                <span className="font-mono text-[11px] font-semibold text-[var(--ps-muted)]">
                   {battery.charging ? 'Carregando' : battery.supported ? 'Em bateria' : 'N/D'}
                 </span>
               </div>
 
               <div className="mt-3 flex items-baseline justify-between">
-                <span className="font-mono text-3xl font-extrabold text-white tabular-nums">
+                <span className="font-mono text-3xl font-extrabold text-[var(--ps-text)] tabular-nums">
                   {battery.supported && battery.levelPct !== null ? `${battery.levelPct}%` : '--'}
                 </span>
-                <span className="text-xs text-[#B5B5B5]">
+                <span className="text-xs text-[var(--ps-muted)]">
                   {battery.levelPct !== null && battery.levelPct <= 25
                     ? 'Recomendado ligar carregador veicular'
                     : 'Carga estável para etapa'}
                 </span>
               </div>
 
-              <div className="mt-3 h-2 w-full overflow-hidden rounded-sm border border-zinc-800 bg-[#080B0D]">
+              <div className="mt-3 h-2 w-full overflow-hidden rounded-sm border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
                 <div
                   className={`h-full transition-all ${
                     (battery.levelPct ?? 0) <= 20
@@ -2590,14 +2840,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
           {/* Screen Orientation Lock + Device Permissions */}
           <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <Lock className="h-4 w-4 text-[#E10600]" />
-                <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase">
+                <Lock className="h-4 w-4 text-[var(--ps-accent)]" />
+                <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
                   Orientação &amp; Trava de Tela
                 </h2>
               </div>
-              <p className="text-xs text-[#B5B5B5]">
+              <p className="text-xs text-[var(--ps-muted)]">
                 Trave a rotação no painel do carro (Retrato / Paisagem) ou deixe automática conforme o sensor do aparelho.
               </p>
               <div className="grid grid-cols-3 gap-1.5">
@@ -2614,8 +2864,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     onClick={() => updateSettings({ screenOrientation: id })}
                     className={`min-h-[40px] rounded-lg text-xs font-bold ${
                       settings.screenOrientation === id
-                        ? 'bg-[#E10600] text-white'
-                        : 'border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
+                        ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                        : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                     }`}
                   >
                     {label}
@@ -2624,11 +2874,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </div>
             </div>
 
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-[#E10600]" />
-                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase">
+                  <ShieldCheck className="h-4 w-4 text-[var(--ps-accent)]" />
+                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
                     Permissões do Aparelho
                   </h2>
                 </div>
@@ -2636,7 +2886,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   type="button"
                   onClick={handleRequestDevicePermissions}
                   disabled={requestingPerms}
-                  className="pitstop-btn-red rounded-lg px-3 py-1.5 text-xs font-bold text-white whitespace-nowrap"
+                  className="pitstop-btn-red rounded-lg px-3 py-1.5 text-xs font-bold whitespace-nowrap"
                 >
                   {requestingPerms ? 'Solicitando...' : 'Solicitar Acessos'}
                 </button>
@@ -2652,9 +2902,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 ).map(([label, status]) => (
                   <div
                     key={label}
-                    className="flex items-center justify-between rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5"
+                    className="flex items-center justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5"
                   >
-                    <span className="truncate text-[#C0C4C9]">{label}</span>
+                    <span className="truncate text-[var(--ps-muted)]">{label}</span>
                     <span
                       className={`font-bold uppercase ${
                         status === 'granted'
@@ -2678,11 +2928,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
           </section>
 
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Server className="h-4 w-4 text-[#E10600]" />
-                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+                <Server className="h-4 w-4 text-[var(--ps-accent)]" />
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                   Base PitStop-Sports &amp; Portal Web de Apuração
                 </h2>
               </div>
@@ -2690,22 +2940,22 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 type="button"
                 onClick={handleTestBaseConnection}
                 disabled={healthState.checking}
-                className="pitstop-btn-red inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-white whitespace-nowrap"
+                className="pitstop-btn-red inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold whitespace-nowrap"
               >
                 <Server className="h-3.5 w-3.5" />
                 <span>{healthState.checking ? 'Verificando...' : 'Testar Base'}</span>
               </button>
             </div>
 
-            <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-3 text-xs text-[#C0C4C9] space-y-2.5">
-              <p className="font-bold text-white uppercase text-[11px]">
+            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-xs text-[var(--ps-muted)] space-y-2.5">
+              <p className="font-bold text-[var(--ps-text)] uppercase text-[11px]">
                 Como acessar o Portal Web de Apuração (Separado do APK do Competidor):
               </p>
               <p>
                 No navegador web do organizador, adicione{' '}
                 <code className="rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-amber-300">?apuracao=1</code>{' '}
                 ao final do endereço (ex.:{' '}
-                <code className="font-mono text-white">https://seusite/?apuracao=1</code>) ou clique no botão abaixo.
+                <code className="font-mono text-[var(--ps-text)]">https://seusite/?apuracao=1</code>) ou clique no botão abaixo.
                 O APK compilado para competidores oculta essa tela automaticamente para segurança da prova.
               </p>
               {onOpenApuracao && (
@@ -2713,7 +2963,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <button
                     type="button"
                     onClick={onOpenApuracao}
-                    className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-2 rounded-lg px-4 text-xs font-extrabold text-white uppercase tracking-wide"
+                    className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-2 rounded-lg px-4 text-xs font-extrabold uppercase tracking-wide"
                   >
                     <Server className="h-4 w-4" />
                     <span>Abrir Portal Web de Apuração</span>
@@ -2754,15 +3004,15 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SUBMENU 9: COLETOR & ENVIO PARA ADMIN */}
       {activeMenu === 'collector' && (
         <div className="space-y-4">
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 sm:p-4 space-y-2.5">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 sm:p-4 space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <Server className="h-4 w-4 shrink-0 text-[#E10600]" />
+                <Server className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
                 <div className="min-w-0">
-                  <p className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase leading-tight">
+                  <p className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase leading-tight">
                     Envio Direto para Base / Admin
                   </p>
-                  <p className="text-[11px] text-[#B5B5B5] truncate">
+                  <p className="text-[11px] text-[var(--ps-muted)] truncate">
                     Colete a passagem dos PCs por GPS e envie direto ao organizador.
                   </p>
                 </div>
@@ -2775,14 +3025,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   disabled={healthState.checking}
                   className="pitstop-btn-metal inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 text-xs font-bold whitespace-nowrap"
                 >
-                  <Server className="h-3.5 w-3.5 text-[#E10600]" />
+                  <Server className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                   <span>{healthState.checking ? 'Verificando...' : 'Testar Base'}</span>
                 </button>
                 {onOpenApuracao && (
                   <button
                     type="button"
                     onClick={onOpenApuracao}
-                    className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white uppercase whitespace-nowrap"
+                    className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold uppercase whitespace-nowrap"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                     <span>Portal Admin</span>
@@ -2812,30 +3062,30 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SUBMENU 10: BACKUP & DADOS OFFLINE */}
       {activeMenu === 'backup' && (
         <div className="space-y-4">
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-4">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-4">
             <div className="flex items-center gap-2">
-              <HardDrive className="h-4 w-4 text-[#E10600]" />
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+              <HardDrive className="h-4 w-4 text-[var(--ps-accent)]" />
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                 Resumo de Armazenamento Offline
               </h2>
             </div>
 
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 font-mono tabular-nums">
-              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
-                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Planilhas</p>
-                <p className="mt-1 text-2xl font-black text-white">{savedRoadbooks.length}</p>
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
+                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Planilhas</p>
+                <p className="mt-1 text-2xl font-black text-[var(--ps-text)]">{savedRoadbooks.length}</p>
               </div>
-              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
-                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Pistas / SS</p>
-                <p className="mt-1 text-2xl font-black text-white">{velocityStats.tracksCount}</p>
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
+                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Pistas / SS</p>
+                <p className="mt-1 text-2xl font-black text-[var(--ps-text)]">{velocityStats.tracksCount}</p>
               </div>
-              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
-                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Passagens</p>
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
+                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Passagens</p>
                 <p className="mt-1 text-2xl font-black text-amber-300">{velocityStats.runsCount}</p>
               </div>
-              <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3 text-center">
-                <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Fila Admin</p>
-                <p className="mt-1 text-2xl font-black text-[#E10600]">{pendingQueue.length}</p>
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
+                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Fila Admin</p>
+                <p className="mt-1 text-2xl font-black text-[var(--ps-accent)]">{pendingQueue.length}</p>
               </div>
             </div>
 
@@ -2856,14 +3106,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <button
                 type="button"
                 onClick={handleExportBackup}
-                className="pitstop-btn-red inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold text-white uppercase tracking-wide"
+                className="pitstop-btn-red inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold uppercase tracking-wide"
               >
                 <Download className="h-4 w-4" />
                 <span>Exportar Backup (.JSON)</span>
               </button>
 
               <label className="pitstop-btn-metal inline-flex min-h-[46px] cursor-pointer items-center justify-center gap-2 rounded-xl px-4 text-xs font-bold uppercase tracking-wide">
-                <Upload className="h-4 w-4 text-[#E10600]" />
+                <Upload className="h-4 w-4 text-[var(--ps-accent)]" />
                 <span>Restaurar Backup (.JSON)</span>
                 <input
                   type="file"
@@ -2879,8 +3129,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
           </section>
 
-          <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
-            <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-white uppercase">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
+            <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
               Limpeza &amp; Manutenção
             </h3>
 
@@ -2889,7 +3139,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 type="button"
                 onClick={handleClearVelocityRuns}
                 disabled={velocityStats.runsCount === 0}
-                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-[#080B0D] px-4 text-xs font-bold text-[#C0C4C9] hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-40"
+                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-40"
               >
                 <Trash2 className="h-4 w-4" />
                 <span>Limpar Passagens de Velocidade</span>
@@ -2899,7 +3149,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <button
                   type="button"
                   onClick={() => setConfirmResetDefaults(true)}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-[#080B0D] px-4 text-xs font-bold text-[#C0C4C9] hover:border-red-500/60 hover:text-red-300"
+                  className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-red-500/60 hover:text-red-300"
                 >
                   <RotateCcw className="h-4 w-4" />
                   <span>Restaurar Ajustes Padrão</span>
@@ -2912,14 +3162,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <button
                     type="button"
                     onClick={handleResetDefaultSettings}
-                    className="rounded-lg bg-[#E10600] px-3 py-1.5 text-xs font-extrabold text-white"
+                    className="rounded-lg bg-[var(--ps-accent)] px-3 py-1.5 text-xs font-extrabold text-[var(--ps-accent-text)]"
                   >
                     Sim
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmResetDefaults(false)}
-                    className="rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 py-1.5 text-xs text-[#C0C4C9]"
+                    className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 py-1.5 text-xs text-[var(--ps-muted)]"
                   >
                     Não
                   </button>

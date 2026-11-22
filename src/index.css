@@ -1,17 +1,124 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Barlow Condensed", sans-serif;
-  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: var(--ps-font-display, "Barlow Condensed", sans-serif);
+  --font-sans: var(--ps-font-sans, "Plus Jakarta Sans", system-ui, -apple-system, sans-serif);
+  --font-mono: var(--ps-font-mono, "JetBrains Mono", ui-monospace, SFMono-Regular, monospace);
+}
+
+:root,
+[data-theme="pitstop"] {
+  --ps-bg: #090A0D;
+  --ps-surface: #12141A;
+  --ps-card: #1A1D26;
+  --ps-card-deep: #07080B;
+  --ps-header: rgba(9, 10, 13, 0.96);
+  --ps-border: rgba(255, 255, 255, 0.08);
+  --ps-border-strong: rgba(255, 255, 255, 0.16);
+  --ps-text: #F4F4F5;
+  --ps-muted: #A1A1AA;
+  --ps-accent: #E10600;
+  --ps-accent-2: #FF2A2A;
+  --ps-accent-soft: rgba(225, 6, 0, 0.16);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #FBBF24;
+  --ps-emerald: #10B981;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+[data-theme="fueltech"] {
+  --ps-bg: #000000;
+  --ps-surface: #07090E;
+  --ps-card: #0D121B;
+  --ps-card-deep: #000000;
+  --ps-header: rgba(0, 0, 0, 0.97);
+  --ps-border: rgba(14, 165, 233, 0.22);
+  --ps-border-strong: rgba(245, 158, 11, 0.42);
+  --ps-text: #F8FAFC;
+  --ps-muted: #94A3B8;
+  --ps-accent: #0EA5E9;
+  --ps-accent-2: #38BDF8;
+  --ps-accent-soft: rgba(14, 165, 233, 0.18);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #F59E0B;
+  --ps-emerald: #10B981;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "Barlow Condensed", "JetBrains Mono", sans-serif;
+}
+
+[data-theme="night"] {
+  --ps-bg: #100C0D;
+  --ps-surface: #181214;
+  --ps-card: #21181A;
+  --ps-card-deep: #0C090A;
+  --ps-header: rgba(16, 12, 13, 0.96);
+  --ps-border: rgba(249, 115, 22, 0.18);
+  --ps-border-strong: rgba(220, 38, 38, 0.36);
+  --ps-text: #FCEBE3;
+  --ps-muted: #C29D90;
+  --ps-accent: #DC2626;
+  --ps-accent-2: #F97316;
+  --ps-accent-soft: rgba(220, 38, 38, 0.18);
+  --ps-accent-text: #FFF7ED;
+  --ps-amber: #F97316;
+  --ps-emerald: #34D399;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+[data-theme="solar"] {
+  --ps-bg: #F1F5F9;
+  --ps-surface: #FFFFFF;
+  --ps-card: #F8FAFC;
+  --ps-card-deep: #E2E8F0;
+  --ps-header: rgba(255, 255, 255, 0.96);
+  --ps-border: rgba(15, 23, 42, 0.12);
+  --ps-border-strong: rgba(15, 23, 42, 0.24);
+  --ps-text: #090D16;
+  --ps-muted: #475569;
+  --ps-accent: #E10600;
+  --ps-accent-2: #B91C1C;
+  --ps-accent-soft: rgba(225, 6, 0, 0.1);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #B45309;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+[data-theme="gt"] {
+  --ps-bg: #0F172A;
+  --ps-surface: #172136;
+  --ps-card: #1E293B;
+  --ps-card-deep: #090F1D;
+  --ps-header: rgba(15, 23, 42, 0.96);
+  --ps-border: rgba(132, 204, 22, 0.22);
+  --ps-border-strong: rgba(132, 204, 22, 0.44);
+  --ps-text: #F8FAFC;
+  --ps-muted: #94A3B8;
+  --ps-accent: #84CC16;
+  --ps-accent-2: #A3E635;
+  --ps-accent-soft: rgba(132, 204, 22, 0.16);
+  --ps-accent-text: #090D16;
+  --ps-amber: #FACC15;
+  --ps-emerald: #84CC16;
+  --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
+  --ps-font-mono: "Outfit", "JetBrains Mono", sans-serif;
 }
 
 @layer base {
-  html {
-    font-family: var(--font-sans);
+  html,
+  body {
+    font-family: var(--ps-font-sans);
     -webkit-tap-highlight-color: transparent;
-    background-color: #080B0D;
-    color: #F4F4F4;
+    background-color: var(--ps-bg);
+    color: var(--ps-text);
   }
 
   h1, h2, .font-display-heading {
@@ -40,11 +147,38 @@
   display: none;
 }
 
-/* PitStop Sports Track Dark (#080B0D) + subtle Asphalt weave & Rally Red crown glow */
+/* Clean Motorsport Surfaces & Typography Helpers */
+.ps-surface {
+  background-color: var(--ps-surface);
+  border-color: var(--ps-border);
+  color: var(--ps-text);
+}
+
+.ps-card {
+  background-color: var(--ps-card);
+  border-color: var(--ps-border);
+  color: var(--ps-text);
+}
+
+.ps-card-deep {
+  background-color: var(--ps-card-deep);
+  border-color: var(--ps-border);
+  color: var(--ps-text);
+}
+
+.ps-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ps-muted);
+}
+
+/* Theme-Aware Motorsport Canvas + Subtle Carbon Texture */
 .bg-rally-asphalt {
-  background-color: #080B0D;
+  background-color: var(--ps-bg);
   background-image:
-    radial-gradient(ellipse 85% 42% at 50% 0%, rgba(225, 6, 0, 0.14), transparent 62%),
+    radial-gradient(ellipse 85% 42% at 50% 0%, var(--ps-accent-soft), transparent 62%),
     repeating-linear-gradient(
       45deg,
       rgba(192, 196, 201, 0.014) 0px,
@@ -72,12 +206,12 @@
   background-position: 0 0, 0 10px, 10px -10px, -10px 0;
 }
 
-/* PitStop Sports Checkered Flag Racing Streak (derived from faixa.png: red motion blur -> diagonal white cut -> slanted checkered flag -> dissolving asphalt) */
+/* PitStop Sports Checkered Flag Racing Streak */
 .pitstop-racing-line,
 .rally-track-stripe {
   position: relative;
   overflow: hidden;
-  background-color: #080B0D;
+  background-color: var(--ps-bg);
   background-image: url('./assets/pitstop-flag-streak.webp');
   background-size: 100% 100%;
   background-position: center;
@@ -104,43 +238,43 @@
   content: none;
 }
 
-/* Primary PitStop Sports Rally Red CTA */
+/* Primary Theme-Aware Motorsport CTA */
 .pitstop-btn-red,
 .rally-btn-red,
 .rally-btn-orange,
 .pitstop-btn-blue {
-  background: linear-gradient(180deg, #FF2A2A 0%, #E10600 55%, #A80400 100%);
-  border: 1px solid rgba(255, 75, 70, 0.55);
-  color: #FFFFFF;
-  box-shadow: 0 6px 18px -4px rgba(225, 6, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  background: linear-gradient(180deg, var(--ps-accent-2) 0%, var(--ps-accent) 100%);
+  border: 1px solid color-mix(in srgb, var(--ps-accent-2) 55%, transparent);
+  color: var(--ps-accent-text);
+  box-shadow: 0 6px 18px -4px color-mix(in srgb, var(--ps-accent) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 .pitstop-btn-red:hover:not(:disabled),
 .rally-btn-red:hover:not(:disabled),
 .rally-btn-orange:hover:not(:disabled),
 .pitstop-btn-blue:hover:not(:disabled) {
-  background: linear-gradient(180deg, #FF4444 0%, #FF1E17 55%, #C90500 100%);
+  filter: brightness(1.08);
 }
 .pitstop-btn-red:disabled,
 .rally-btn-red:disabled,
 .rally-btn-orange:disabled,
 .pitstop-btn-blue:disabled {
-  background: #1E1E22;
-  border: 1px solid #2C3038;
-  color: #9CA3AF;
+  background: var(--ps-card);
+  border: 1px solid var(--ps-border);
+  color: var(--ps-muted);
   box-shadow: none;
   cursor: not-allowed;
 }
 
-/* Metallic Silver Secondary CTA */
+/* Clean Secondary Surface CTA */
 .pitstop-btn-metal {
-  background: linear-gradient(180deg, #2A2D33 0%, #1E1E22 55%, #141518 100%);
-  border: 1px solid rgba(192, 196, 201, 0.32);
-  color: #F4F4F4;
-  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  background-color: var(--ps-card);
+  border: 1px solid var(--ps-border-strong);
+  color: var(--ps-text);
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.25);
 }
 .pitstop-btn-metal:hover:not(:disabled) {
-  border-color: rgba(192, 196, 201, 0.6);
-  background: linear-gradient(180deg, #343840 0%, #23252A 55%, #181A1E 100%);
+  border-color: var(--ps-accent);
+  filter: brightness(1.06);
 }
 
 .rally-btn-amber {

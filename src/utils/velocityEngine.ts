@@ -2701,3 +2701,69 @@ export function computeLapTelemetrySummary(
   };
 }
 
+export interface BrakingPointOffset {
+  refBrakeM: number;
+  cmpBrakeM: number;
+  offsetM: number; // > 0 = freou mais tarde; < 0 = freou antes
+}
+
+function extractBrakingOnsetsM(rawSamples: VelocitySample[]): number[] {
+  const samples = ensureTraceGForces(rawSamples);
+  if (samples.length < 4) return [];
+  const onsets: number[] = [];
+  for (let i = 1; i < samples.length; i += 1) {
+    const prevG = samples[i - 1].accelLongG ?? 0;
+    const currG = samples[i].accelLongG ?? 0;
+    if (currG < -0.25 && prevG >= -0.25) {
+      const dM = Math.round(samples[i].distKm * 1000);
+      const last = onsets[onsets.length - 1];
+      if (last === undefined || dM - last >= 55) {
+        onsets.push(dM);
+      }
+    }
+  }
+  return onsets;
+}
+
+/**
+ * Calcula quantos metros antes (-) ou depois (+) a volta comparada iniciou a frenagem
+ * em relação à volta de referência próximo à posição atual do cursor.
+ */
+export function computeBrakePointOffsetNearDist(
+  refSamples: VelocitySample[],
+  cmpSamples: VelocitySample[],
+  cursorDistM: number
+): BrakingPointOffset | null {
+  const refOnsets = extractBrakingOnsetsM(refSamples);
+  const cmpOnsets = extractBrakingOnsetsM(cmpSamples);
+  if (refOnsets.length === 0 || cmpOnsets.length === 0) return null;
+
+  let nearestRef: number | null = null;
+  let bestRefDist = Infinity;
+  for (const rM of refOnsets) {
+    const diff = Math.abs(rM - cursorDistM);
+    if (diff <= 220 && diff < bestRefDist) {
+      bestRefDist = diff;
+      nearestRef = rM;
+    }
+  }
+  if (nearestRef === null) return null;
+
+  let nearestCmp: number | null = null;
+  let bestCmpDiff = Infinity;
+  for (const cM of cmpOnsets) {
+    const diff = Math.abs(cM - nearestRef);
+    if (diff <= 95 && diff < bestCmpDiff) {
+      bestCmpDiff = diff;
+      nearestCmp = cM;
+    }
+  }
+  if (nearestCmp === null) return null;
+
+  return {
+    refBrakeM: nearestRef,
+    cmpBrakeM: nearestCmp,
+    offsetM: Math.round(nearestCmp - nearestRef),
+  };
+}
+

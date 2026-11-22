@@ -14,6 +14,7 @@ export type SensorMode = 'gps' | 'blue';
 export type VoiceUnit = 'meters' | 'seconds';
 export type AlertStyle = 'voice' | 'beep_short' | 'beep_long' | 'vibration';
 export type ScreenOrientationLock = 'auto' | 'portrait' | 'landscape';
+export type AppThemeId = 'pitstop' | 'fueltech' | 'night' | 'solar' | 'gt';
 
 export interface PilotDisplayOptions {
   showDistance: boolean;
@@ -78,6 +79,7 @@ export interface PitStopNavSettings {
   baseServerUrl: string;
   screenOrientation: ScreenOrientationLock;
   goproAutoRecOnStart: boolean;
+  appTheme: AppThemeId;
 }
 
 const STORAGE_KEY = 'pitstop_nav_settings_v1';
@@ -158,6 +160,7 @@ export function getDefaultNavSettings(): PitStopNavSettings {
     baseServerUrl: '',
     screenOrientation: 'auto',
     goproAutoRecOnStart: false,
+    appTheme: 'pitstop',
   };
 }
 
@@ -221,6 +224,13 @@ export function getNavSettings(): PitStopNavSettings {
           ? parsed.screenOrientation
           : 'auto',
       goproAutoRecOnStart: Boolean(parsed.goproAutoRecOnStart),
+      appTheme:
+        parsed.appTheme === 'fueltech' ||
+        parsed.appTheme === 'night' ||
+        parsed.appTheme === 'solar' ||
+        parsed.appTheme === 'gt'
+          ? parsed.appTheme
+          : 'pitstop',
       voiceThresholds:
         Array.isArray(parsed.voiceThresholds) && parsed.voiceThresholds.length > 0
           ? parsed.voiceThresholds
@@ -234,11 +244,32 @@ export function getNavSettings(): PitStopNavSettings {
   }
 }
 
+export function applyAppThemeToDocument(themeId: AppThemeId): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.setAttribute('data-theme', themeId);
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) {
+    const colorMap: Record<AppThemeId, string> = {
+      pitstop: '#090A0D',
+      fueltech: '#000000',
+      night: '#100C0D',
+      solar: '#F1F5F9',
+      gt: '#0F172A',
+    };
+    metaTheme.setAttribute('content', colorMap[themeId]);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  applyAppThemeToDocument(getNavSettings().appTheme);
+}
+
 export function updateNavSettings(
   patch: Partial<PitStopNavSettings> | ((prev: PitStopNavSettings) => PitStopNavSettings)
 ): PitStopNavSettings {
   const current = getNavSettings();
   const next = typeof patch === 'function' ? patch(current) : { ...current, ...patch };
+  applyAppThemeToDocument(next.appTheme);
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     window.dispatchEvent(new CustomEvent(SETTINGS_EVENT, { detail: next }));

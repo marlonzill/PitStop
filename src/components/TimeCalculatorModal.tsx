@@ -271,35 +271,35 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         : '0:00';
 
   const numBtnClass = isModal
-    ? 'min-h-[48px] sm:min-h-[56px] rounded-xl border border-zinc-700/80 bg-[#F4F4F4] text-xl font-extrabold text-[#080B0D] shadow-sm transition-transform active:scale-[0.96] hover:bg-white'
-    : 'min-h-[62px] sm:min-h-[72px] h-full rounded-xl border border-zinc-700/80 bg-[#F4F4F4] text-2xl sm:text-3xl font-black text-[#080B0D] shadow-sm transition-transform active:scale-[0.96] hover:bg-white';
+    ? 'min-h-[46px] sm:min-h-[54px] rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] text-xl font-extrabold text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]'
+    : 'min-h-[54px] sm:min-h-[68px] h-full rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] text-2xl sm:text-3xl font-black text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]';
   const opBtnClass = isModal
-    ? 'min-h-[48px] sm:min-h-[56px] rounded-xl border border-zinc-700 bg-[#2A2D34] text-xl font-extrabold text-white shadow-sm transition-transform active:scale-[0.96] hover:bg-zinc-700'
-    : 'min-h-[62px] sm:min-h-[72px] h-full rounded-xl border border-zinc-700 bg-[#2A2D34] text-2xl sm:text-3xl font-black text-white shadow-sm transition-transform active:scale-[0.96] hover:bg-zinc-700';
+    ? 'min-h-[46px] sm:min-h-[54px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xl font-extrabold text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]'
+    : 'min-h-[54px] sm:min-h-[68px] h-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-2xl sm:text-3xl font-black text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]';
 
   return (
     <div
-      className={`w-full overflow-hidden rounded-2xl border border-zinc-700/90 bg-[#111214] text-white shadow-2xl flex flex-col ${
-        isModal ? 'max-w-sm' : 'max-w-lg mx-auto flex-1 min-h-[calc(100dvh-9.5rem)]'
+      className={`w-full overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-xl flex flex-col ${
+        isModal ? 'max-w-sm' : 'max-w-lg mx-auto flex-1 min-h-[calc(100dvh-10rem)]'
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 bg-[#080B0D] px-3.5 py-2.5 sm:px-4 sm:py-3">
-        <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-[#E10600]" />
-          <span className="font-['Barlow_Condensed'] text-lg sm:text-xl font-extrabold tracking-wide uppercase">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 sm:px-4 sm:py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Clock className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
+          <span className="truncate font-['Barlow_Condensed'] text-lg sm:text-xl font-extrabold tracking-wide uppercase">
             Calculadora de Tempo
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={() => setClock24hMode((v) => !v)}
-            className={`rounded-md border px-2.5 py-1 font-mono text-[10px] sm:text-xs font-bold transition-colors ${
+            className={`rounded-lg border px-2.5 py-1 font-mono text-[10px] sm:text-xs font-bold transition-colors whitespace-nowrap ${
               clock24hMode
-                ? 'border-sky-500/60 bg-sky-950/50 text-sky-300'
-                : 'border-zinc-700 bg-[#181A1F] text-[#C0C4C9]'
+                ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-accent)]'
+                : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)]'
             }`}
             title="Alterna entre total acumulado (>24h) e relógio de 24 horas"
           >
@@ -310,7 +310,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-[#181A1F] text-zinc-400 hover:text-white"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               aria-label="Fechar calculadora"
             >
               <X className="h-4 w-4" />
@@ -319,23 +319,23 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col p-3 sm:p-4 gap-3">
+      <div className="flex flex-1 flex-col p-3 sm:p-4 gap-2.5 sm:gap-3">
         {/* Two-line High-Contrast ATM Display */}
         <div
-          className={`rounded-xl border border-zinc-800 bg-[#000000] px-4 text-right font-mono tabular-nums flex flex-col justify-center ${
-            isModal ? 'py-2.5' : 'py-4 sm:py-5'
+          className={`rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-4 text-right font-mono tabular-nums flex flex-col justify-center ${
+            isModal ? 'py-2.5' : 'py-3.5 sm:py-5'
           }`}
         >
-          <div className="min-h-[20px] truncate text-xs sm:text-sm font-semibold text-[#B5B5B5]">
+          <div className="min-h-[18px] truncate text-xs sm:text-sm font-semibold text-[var(--ps-muted)]">
             {historyText || (isScalarMode ? 'Multiplicador/divisor' : 'Hora:Min')}
           </div>
           <div
             className={`mt-1 truncate font-black tracking-tight ${
               errorMsg
-                ? 'text-xl text-red-400'
+                ? 'text-xl text-red-500'
                 : isModal
-                  ? 'text-3xl text-white sm:text-4xl'
-                  : 'text-4xl text-white sm:text-5xl'
+                  ? 'text-3xl text-[var(--ps-text)] sm:text-4xl'
+                  : 'text-4xl text-[var(--ps-text)] sm:text-5xl'
             }`}
           >
             {mainDisplay}
@@ -347,7 +347,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
           <button
             type="button"
             onClick={clearAll}
-            className={`${isModal ? 'min-h-[48px] text-lg' : 'min-h-[62px] sm:min-h-[72px] text-2xl'} h-full rounded-xl border border-orange-500/40 bg-orange-500/20 font-black text-orange-300 transition-transform active:scale-[0.96] hover:bg-orange-500/30`}
+            className={`${isModal ? 'min-h-[46px] text-lg' : 'min-h-[54px] sm:min-h-[68px] text-2xl'} h-full rounded-xl border border-amber-500/40 bg-amber-500/15 font-black text-[var(--ps-amber)] transition-transform active:scale-[0.96]`}
           >
             C
           </button>
@@ -355,7 +355,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
             type="button"
             onClick={pressBackspace}
             aria-label="Apagar último dígito"
-            className={`flex ${isModal ? 'min-h-[48px]' : 'min-h-[62px] sm:min-h-[72px]'} h-full items-center justify-center rounded-xl border border-zinc-700 bg-[#1E1E22] text-white transition-transform active:scale-[0.96] hover:bg-zinc-800`}
+            className={`flex ${isModal ? 'min-h-[46px]' : 'min-h-[54px] sm:min-h-[68px]'} h-full items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] transition-transform active:scale-[0.96]`}
           >
             <Delete className={isModal ? 'h-5 w-5' : 'h-6 w-6'} />
           </button>
@@ -392,7 +392,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
             type="button"
             onClick={() => pressOperator('+')}
             aria-label="Somar horas"
-            className={`${isModal ? 'min-h-[48px] text-2xl' : 'min-h-[62px] sm:min-h-[72px] text-3xl'} h-full rounded-xl border-2 border-[#FF524D]/80 bg-[#E10600] font-black text-white shadow-[0_6px_18px_-3px_rgba(225,6,0,0.65)] transition-transform active:scale-[0.95] hover:bg-[#FF1E17]`}
+            className={`pitstop-btn-red ${isModal ? 'min-h-[46px] text-2xl' : 'min-h-[54px] sm:min-h-[68px] text-3xl'} h-full rounded-xl font-black transition-transform active:scale-[0.95]`}
           >
             +
           </button>
@@ -409,7 +409,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
           <button
             type="button"
             onClick={pressEquals}
-            className={`row-span-2 flex h-full items-center justify-center rounded-xl border border-emerald-400/50 bg-emerald-600 ${isModal ? 'text-2xl' : 'text-3xl sm:text-4xl'} font-black text-white shadow-lg transition-transform active:scale-[0.97] hover:bg-emerald-500`}
+            className={`row-span-2 flex h-full items-center justify-center rounded-xl border border-emerald-500/50 bg-emerald-600 ${isModal ? 'text-2xl' : 'text-3xl sm:text-4xl'} font-black text-white shadow-lg transition-transform active:scale-[0.97] hover:bg-emerald-500`}
           >
             =
           </button>

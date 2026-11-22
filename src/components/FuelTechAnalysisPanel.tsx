@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Crosshair, RotateCcw } from 'lucide-react';
+import { Crosshair, RotateCcw, ZoomIn } from 'lucide-react';
 import {
+  computeBrakePointOffsetNearDist,
   computeLapDeltaSeries,
   computeLapTelemetrySummary,
   computeMultiLapSectorComparison,
   detectTelemetryCriticalPoints,
+  ensureTraceGForces,
   formatStageDuration,
   interpolateSampleAtDist,
-  type LapDeltaSample,
   type OptimalStageSummary,
   type VelocityRun,
   type VelocitySample,
@@ -56,45 +57,38 @@ function formatG(gVal: number | null): string {
 }
 
 /**
- * Gera polígonos separados de preenchimento acima (positivo/ganho) e abaixo (negativo/perda)
- * da linha neutra (midY), interpolando cruzamentos exatos em zero.
+ * Gera polígonos bicolores separados acima (positivo = verde) e abaixo (negativo = vermelho)
+ * da linha central neutra (midY), interpolando cruzamentos em zero.
  */
-function buildSplitAreaPolygons(
+function buildBicolorAreaPolygons(
   points: Array<{ x: number; val: number }>,
   yAtVal: (v: number) => number,
-  midY: number,
-  invertPositive: boolean
-): { gainPoly: string; lossPoly: string; linePts: string } {
+  midY: number
+): { posPoly: string; negPoly: string; linePts: string } {
   if (points.length < 2) {
-    return { gainPoly: '', lossPoly: '', linePts: '' };
+    return { posPoly: '', negPoly: '', linePts: '' };
   }
 
-  // score > 0 means "above center (green gain)", score < 0 means "below center (red loss)"
-  const signed = points.map((p) => ({
+  const mapped = points.map((p) => ({
     x: p.x,
     y: yAtVal(p.val),
-    score: invertPositive ? -p.val : p.val,
+    val: p.val,
   }));
 
-  const linePts = signed.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const linePts = mapped.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const posCoords: string[] = [`${mapped[0].x.toFixed(1)},${midY.toFixed(1)}`];
+  const negCoords: string[] = [`${mapped[0].x.toFixed(1)},${midY.toFixed(1)}`];
 
-  const gainCoords: string[] = [];
-  const lossCoords: string[] = [];
-
-  const firstX = signed[0].x.toFixed(1);
-  gainCoords.push(`${firstX},${midY.toFixed(1)}`);
-  lossCoords.push(`${firstX},${midY.toFixed(1)}`);
-
-  for (let i = 0; i < signed.length; i += 1) {
-    const curr = signed[i];
+  for (let i = 0; i < mapped.length; i += 1) {
+    const curr = mapped[i];
     if (i > 0) {
-      const prev = signed[i - 1];
-      if ((prev.score > 0 && curr.score < 0) || (prev.score < 0 && curr.score > 0)) {
-        const t = Math.abs(prev.score) / (Math.abs(prev.score) + Math.abs(curr.score));
+      const prev = mapped[i - 1];
+      if ((prev.val > 0 && curr.val < 0) || (prev.val < 0 && curr.val > 0)) {
+        const t = Math.abs(prev.val) / (Math.abs(prev.val) + Math.abs(curr.val));
         const crossX = (prev.x + (curr.x - prev.x) * t).toFixed(1);
-        const crossY = midY.toFixed(1);
-        gainCoords.push(`${crossX},${crossY}`);
-        lossCoords.push(`${crossX},${crossY}`);
+        const midStr = midY.toFixed(1);
+        posCoords.push(`${crossX},${midStr}`);
+        negCoords.push(`${crossX},${midStr}`);
       }
     }
 
@@ -102,24 +96,46 @@ function buildSplitAreaPolygons(
     const yStr = curr.y.toFixed(1);
     const midStr = midY.toFixed(1);
 
-    if (curr.score >= 0) {
-      gainCoords.push(`${xStr},${yStr}`);
-      lossCoords.push(`${xStr},${midStr}`);
+    if (curr.val >= 0) {
+      posCoords.push(`${xStr},${yStr}`);
+      negCoords.push(`${xStr},${midStr}`);
     } else {
-      gainCoords.push(`${xStr},${midStr}`);
-      lossCoords.push(`${xStr},${yStr}`);
+      posCoords.push(`${xStr},${midStr}`);
+      negCoords.push(`${xStr},${yStr}`);
     }
   }
 
-  const lastX = signed[signed.length - 1].x.toFixed(1);
-  gainCoords.push(`${lastX},${midY.toFixed(1)}`);
-  lossCoords.push(`${lastX},${midY.toFixed(1)}`);
+  const lastX = mapped[mapped.length - 1].x.toFixed(1);
+  posCoords.push(`${lastX},${midY.toFixed(1)}`);
+  negCoords.push(`${lastX},${midY.toFixed(1)}`);
 
   return {
-    gainPoly: gainCoords.join(' '),
-    lossPoly: lossCoords.join(' '),
+    posPoly: posCoords.join(' '),
+    negPoly: negCoords.join(' '),
     linePts,
   };
+}
+
+function sampleSeriesInWindow(
+  rawSamples: VelocitySample[],
+  startM: number,
+  endM: number,
+  steps = 120
+): VelocitySample[] {
+  const samples = ensureTraceGForces(rawSamples);
+  if (samples.length < 2) return [];
+  const maxM = samples[samples.length - 1].distKm * 1000;
+  const clampedStart = Math.max(0, Math.min(startM, maxM));
+  const clampedEnd = Math.max(clampedStart + 5, Math.min(endM, maxM));
+  if (clampedEnd <= clampedStart) return [];
+
+  const out: VelocitySample[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const distKm = (clampedStart + (i / steps) * (clampedEnd - clampedStart)) / 1000;
+    const s = interpolateSampleAtDist(samples, distKm);
+    if (s) out.push(s);
+  }
+  return out;
 }
 
 export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
@@ -134,9 +150,9 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   lap3Samples,
   onDeleteSession,
 }) => {
-  const speedSvgRef = useRef<SVGSVGElement | null>(null);
-  const deltaTimeSvgRef = useRef<SVGSVGElement | null>(null);
-  const deltaSpeedSvgRef = useRef<SVGSVGElement | null>(null);
+  const panel1Ref = useRef<SVGSVGElement | null>(null);
+  const panel2Ref = useRef<SVGSVGElement | null>(null);
+  const panel3Ref = useRef<SVGSVGElement | null>(null);
   const isDraggingRef = useRef(false);
 
   const showLap2 = Boolean(lap2 && lap2Samples.length > 1 && lap2.id !== lap1?.id);
@@ -156,15 +172,8 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       : 0;
   const maxDistM = Math.max(200, maxDist1, maxDist2, maxDist3);
 
+  const [zoomSectorIdx, setZoomSectorIdx] = useState<number | null>(null);
   const [scrubDistM, setScrubDistM] = useState<number>(() => Math.round(maxDistM * 0.35));
-  const [showCriticalMarkers, setShowCriticalMarkers] = useState(true);
-
-  useEffect(() => {
-    setScrubDistM((prev) => {
-      if (prev <= 0 || prev > maxDistM) return Math.round(maxDistM * 0.35);
-      return prev;
-    });
-  }, [lap1?.id, lap2?.id, lap3?.id, maxDistM]);
 
   const activeSectorLaps = useMemo(() => {
     const list: Array<{ slot: 1 | 2 | 3; run: VelocityRun }> = [];
@@ -179,19 +188,45 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     [sessionTrack, activeSectorLaps]
   );
 
-  const deltaSeries2 = useMemo<LapDeltaSample[]>(
+  // Active zoom window [viewStartM, viewEndM]
+  const { viewStartM, viewEndM } = useMemo(() => {
+    if (zoomSectorIdx !== null) {
+      const target = sectorComparison.rows.find((r) => r.index === zoomSectorIdx);
+      if (target && target.toDistM > target.fromDistM) {
+        const span = target.toDistM - target.fromDistM;
+        const pad = Math.max(15, Math.round(span * 0.04));
+        return {
+          viewStartM: Math.max(0, target.fromDistM - pad),
+          viewEndM: Math.min(maxDistM, target.toDistM + pad),
+        };
+      }
+    }
+    return { viewStartM: 0, viewEndM: maxDistM };
+  }, [zoomSectorIdx, sectorComparison.rows, maxDistM]);
+
+  const viewSpanM = Math.max(20, viewEndM - viewStartM);
+
+  useEffect(() => {
+    setZoomSectorIdx(null);
+  }, [lap1?.id, lap2?.id, lap3?.id]);
+
+  useEffect(() => {
+    setScrubDistM((prev) => {
+      if (prev < viewStartM || prev > viewEndM) {
+        return Math.round((viewStartM + viewEndM) / 2);
+      }
+      return prev;
+    });
+  }, [viewStartM, viewEndM]);
+
+  const deltaSeries2 = useMemo(
     () => (showLap2 ? computeLapDeltaSeries(lap1Samples, lap2Samples, 140) : []),
     [showLap2, lap1Samples, lap2Samples]
   );
 
-  const deltaSeries3 = useMemo<LapDeltaSample[]>(
+  const deltaSeries3 = useMemo(
     () => (showLap3 ? computeLapDeltaSeries(lap1Samples, lap3Samples, 140) : []),
     [showLap3, lap1Samples, lap3Samples]
-  );
-
-  const criticalPoints = useMemo(
-    () => detectTelemetryCriticalPoints(lap1Samples),
-    [lap1Samples]
   );
 
   const summaryCards = useMemo(() => {
@@ -229,198 +264,272 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     return list;
   }, [lap1, lap2, lap3, showLap2, showLap3, deltaSeries2, deltaSeries3]);
 
-  // Shared SVG X-axis geometry
+  // Max absolute partial delta for scaling the horizontal bar chart
+  const maxPartialDeltaAbsSec = useMemo(() => {
+    let peak = 0.25;
+    sectorComparison.rows.forEach((row) => {
+      row.entries.forEach((e) => {
+        if (e.timeDeltaSec !== null) {
+          peak = Math.max(peak, Math.abs(e.timeDeltaSec));
+        }
+      });
+    });
+    return Number((Math.ceil(peak * 4) / 4).toFixed(2));
+  }, [sectorComparison.rows]);
+
+  // Resample traces cleanly across the active zoom window [viewStartM, viewEndM]
+  const winSamples1 = useMemo(
+    () => sampleSeriesInWindow(lap1Samples, viewStartM, viewEndM, 130),
+    [lap1Samples, viewStartM, viewEndM]
+  );
+  const winSamples2 = useMemo(
+    () => (showLap2 ? sampleSeriesInWindow(lap2Samples, viewStartM, viewEndM, 130) : []),
+    [showLap2, lap2Samples, viewStartM, viewEndM]
+  );
+  const winSamples3 = useMemo(
+    () => (showLap3 ? sampleSeriesInWindow(lap3Samples, viewStartM, viewEndM, 130) : []),
+    [showLap3, lap3Samples, viewStartM, viewEndM]
+  );
+
+  // Critical points inside active zoom window (TOP = Peak Straight, MIN = Corner Apex)
+  const criticalMarkers = useMemo(() => {
+    const rawPts = detectTelemetryCriticalPoints(lap1Samples);
+    const inView = rawPts
+      .filter((p) => (p.type === 'TOP' || p.type === 'APEX') && p.distM >= viewStartM && p.distM <= viewEndM)
+      .map((p) => ({
+        ...p,
+        badge: p.type === 'TOP' ? ('TOP' as const) : ('MIN' as const),
+      }));
+
+    // Ensure at least local TOP and MIN when zoomed into a partial
+    if (zoomSectorIdx !== null && winSamples1.length >= 4) {
+      let localMax = winSamples1[0];
+      let localMin = winSamples1[0];
+      for (const s of winSamples1) {
+        if (s.speedKmh > localMax.speedKmh) localMax = s;
+        if (s.speedKmh < localMin.speedKmh) localMin = s;
+      }
+      if (!inView.some((p) => p.badge === 'TOP') && localMax.speedKmh >= 20) {
+        inView.push({
+          type: 'TOP',
+          badge: 'TOP',
+          distM: Math.round(localMax.distKm * 1000),
+          speedKmh: Math.round(localMax.speedKmh),
+          longG: Number((localMax.accelLongG ?? 0).toFixed(2)),
+        });
+      }
+      if (
+        !inView.some((p) => p.badge === 'MIN') &&
+        localMax.speedKmh - localMin.speedKmh >= 10
+      ) {
+        inView.push({
+          type: 'APEX',
+          badge: 'MIN',
+          distM: Math.round(localMin.distKm * 1000),
+          speedKmh: Math.round(localMin.speedKmh),
+          longG: Number((localMin.accelLongG ?? 0).toFixed(2)),
+        });
+      }
+    }
+
+    return inView;
+  }, [lap1Samples, viewStartM, viewEndM, zoomSectorIdx, winSamples1]);
+
+  // Shared SVG geometry for all 3 synchronized AiM/MoTeC panels
   const chartW = 640;
-  const padL = 46;
+  const padL = 44;
   const padR = 14;
   const plotW = chartW - padL - padR;
 
-  // Main chart geometry (Speed + G-Long)
-  const chartH = 304;
-  const spdTop = 24;
-  const spdH = 148;
-  const gTop = 194;
-  const gH = 78;
-  const gBottom = gTop + gH;
-  const gMidY = gTop + gH / 2;
+  // Panel 1: Speed (km/h) + Accel/Brake zones
+  const p1H = 180;
+  const p1Top = 20;
+  const p1PlotH = 132;
+  const p1Bottom = p1Top + p1PlotH;
+  const zoneStripY = p1Bottom + 4;
+  const zoneStripH = 7;
 
-  // Delta Time & Delta Speed sub-charts geometry
-  const deltaChartH = 142;
-  const deltaTop = 18;
-  const deltaH = 98;
-  const deltaMidY = deltaTop + deltaH / 2;
-  const deltaBottom = deltaTop + deltaH;
+  // Panel 2: Virtual Pedal (+G Accel / -G Brake)
+  const p2H = 130;
+  const p2Top = 16;
+  const p2PlotH = 92;
+  const p2MidY = p2Top + p2PlotH / 2;
+  const p2Bottom = p2Top + p2PlotH;
+
+  // Panel 3: Lateral G
+  const p3H = 132;
+  const p3Top = 16;
+  const p3PlotH = 88;
+  const p3MidY = p3Top + p3PlotH / 2;
+  const p3Bottom = p3Top + p3PlotH;
 
   const maxSpd = useMemo(() => {
     const peak = Math.max(
-      100,
-      ...lap1Samples.map((s) => s.speedKmh || 0),
-      ...(showLap2 ? lap2Samples.map((s) => s.speedKmh || 0) : [0]),
-      ...(showLap3 ? lap3Samples.map((s) => s.speedKmh || 0) : [0])
+      90,
+      ...winSamples1.map((s) => s.speedKmh || 0),
+      ...winSamples2.map((s) => s.speedKmh || 0),
+      ...winSamples3.map((s) => s.speedKmh || 0)
     );
     return Math.ceil(peak / 20) * 20;
-  }, [lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
+  }, [winSamples1, winSamples2, winSamples3]);
 
-  const maxGScale = useMemo(() => {
+  const maxLongGScale = useMemo(() => {
     const peakG = Math.max(
       0.8,
-      ...lap1Samples.map((s) => Math.abs(s.accelLongG ?? 0)),
-      ...(showLap2 ? lap2Samples.map((s) => Math.abs(s.accelLongG ?? 0)) : [0]),
-      ...(showLap3 ? lap3Samples.map((s) => Math.abs(s.accelLongG ?? 0)) : [0])
+      ...winSamples1.map((s) => Math.abs(s.accelLongG ?? 0)),
+      ...winSamples2.map((s) => Math.abs(s.accelLongG ?? 0)),
+      ...winSamples3.map((s) => Math.abs(s.accelLongG ?? 0))
     );
     return Math.min(2.5, Math.ceil(peakG * 2) / 2);
-  }, [lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
+  }, [winSamples1, winSamples2, winSamples3]);
 
-  const maxAbsDeltaTimeSec = useMemo(() => {
-    const peak = Math.max(
-      0.5,
-      ...deltaSeries2.map((p) => Math.abs(p.timeDeltaSec)),
-      ...deltaSeries3.map((p) => Math.abs(p.timeDeltaSec))
+  const maxLatGScale = useMemo(() => {
+    const peakG = Math.max(
+      0.8,
+      ...winSamples1.map((s) => Math.abs(s.accelLatG ?? 0)),
+      ...winSamples2.map((s) => Math.abs(s.accelLatG ?? 0)),
+      ...winSamples3.map((s) => Math.abs(s.accelLatG ?? 0))
     );
-    return Number((Math.ceil(peak * 2) / 2).toFixed(1));
-  }, [deltaSeries2, deltaSeries3]);
-
-  const maxAbsDeltaSpeedKmh = useMemo(() => {
-    const peak = Math.max(
-      10,
-      ...deltaSeries2.map((p) => Math.abs(p.speedDeltaKmh)),
-      ...deltaSeries3.map((p) => Math.abs(p.speedDeltaKmh))
-    );
-    return Math.ceil(peak / 5) * 5;
-  }, [deltaSeries2, deltaSeries3]);
+    return Math.min(2.5, Math.ceil(peakG * 2) / 2);
+  }, [winSamples1, winSamples2, winSamples3]);
 
   const xAtM = (distM: number) =>
-    padL + Math.max(0, Math.min(1, distM / maxDistM)) * plotW;
+    padL + Math.max(0, Math.min(1, (distM - viewStartM) / viewSpanM)) * plotW;
 
   const yAtKmh = (kmh: number) =>
-    spdTop + spdH - Math.max(0, Math.min(1, kmh / maxSpd)) * spdH;
+    p1Top + p1PlotH - Math.max(0, Math.min(1, kmh / maxSpd)) * p1PlotH;
 
   const yAtLongG = (gVal: number) => {
-    const clamped = Math.max(-maxGScale, Math.min(maxGScale, gVal));
-    return gMidY - (clamped / maxGScale) * (gH / 2);
+    const clamped = Math.max(-maxLongGScale, Math.min(maxLongGScale, gVal));
+    return p2MidY - (clamped / maxLongGScale) * (p2PlotH / 2);
   };
 
-  // Gain (< 0s) goes ABOVE center line, Loss (> 0s) goes BELOW center line
-  const yAtDeltaTime = (sec: number) => {
-    const clamped = Math.max(-maxAbsDeltaTimeSec, Math.min(maxAbsDeltaTimeSec, sec));
-    return deltaMidY + (clamped / maxAbsDeltaTimeSec) * (deltaH / 2);
+  const yAtLatG = (gVal: number) => {
+    const clamped = Math.max(-maxLatGScale, Math.min(maxLatGScale, gVal));
+    return p3MidY - (clamped / maxLatGScale) * (p3PlotH / 2);
   };
 
-  // Faster (+km/h) goes ABOVE center line, Slower (-km/h) goes BELOW center line
-  const yAtDeltaSpeed = (kmhDelta: number) => {
-    const clamped = Math.max(-maxAbsDeltaSpeedKmh, Math.min(maxAbsDeltaSpeedKmh, kmhDelta));
-    return deltaMidY - (clamped / maxAbsDeltaSpeedKmh) * (deltaH / 2);
-  };
+  // Panel 1: V1 has translucent area + solid 2.5px line; V2 solid red 2px; V3 dashed cyan 1.8px
+  const { speedLine1, speedArea1 } = useMemo(() => {
+    if (winSamples1.length < 2) return { speedLine1: '', speedArea1: '' };
+    const pts = winSamples1.map(
+      (s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtKmh(s.speedKmh).toFixed(1)}`
+    );
+    const firstX = xAtM(winSamples1[0].distKm * 1000).toFixed(1);
+    const lastX = xAtM(winSamples1[winSamples1.length - 1].distKm * 1000).toFixed(1);
+    const baseStr = p1Bottom.toFixed(1);
+    return {
+      speedLine1: pts.join(' '),
+      speedArea1: `${firstX},${baseStr} ${pts.join(' ')} ${lastX},${baseStr}`,
+    };
+  }, [winSamples1, viewStartM, viewEndM, maxSpd]);
 
-  const speedPoly1 = useMemo(
+  const speedLine2 = useMemo(
     () =>
-      lap1Samples
+      winSamples2
         .map((s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtKmh(s.speedKmh).toFixed(1)}`)
         .join(' '),
-    [lap1Samples, maxDistM, maxSpd]
+    [winSamples2, viewStartM, viewEndM, maxSpd]
   );
 
-  const speedPoly2 = useMemo(
+  const speedLine3 = useMemo(
     () =>
-      showLap2
-        ? lap2Samples
-            .map((s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtKmh(s.speedKmh).toFixed(1)}`)
-            .join(' ')
-        : '',
-    [lap2Samples, showLap2, maxDistM, maxSpd]
+      winSamples3
+        .map((s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtKmh(s.speedKmh).toFixed(1)}`)
+        .join(' '),
+    [winSamples3, viewStartM, viewEndM, maxSpd]
   );
 
-  const speedPoly3 = useMemo(
+  // V1 throttle/brake zone segments along bottom of Panel 1
+  const v1ZoneSegments = useMemo(() => {
+    if (winSamples1.length < 2) return [];
+    const segs: Array<{ x1: number; x2: number; kind: 'accel' | 'brake' }> = [];
+    for (let i = 0; i < winSamples1.length - 1; i += 1) {
+      const s = winSamples1[i];
+      const next = winSamples1[i + 1];
+      const g = s.accelLongG ?? 0;
+      if (g > 0.08 || g < -0.15) {
+        segs.push({
+          x1: xAtM(s.distKm * 1000),
+          x2: xAtM(next.distKm * 1000),
+          kind: g > 0.08 ? 'accel' : 'brake',
+        });
+      }
+    }
+    return segs;
+  }, [winSamples1, viewStartM, viewEndM]);
+
+  // Panel 2: Virtual Pedal (+G Green / -G Red)
+  const pedal1 = useMemo(
     () =>
-      showLap3
-        ? lap3Samples
-            .map((s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtKmh(s.speedKmh).toFixed(1)}`)
-            .join(' ')
-        : '',
-    [lap3Samples, showLap3, maxDistM, maxSpd]
+      buildBicolorAreaPolygons(
+        winSamples1.map((s) => ({ x: xAtM(s.distKm * 1000), val: s.accelLongG ?? 0 })),
+        yAtLongG,
+        p2MidY
+      ),
+    [winSamples1, viewStartM, viewEndM, maxLongGScale]
   );
 
-  const longGPoly1 = useMemo(
+  const pedalLine2 = useMemo(
     () =>
-      lap1Samples
+      winSamples2
         .map(
           (s) =>
             `${xAtM(s.distKm * 1000).toFixed(1)},${yAtLongG(s.accelLongG ?? 0).toFixed(1)}`
         )
         .join(' '),
-    [lap1Samples, maxDistM, maxGScale]
+    [winSamples2, viewStartM, viewEndM, maxLongGScale]
   );
 
-  const longGPoly2 = useMemo(
+  const pedalLine3 = useMemo(
     () =>
-      showLap2
-        ? lap2Samples
-            .map(
-              (s) =>
-                `${xAtM(s.distKm * 1000).toFixed(1)},${yAtLongG(s.accelLongG ?? 0).toFixed(1)}`
-            )
-            .join(' ')
-        : '',
-    [lap2Samples, showLap2, maxDistM, maxGScale]
+      winSamples3
+        .map(
+          (s) =>
+            `${xAtM(s.distKm * 1000).toFixed(1)},${yAtLongG(s.accelLongG ?? 0).toFixed(1)}`
+        )
+        .join(' '),
+    [winSamples3, viewStartM, viewEndM, maxLongGScale]
   );
 
-  const longGPoly3 = useMemo(
+  // Panel 3: Lateral G
+  const { latLine1, latArea1 } = useMemo(() => {
+    if (winSamples1.length < 2) return { latLine1: '', latArea1: '' };
+    const pts = winSamples1.map(
+      (s) => `${xAtM(s.distKm * 1000).toFixed(1)},${yAtLatG(s.accelLatG ?? 0).toFixed(1)}`
+    );
+    const firstX = xAtM(winSamples1[0].distKm * 1000).toFixed(1);
+    const lastX = xAtM(winSamples1[winSamples1.length - 1].distKm * 1000).toFixed(1);
+    const midStr = p3MidY.toFixed(1);
+    return {
+      latLine1: pts.join(' '),
+      latArea1: `${firstX},${midStr} ${pts.join(' ')} ${lastX},${midStr}`,
+    };
+  }, [winSamples1, viewStartM, viewEndM, maxLatGScale]);
+
+  const latLine2 = useMemo(
     () =>
-      showLap3
-        ? lap3Samples
-            .map(
-              (s) =>
-                `${xAtM(s.distKm * 1000).toFixed(1)},${yAtLongG(s.accelLongG ?? 0).toFixed(1)}`
-            )
-            .join(' ')
-        : '',
-    [lap3Samples, showLap3, maxDistM, maxGScale]
+      winSamples2
+        .map(
+          (s) =>
+            `${xAtM(s.distKm * 1000).toFixed(1)},${yAtLatG(s.accelLatG ?? 0).toFixed(1)}`
+        )
+        .join(' '),
+    [winSamples2, viewStartM, viewEndM, maxLatGScale]
   );
 
-  const deltaTimeShapes2 = useMemo(
+  const latLine3 = useMemo(
     () =>
-      buildSplitAreaPolygons(
-        deltaSeries2.map((p) => ({ x: xAtM(p.distM), val: p.timeDeltaSec })),
-        yAtDeltaTime,
-        deltaMidY,
-        true
-      ),
-    [deltaSeries2, maxDistM, maxAbsDeltaTimeSec]
+      winSamples3
+        .map(
+          (s) =>
+            `${xAtM(s.distKm * 1000).toFixed(1)},${yAtLatG(s.accelLatG ?? 0).toFixed(1)}`
+        )
+        .join(' '),
+    [winSamples3, viewStartM, viewEndM, maxLatGScale]
   );
 
-  const deltaTimeShapes3 = useMemo(
-    () =>
-      buildSplitAreaPolygons(
-        deltaSeries3.map((p) => ({ x: xAtM(p.distM), val: p.timeDeltaSec })),
-        yAtDeltaTime,
-        deltaMidY,
-        true
-      ),
-    [deltaSeries3, maxDistM, maxAbsDeltaTimeSec]
-  );
-
-  const deltaSpeedShapes2 = useMemo(
-    () =>
-      buildSplitAreaPolygons(
-        deltaSeries2.map((p) => ({ x: xAtM(p.distM), val: p.speedDeltaKmh })),
-        yAtDeltaSpeed,
-        deltaMidY,
-        false
-      ),
-    [deltaSeries2, maxDistM, maxAbsDeltaSpeedKmh]
-  );
-
-  const deltaSpeedShapes3 = useMemo(
-    () =>
-      buildSplitAreaPolygons(
-        deltaSeries3.map((p) => ({ x: xAtM(p.distM), val: p.speedDeltaKmh })),
-        yAtDeltaSpeed,
-        deltaMidY,
-        false
-      ),
-    [deltaSeries3, maxDistM, maxAbsDeltaSpeedKmh]
-  );
-
+  // Cursor telemetry summary (Vel V1 vs V2, Long/Lat G, Brake Point Offset in meters)
   const scrubPoint = useMemo(() => {
     const distKm = scrubDistM / 1000;
     const s1 = interpolateSampleAtDist(lap1Samples, distKm);
@@ -436,22 +545,20 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     const speedDelta3vs1 =
       speed3 !== null && speed1 !== null ? speed3 - speed1 : null;
 
-    const time1Ms = s1 ? s1.stageElapsedMs : null;
-    const time2Ms = s2 ? s2.stageElapsedMs : null;
-    const time3Ms = s3 ? s3.stageElapsedMs : null;
-
-    const timeDelta2vs1Sec =
-      time2Ms !== null && time1Ms !== null
-        ? Number(((time2Ms - time1Ms) / 1000).toFixed(2))
-        : null;
-    const timeDelta3vs1Sec =
-      time3Ms !== null && time1Ms !== null
-        ? Number(((time3Ms - time1Ms) / 1000).toFixed(2))
-        : null;
-
     const longG1 = s1 && typeof s1.accelLongG === 'number' ? s1.accelLongG : 0;
     const longG2 = s2 && typeof s2.accelLongG === 'number' ? s2.accelLongG : 0;
     const longG3 = s3 && typeof s3.accelLongG === 'number' ? s3.accelLongG : 0;
+
+    const latG1 = s1 && typeof s1.accelLatG === 'number' ? s1.accelLatG : 0;
+    const latG2 = s2 && typeof s2.accelLatG === 'number' ? s2.accelLatG : 0;
+    const latG3 = s3 && typeof s3.accelLatG === 'number' ? s3.accelLatG : 0;
+
+    const brakeOffset2 = showLap2
+      ? computeBrakePointOffsetNearDist(lap1Samples, lap2Samples, scrubDistM)
+      : null;
+    const brakeOffset3 = showLap3
+      ? computeBrakePointOffsetNearDist(lap1Samples, lap3Samples, scrubDistM)
+      : null;
 
     return {
       distM: Math.round(scrubDistM),
@@ -460,14 +567,14 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       speed3,
       speedDelta2vs1,
       speedDelta3vs1,
-      time1Ms,
-      time2Ms,
-      time3Ms,
-      timeDelta2vs1Sec,
-      timeDelta3vs1Sec,
       longG1,
       longG2,
       longG3,
+      latG1,
+      latG2,
+      latG3,
+      brakeOffset2,
+      brakeOffset3,
     };
   }, [scrubDistM, lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
 
@@ -477,22 +584,23 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     if (rect.width <= 0) return;
     const svgX = ((clientX - rect.left) / rect.width) * chartW;
     const ratio = Math.max(0, Math.min(1, (svgX - padL) / plotW));
-    setScrubDistM(Math.round(ratio * maxDistM));
+    setScrubDistM(Math.round(viewStartM + ratio * viewSpanM));
   };
 
   const yTicksKmh = [maxSpd, Math.round(maxSpd * 0.5), 0];
-  const xTicksM = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxDistM * f));
+  const xTicksM = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(viewStartM + viewSpanM * f));
   const scrubX = xAtM(scrubDistM);
 
-  const sectorBoundaries = useMemo(
+  const visibleSectorDividers = useMemo(
     () =>
-      sectorComparison.sectors.map((sec) => ({
-        shortLabel: sec.shortLabel,
-        fromM: Math.round(sec.fromDistKm * 1000),
-        toM: Math.round(sec.toDistKm * 1000),
-        midM: Math.round(((sec.fromDistKm + sec.toDistKm) / 2) * 1000),
-      })),
-    [sectorComparison]
+      sectorComparison.sectors
+        .map((sec) => ({
+          shortLabel: sec.shortLabel,
+          toM: Math.round(sec.toDistKm * 1000),
+          midM: Math.round(((sec.fromDistKm + sec.toDistKm) / 2) * 1000),
+        }))
+        .filter((s) => s.toM > viewStartM && s.toM < viewEndM),
+    [sectorComparison.sectors, viewStartM, viewEndM]
   );
 
   return (
@@ -518,22 +626,20 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
             return (
               <div
                 key={`summary_card_${slot}_${run.id}`}
-                className="rounded-xl border border-zinc-800 bg-[#050608] p-3 text-white space-y-2"
+                className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2"
               >
-                <div className="flex items-center justify-between gap-2 border-b border-zinc-800/80 pb-1.5">
-                  <div className="min-w-0">
-                    <span className={`font-mono text-[11px] font-black uppercase ${style.text}`}>
-                      {style.label} · #{run.runNumber}
-                    </span>
-                  </div>
+                <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] pb-1.5">
+                  <span className={`font-mono text-[11px] font-black uppercase ${style.text}`}>
+                    {style.label} · #{run.runNumber}
+                  </span>
                   <div className="text-right font-mono tabular-nums">
-                    <span className="text-sm font-black text-white">
+                    <span className="text-sm font-black text-[var(--ps-text)]">
                       {formatStageDuration(run.totalMs)}
                     </span>
                     {!isRef && totalDeltaSec !== null && (
                       <span
                         className={`ml-1.5 text-xs font-extrabold ${
-                          totalDeltaSec <= 0 ? 'text-[#10B981]' : 'text-[#FF2A2A]'
+                          totalDeltaSec <= 0 ? 'text-[var(--ps-emerald)]' : 'text-[#FF2A2A]'
                         }`}
                       >
                         {formatSignedSec(totalDeltaSec)}
@@ -544,16 +650,16 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 font-mono text-[11px] tabular-nums">
                   <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-zinc-500 uppercase">Vel. Máx</span>
-                    <strong className="text-white">{summary.maxSpeedKmh} km/h</strong>
+                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Vel. Máx</span>
+                    <strong className="text-[var(--ps-text)]">{summary.maxSpeedKmh} km/h</strong>
                   </div>
                   <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-zinc-500 uppercase">Vel. Méd</span>
-                    <strong className="text-zinc-200">{summary.avgSpeedKmh} km/h</strong>
+                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Vel. Méd</span>
+                    <strong className="text-[var(--ps-text)]">{summary.avgSpeedKmh} km/h</strong>
                   </div>
                   <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-zinc-500 uppercase">Vantagem</span>
-                    <strong className={isRef ? 'text-zinc-400' : 'text-[#10B981]'}>
+                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Vantagem</span>
+                    <strong className={isRef ? 'text-[var(--ps-muted)]' : 'text-[var(--ps-emerald)]'}>
                       {isRef
                         ? 'Ref. 0.00s'
                         : summary.bestAdvantageSec !== null
@@ -562,45 +668,32 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                     </strong>
                   </div>
                   <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-zinc-500 uppercase">Atraso</span>
-                    <strong className={isRef ? 'text-zinc-400' : 'text-[#FF2A2A]'}>
+                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Atraso</span>
+                    <strong className={isRef ? 'text-[var(--ps-muted)]' : 'text-[#FF2A2A]'}>
                       {isRef
                         ? 'Base 0.00s'
-                        : summary.worstDelaySec !== null
-                          ? formatSignedSec(summary.worstDelaySec)
-                          : '--'}
+                          : summary.worstDelaySec !== null
+                            ? formatSignedSec(summary.worstDelaySec)
+                            : '--'}
                     </strong>
                   </div>
                 </div>
 
-                {/* % da Volta em Aceleração vs. Frenagem */}
                 <div className="space-y-1 pt-0.5 font-mono text-[10px] tabular-nums">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-[#10B981]">
-                      Acel {summary.accelPct}%
-                    </span>
-                    <span className="text-zinc-500">
+                    <span className="font-bold text-[var(--ps-emerald)]">Acel {summary.accelPct}%</span>
+                    <span className="text-[var(--ps-muted)]">
                       Cruzeiro {Math.max(0, 100 - summary.accelPct - summary.brakePct)}%
                     </span>
-                    <span className="font-bold text-[#FF2A2A]">
-                      Freio {summary.brakePct}%
-                    </span>
+                    <span className="font-bold text-[#FF2A2A]">Freio {summary.brakePct}%</span>
                   </div>
-                  <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                  <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-[var(--ps-card-deep)]">
+                    <div className="h-full bg-[#10B981]" style={{ width: `${accelWidth}%` }} />
                     <div
-                      className="h-full bg-[#10B981]"
-                      style={{ width: `${accelWidth}%` }}
+                      className="h-full bg-[var(--ps-muted)]/45"
+                      style={{ width: `${Math.max(0, 100 - accelWidth - brakeWidth)}%` }}
                     />
-                    <div
-                      className="h-full bg-zinc-600"
-                      style={{
-                        width: `${Math.max(0, 100 - accelWidth - brakeWidth)}%`,
-                      }}
-                    />
-                    <div
-                      className="h-full bg-[#FF2A2A]"
-                      style={{ width: `${brakeWidth}%` }}
-                    />
+                    <div className="h-full bg-[#FF2A2A]" style={{ width: `${brakeWidth}%` }} />
                   </div>
                 </div>
               </div>
@@ -608,43 +701,136 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           })}
         </div>
 
-        {/* Linha compacta de Volta Ideal por Setores */}
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#050608] px-3 py-2 font-mono text-xs tabular-nums">
-          <span className="font-bold text-amber-400 uppercase">
-            Volta Ideal Teórica (Soma Melhores Setores)
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-xs tabular-nums">
+          <span className="font-bold text-[var(--ps-amber)] uppercase">
+            Volta Ideal Teórica (Melhores Parciais)
           </span>
-          <span className="text-sm font-black text-amber-300">
+          <span className="text-sm font-black text-[var(--ps-amber)]">
             {formatStageDuration(sessionOptimal.optimalTotalMs)}
           </span>
         </div>
       </div>
 
-      {/* 2. FUELTECH DUAL-TRACK SVG DATALOGGER + PONTOS CRÍTICOS (TOP / BRK / APEX) */}
-      <div className="rounded-xl border border-zinc-800 bg-[#050608] p-3 text-white space-y-2.5">
+      {/* 2. GRÁFICO DE BARRAS HORIZONTAIS DE GANHO / PERDA POR PARCIAL (P1, P2, P3...) */}
+      {(showLap2 || showLap3) && sectorComparison.rows.length > 0 && (
+        <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
+                Ganho &amp; Perda por Parcial (P1, P2, P3...)
+              </h3>
+              <p className="font-mono text-[10px] text-[var(--ps-muted)]">
+                Esquerda = Tempo Ganho (-s) · Direita = Tempo Perdido (+s) vs V1 · Toque para ampliar
+              </p>
+            </div>
+            <div className="flex items-center gap-3 font-mono text-[10px] font-bold">
+              <span className="text-[var(--ps-emerald)]">← Ganho (-s)</span>
+              <span className="text-[#FF2A2A]">Perda (+s) →</span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            {sectorComparison.rows.map((row) => {
+              const pCode = `P${row.index}`;
+              const compEntries = row.entries.filter((e) => e.slot !== 1);
+              const isZoomed = zoomSectorIdx === row.index;
+
+              return (
+                <button
+                  key={`bar_split_${row.index}`}
+                  type="button"
+                  onClick={() => setZoomSectorIdx(isZoomed ? null : row.index)}
+                  className={`w-full rounded-xl border px-2.5 py-2 text-left transition-colors ${
+                    isZoomed
+                      ? 'border-[var(--ps-amber)] bg-amber-500/10'
+                      : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {/* Identificação da Parcial */}
+                    <div className="w-20 shrink-0 font-mono">
+                      <p className="text-xs font-black text-[var(--ps-text)]">{pCode}</p>
+                      <p className="text-[9px] text-[var(--ps-muted)] tabular-nums">
+                        {row.fromDistM}–{row.toDistM}m
+                      </p>
+                    </div>
+
+                    {/* Barras saindo do centro: Esquerda Verde (-s) / Direita Vermelho (+s) */}
+                    <div className="flex-1 space-y-1">
+                      {compEntries.map((entry) => {
+                        const d = entry.timeDeltaSec;
+                        const isGain = d !== null && d <= 0;
+                        const pct =
+                          d === null
+                            ? 0
+                            : Math.min(100, Math.max(6, (Math.abs(d) / maxPartialDeltaAbsSec) * 100));
+
+                        return (
+                          <div
+                            key={`bar_${row.index}_${entry.slot}`}
+                            className="flex items-center gap-2 font-mono text-[10px] tabular-nums"
+                          >
+                            <span
+                              className={`w-6 shrink-0 font-extrabold ${SLOT_COLORS[entry.slot].text}`}
+                            >
+                              V{entry.slot}
+                            </span>
+
+                            <div className="relative flex h-4 flex-1 items-center rounded bg-[var(--ps-surface)] border border-[var(--ps-border)] overflow-hidden">
+                              {/* Linha Central Neutra */}
+                              <div className="absolute inset-y-0 left-1/2 z-10 w-[1.5px] -translate-x-1/2 bg-[var(--ps-muted)]/70" />
+                              {d !== null && Math.abs(d) >= 0.005 && isGain && (
+                                <div
+                                  className="absolute inset-y-0.5 right-1/2 rounded-l bg-[#10B981]"
+                                  style={{ width: `${pct / 2}%` }}
+                                />
+                              )}
+                              {d !== null && Math.abs(d) >= 0.005 && !isGain && (
+                                <div
+                                  className="absolute inset-y-0.5 left-1/2 rounded-r bg-[#FF2A2A]"
+                                  style={{ width: `${pct / 2}%` }}
+                                />
+                              )}
+                            </div>
+
+                            <span
+                              className={`w-14 shrink-0 text-right font-extrabold ${
+                                d === null
+                                  ? 'text-[var(--ps-muted)]'
+                                  : isGain
+                                    ? 'text-[var(--ps-emerald)]'
+                                    : 'text-[#FF2A2A]'
+                              }`}
+                            >
+                              {formatSignedSec(d)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 3. DATALOGGER AiM / MoTeC — 3 PAINÉIS SINCRONIZADOS + ZOOM POR PARCIAL */}
+      <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-              Datalogger Telemetria · Velocidade &amp; G-Longitudinal
+              Datalogger de Pilotagem · Velocidade, Pedal &amp; Força Lateral
             </h3>
-            <p className="font-mono text-[10px] text-zinc-400">
-              Toque ou deslize no gráfico · marcadores TOP, BRK (&lt;-0.35G) e APEX
+            <p className="font-mono text-[10px] text-[var(--ps-muted)]">
+              3 painéis sincronizados · selecione uma Parcial abaixo para ampliar retas e curvas
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[10px]">
-            <button
-              type="button"
-              onClick={() => setShowCriticalMarkers((v) => !v)}
-              className={`rounded border px-2 py-1 text-[10px] font-bold uppercase ${
-                showCriticalMarkers
-                  ? 'border-amber-500/60 bg-amber-950/30 text-amber-300'
-                  : 'border-zinc-700 bg-[#0A0C10] text-zinc-400'
-              }`}
-            >
-              TOP / BRK / APEX
-            </button>
-            <span className="inline-flex items-center gap-1.5 font-bold text-[#10B981]">
-              <span className="inline-block h-[2.5px] w-3.5 bg-[#10B981]" />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]">
+            <span className="inline-flex items-center gap-1.5 font-bold text-[var(--ps-emerald)]">
+              <span className="inline-block h-2.5 w-3.5 rounded-xs border-t-2 border-[#10B981] bg-[#10B981]/20" />
               V1 #{lap1?.runNumber ?? '-'}
             </span>
             {showLap2 && (
@@ -662,717 +848,149 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           </div>
         </div>
 
-        {/* Live Cursor Telemetry Readout HUD */}
-        {lap1Samples.length > 1 && (
-          <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-zinc-800 bg-[#0A0C10] px-2.5 py-2 font-mono text-[10px] tabular-nums sm:grid-cols-4 sm:text-[11px]">
-            <div>
-              <span className="text-zinc-500 uppercase">Posição</span>
-              <p className="font-extrabold text-amber-300">
-                {scrubPoint.distM} m
-                {maxDistM >= 1000 && (
-                  <span className="ml-1 font-normal text-zinc-400">
-                    ({(scrubPoint.distM / 1000).toFixed(2)} km)
-                  </span>
-                )}
-              </p>
-            </div>
-
-            <div>
-              <span className="text-zinc-500 uppercase">Velocidade (km/h)</span>
-              <p className="font-extrabold">
-                <span className="text-[#10B981]">{scrubPoint.speed1 ?? '--'}</span>
-                {showLap2 && (
-                  <>
-                    <span className="text-zinc-600"> / </span>
-                    <span className="text-[#FF2A2A]">{scrubPoint.speed2 ?? '--'}</span>
-                    <span
-                      className={`ml-1 text-[9px] ${
-                        (scrubPoint.speedDelta2vs1 ?? 0) >= 0
-                          ? 'text-[#10B981]'
-                          : 'text-[#FF2A2A]'
-                      }`}
-                    >
-                      ({formatSignedKmh(scrubPoint.speedDelta2vs1)})
-                    </span>
-                  </>
-                )}
-                {showLap3 && (
-                  <>
-                    <span className="text-zinc-600"> / </span>
-                    <span className="text-[#38BDF8]">{scrubPoint.speed3 ?? '--'}</span>
-                    <span
-                      className={`ml-1 text-[9px] ${
-                        (scrubPoint.speedDelta3vs1 ?? 0) >= 0
-                          ? 'text-[#10B981]'
-                          : 'text-[#FF2A2A]'
-                      }`}
-                    >
-                      ({formatSignedKmh(scrubPoint.speedDelta3vs1)})
-                    </span>
-                  </>
-                )}
-              </p>
-            </div>
-
-            <div>
-              <span className="text-zinc-500 uppercase">Tempo Acum. / Δ</span>
-              <p className="font-extrabold">
-                <span className="text-white">
-                  {formatStageDuration(scrubPoint.time1Ms)}
-                </span>
-                {showLap2 && scrubPoint.timeDelta2vs1Sec !== null && (
-                  <span
-                    className={`ml-1 text-[9px] ${
-                      scrubPoint.timeDelta2vs1Sec <= 0
-                        ? 'text-[#10B981]'
-                        : 'text-[#FF2A2A]'
-                    }`}
-                  >
-                    V2:{formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
-                  </span>
-                )}
-                {showLap3 && scrubPoint.timeDelta3vs1Sec !== null && (
-                  <span
-                    className={`ml-1 text-[9px] ${
-                      scrubPoint.timeDelta3vs1Sec <= 0
-                        ? 'text-[#10B981]'
-                        : 'text-[#38BDF8]'
-                    }`}
-                  >
-                    V3:{formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
-                  </span>
-                )}
-              </p>
-            </div>
-
-            <div>
-              <span className="text-zinc-500 uppercase">Força G-Long</span>
-              <p className="font-extrabold">
-                <span className="text-[#10B981]">
-                  {scrubPoint.longG1 >= 0 ? '+' : ''}
-                  {scrubPoint.longG1.toFixed(2)}
-                </span>
-                {showLap2 && (
-                  <span className="text-[#FF2A2A]">
-                    {' '}
-                    / {scrubPoint.longG2 >= 0 ? '+' : ''}
-                    {scrubPoint.longG2.toFixed(2)}
-                  </span>
-                )}
-                {showLap3 && (
-                  <span className="text-[#38BDF8]">
-                    {' '}
-                    / {scrubPoint.longG3 >= 0 ? '+' : ''}
-                    {scrubPoint.longG3.toFixed(2)}
-                  </span>
-                )}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Dual-Channel SVG: Velocidade + Pontos Críticos + Força G Longitudinal */}
-        <div className="relative rounded-lg border border-zinc-800/90 bg-[#050608] p-1.5">
-          {lap1Samples.length > 1 ? (
-            <svg
-              ref={speedSvgRef}
-              viewBox={`0 0 ${chartW} ${chartH}`}
-              className="h-64 w-full touch-none select-none cursor-crosshair sm:h-72"
-              onPointerDown={(e) => {
-                isDraggingRef.current = true;
-                e.currentTarget.setPointerCapture(e.pointerId);
-                updateScrubFromSvg(speedSvgRef.current, e.clientX);
-              }}
-              onPointerMove={(e) => {
-                if (!isDraggingRef.current && e.pointerType === 'touch') return;
-                if (isDraggingRef.current || e.buttons === 1) {
-                  updateScrubFromSvg(speedSvgRef.current, e.clientX);
-                }
-              }}
-              onPointerUp={(e) => {
-                isDraggingRef.current = false;
-                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-                  e.currentTarget.releasePointerCapture(e.pointerId);
-                }
-              }}
-              onPointerCancel={() => {
-                isDraggingRef.current = false;
-              }}
-            >
-              {/* TOP CHANNEL: VELOCIDADE (km/h) */}
-              <text
-                x={padL + 4}
-                y={spdTop - 8}
-                fill="#A1A1AA"
-                fontSize="9"
-                fontWeight="bold"
-                fontFamily="monospace"
-              >
-                VELOCIDADE (KM/H)
-              </text>
-
-              {yTicksKmh.map((val) => {
-                const y = yAtKmh(val);
-                return (
-                  <g key={`spd_${val}`}>
-                    <line
-                      x1={padL}
-                      y1={y}
-                      x2={chartW - padR}
-                      y2={y}
-                      stroke="#1F222A"
-                      strokeDasharray={val === 0 ? undefined : '3 3'}
-                    />
-                    <text
-                      x={padL - 5}
-                      y={y + 3}
-                      textAnchor="end"
-                      fill="#71717A"
-                      fontSize="9"
-                      fontFamily="monospace"
-                    >
-                      {val}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {/* BOTTOM CHANNEL: FORÇA G LONGITUDINAL */}
-              <text
-                x={padL + 4}
-                y={gTop - 6}
-                fill="#A1A1AA"
-                fontSize="9"
-                fontWeight="bold"
-                fontFamily="monospace"
-              >
-                FORÇA G LONGITUDINAL (+ACEL / -FREIO)
-              </text>
-
-              {[maxGScale, 0, -maxGScale].map((gTick) => {
-                const y = yAtLongG(gTick);
-                return (
-                  <g key={`g_${gTick}`}>
-                    <line
-                      x1={padL}
-                      y1={y}
-                      x2={chartW - padR}
-                      y2={y}
-                      stroke={gTick === 0 ? '#3F3F46' : '#181A20'}
-                      strokeDasharray={gTick === 0 ? undefined : '3 3'}
-                    />
-                    <text
-                      x={padL - 5}
-                      y={y + 3}
-                      textAnchor="end"
-                      fill={
-                        gTick > 0 ? '#10B981' : gTick < 0 ? '#FF2A2A' : '#A1A1AA'
-                      }
-                      fontSize="8.5"
-                      fontFamily="monospace"
-                    >
-                      {gTick > 0 ? `+${gTick.toFixed(1)}` : gTick.toFixed(1)}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {/* SECTOR VERTICAL DASHED BOUNDARIES (S1, S2, S3...) */}
-              {sectorBoundaries.map((sec, i) => {
-                const xEnd = xAtM(sec.toM);
-                const xMid = xAtM(sec.midM);
-                return (
-                  <g key={`sec_line_${sec.shortLabel}_${i}`}>
-                    <text
-                      x={xMid}
-                      y={spdTop + 10}
-                      textAnchor="middle"
-                      fill="#71717A"
-                      fontSize="9.5"
-                      fontWeight="bold"
-                      fontFamily="monospace"
-                    >
-                      {sec.shortLabel}
-                    </text>
-                    {i < sectorBoundaries.length - 1 && (
-                      <line
-                        x1={xEnd}
-                        y1={spdTop}
-                        x2={xEnd}
-                        y2={gBottom}
-                        stroke="#52525B"
-                        strokeWidth="1"
-                        strokeDasharray="4 4"
-                      />
-                    )}
-                  </g>
-                );
-              })}
-
-              {/* Distance X Grid Labels */}
-              {xTicksM.map((mVal, i) => {
-                const x = xAtM(mVal);
-                return (
-                  <text
-                    key={`x_${mVal}_${i}`}
-                    x={x}
-                    y={chartH - 7}
-                    textAnchor={
-                      i === 0
-                        ? 'start'
-                        : i === xTicksM.length - 1
-                          ? 'end'
-                          : 'middle'
-                    }
-                    fill="#A1A1AA"
-                    fontSize="9"
-                    fontFamily="monospace"
-                  >
-                    {mVal >= 1000 ? `${(mVal / 1000).toFixed(2)}km` : `${mVal}m`}
-                  </text>
-                );
-              })}
-
-              {/* Speed Trace 3 (Cyan Dashed) */}
-              {showLap3 && speedPoly3 && (
-                <polyline
-                  fill="none"
-                  stroke="#38BDF8"
-                  strokeWidth="1.9"
-                  strokeDasharray="5 3"
-                  strokeOpacity="0.92"
-                  points={speedPoly3}
-                />
-              )}
-
-              {/* Speed Trace 2 (Red) */}
-              {showLap2 && speedPoly2 && (
-                <polyline
-                  fill="none"
-                  stroke="#FF2A2A"
-                  strokeWidth="2.1"
-                  strokeOpacity="0.95"
-                  points={speedPoly2}
-                />
-              )}
-
-              {/* Speed Trace 1 (Emerald Reference) */}
-              <polyline
-                fill="none"
-                stroke="#10B981"
-                strokeWidth="2.4"
-                points={speedPoly1}
-              />
-
-              {/* Critical Point Badges on V1 Curve: TOP / BRK / APEX */}
-              {showCriticalMarkers &&
-                criticalPoints.map((pt, idx) => {
-                  const cx = xAtM(pt.distM);
-                  const cy = yAtKmh(pt.speedKmh);
-                  const isApex = pt.type === 'APEX';
-                  const badgeW = pt.type === 'APEX' ? 30 : 25;
-                  const badgeH = 12;
-                  const clampedBx = Math.max(
-                    padL + 2,
-                    Math.min(chartW - padR - badgeW - 2, cx - badgeW / 2)
-                  );
-                  const rawBy = isApex ? cy + 7 : cy - badgeH - 7;
-                  const clampedBy = Math.max(
-                    spdTop + 2,
-                    Math.min(spdTop + spdH - badgeH - 2, rawBy)
-                  );
-                  const bg =
-                    pt.type === 'TOP'
-                      ? '#F59E0B'
-                      : pt.type === 'BRK'
-                        ? '#E10600'
-                        : '#059669';
-                  const txtColor = pt.type === 'TOP' ? '#050608' : '#FFFFFF';
-
-                  return (
-                    <g key={`crit_${pt.type}_${pt.distM}_${idx}`} className="pointer-events-none">
-                      <line
-                        x1={cx}
-                        y1={cy}
-                        x2={cx}
-                        y2={isApex ? clampedBy : clampedBy + badgeH}
-                        stroke={bg}
-                        strokeWidth="1"
-                        strokeOpacity="0.8"
-                      />
-                      <circle cx={cx} cy={cy} r="2.7" fill={bg} stroke="#FFFFFF" strokeWidth="0.9" />
-                      <rect
-                        x={clampedBx}
-                        y={clampedBy}
-                        width={badgeW}
-                        height={badgeH}
-                        rx="3"
-                        fill={bg}
-                      />
-                      <text
-                        x={clampedBx + badgeW / 2}
-                        y={clampedBy + 8.8}
-                        textAnchor="middle"
-                        fill={txtColor}
-                        fontSize="7.5"
-                        fontWeight="bold"
-                        fontFamily="monospace"
-                      >
-                        {pt.type}
-                      </text>
-                    </g>
-                  );
-                })}
-
-              {/* Longitudinal G Trace 3 (Cyan Dashed) */}
-              {showLap3 && longGPoly3 && (
-                <polyline
-                  fill="none"
-                  stroke="#38BDF8"
-                  strokeWidth="1.5"
-                  strokeDasharray="4 3"
-                  strokeOpacity="0.85"
-                  points={longGPoly3}
-                />
-              )}
-
-              {/* Longitudinal G Trace 2 (Red) */}
-              {showLap2 && longGPoly2 && (
-                <polyline
-                  fill="none"
-                  stroke="#FF2A2A"
-                  strokeWidth="1.7"
-                  strokeOpacity="0.9"
-                  points={longGPoly2}
-                />
-              )}
-
-              {/* Longitudinal G Trace 1 (Emerald Reference) */}
-              <polyline
-                fill="none"
-                stroke="#10B981"
-                strokeWidth="2"
-                points={longGPoly1}
-              />
-
-              {/* Interactive Crosshair Scrubber */}
-              <line
-                x1={scrubX}
-                y1={spdTop}
-                x2={scrubX}
-                y2={gBottom}
-                stroke="#FACC15"
-                strokeWidth="1.3"
-              />
-              {scrubPoint.speed1 !== null && (
-                <circle
-                  cx={scrubX}
-                  cy={yAtKmh(scrubPoint.speed1)}
-                  r="4"
-                  fill="#10B981"
-                  stroke="#FFFFFF"
-                  strokeWidth="1.5"
-                />
-              )}
-              {showLap2 && scrubPoint.speed2 !== null && (
-                <circle
-                  cx={scrubX}
-                  cy={yAtKmh(scrubPoint.speed2)}
-                  r="3.5"
-                  fill="#FF2A2A"
-                  stroke="#FFFFFF"
-                  strokeWidth="1.2"
-                />
-              )}
-              {showLap3 && scrubPoint.speed3 !== null && (
-                <circle
-                  cx={scrubX}
-                  cy={yAtKmh(scrubPoint.speed3)}
-                  r="3.5"
-                  fill="#38BDF8"
-                  stroke="#FFFFFF"
-                  strokeWidth="1.2"
-                />
-              )}
-              <circle
-                cx={scrubX}
-                cy={yAtLongG(scrubPoint.longG1)}
-                r="3.5"
-                fill="#10B981"
-                stroke="#FFFFFF"
-                strokeWidth="1.2"
-              />
-              {showLap2 && (
-                <circle
-                  cx={scrubX}
-                  cy={yAtLongG(scrubPoint.longG2)}
-                  r="3"
-                  fill="#FF2A2A"
-                  stroke="#FFFFFF"
-                  strokeWidth="1"
-                />
-              )}
-              {showLap3 && (
-                <circle
-                  cx={scrubX}
-                  cy={yAtLongG(scrubPoint.longG3)}
-                  r="3"
-                  fill="#38BDF8"
-                  stroke="#FFFFFF"
-                  strokeWidth="1"
-                />
-              )}
-            </svg>
-          ) : (
-            <p className="py-12 text-center font-mono text-xs text-zinc-500">
-              Dados insuficientes para gerar as curvas de telemetria.
-            </p>
-          )}
-        </div>
-
-        {/* Fine scrubber slider for one-handed precision */}
-        {lap1Samples.length > 1 && (
-          <div className="flex items-center gap-2 pt-0.5">
-            <Crosshair className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-            <input
-              type="range"
-              aria-label="Cursor de distância no gráfico"
-              min={0}
-              max={Math.round(maxDistM)}
-              value={Math.min(Math.round(maxDistM), scrubDistM)}
-              onChange={(e) => setScrubDistM(Number(e.target.value))}
-              className="w-full accent-[#10B981]"
-            />
+        {/* Botões de Zoom por Trecho / Parcial */}
+        {sectorComparison.rows.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+              <ZoomIn className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+              <span>Zoom:</span>
+            </span>
             <button
               type="button"
-              onClick={() => setScrubDistM(0)}
-              className="inline-flex h-7 items-center gap-1 rounded border border-zinc-800 bg-[#0A0C10] px-2 font-mono text-[10px] font-bold text-zinc-400 hover:text-white"
-              title="Voltar cursor ao início"
+              onClick={() => setZoomSectorIdx(null)}
+              className={`shrink-0 rounded-lg border px-2.5 py-1 font-mono text-[10px] font-extrabold uppercase transition-colors ${
+                zoomSectorIdx === null
+                  ? 'border-[var(--ps-emerald)] bg-emerald-500/15 text-[var(--ps-emerald)]'
+                  : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+              }`}
             >
-              <RotateCcw className="h-3 w-3" />
-              <span>0m</span>
+              Pista Inteira
             </button>
+            {sectorComparison.rows.map((row) => (
+              <button
+                key={`zoom_btn_${row.index}`}
+                type="button"
+                onClick={() => setZoomSectorIdx(row.index)}
+                className={`shrink-0 rounded-lg border px-2.5 py-1 font-mono text-[10px] font-extrabold uppercase transition-colors ${
+                  zoomSectorIdx === row.index
+                    ? 'border-[var(--ps-amber)] bg-amber-500/15 text-[var(--ps-amber)]'
+                    : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                }`}
+              >
+                Parcial {row.index} (P{row.index})
+              </button>
+            ))}
           </div>
         )}
-      </div>
 
-      {/* 3. GRÁFICO DE DIFERENÇA DE TEMPO (DELTA TIME Δs x DISTÂNCIA) + DIFERENÇA DE VELOCIDADE (Δ km/h) */}
-      {(showLap2 || showLap3) && (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {/* DELTA TIME Δs x Distância */}
-          <div className="rounded-xl border border-zinc-800 bg-[#050608] p-3 text-white space-y-1.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase">
-                  Diferença de Tempo (Delta Time Δs x Distância)
-                </h3>
-                <p className="font-mono text-[10px] text-zinc-400">
-                  Acima de 0.00s = Ganho (-s) · Abaixo = Perda (+s) vs V1 Ref
-                </p>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-[10px] font-bold tabular-nums">
-                {showLap2 && scrubPoint.timeDelta2vs1Sec !== null && (
-                  <span
-                    className={
-                      scrubPoint.timeDelta2vs1Sec <= 0 ? 'text-[#10B981]' : 'text-[#FF2A2A]'
-                    }
-                  >
-                    V2: {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
+        {/* Resumo Prático Fixo ao Tocar no Gráfico */}
+        {lap1Samples.length > 1 && (
+          <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 font-mono text-[10px] tabular-nums sm:grid-cols-3 sm:text-[11px]">
+            {/* 1. Vel V1 vs V2 (Δ km/h) */}
+            <div>
+              <span className="text-[var(--ps-muted)] uppercase">
+                Vel V1 vs V2 @ {scrubPoint.distM}m
+              </span>
+              <p className="mt-0.5 font-extrabold">
+                <span className="text-[var(--ps-emerald)]">{scrubPoint.speed1 ?? '--'}</span>
+                {showLap2 ? (
+                  <>
+                    <span className="text-[var(--ps-muted)]"> vs </span>
+                    <span className="text-[#FF2A2A]">{scrubPoint.speed2 ?? '--'} km/h</span>
+                    <span
+                      className={`ml-1.5 ${
+                        (scrubPoint.speedDelta2vs1 ?? 0) >= 0
+                          ? 'text-[var(--ps-emerald)]'
+                          : 'text-[#FF2A2A]'
+                      }`}
+                    >
+                      ({formatSignedKmh(scrubPoint.speedDelta2vs1)} km/h)
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[var(--ps-muted)]"> km/h</span>
+                )}
+                {showLap3 && (
+                  <span className="ml-2 text-[#38BDF8]">
+                    · V3: {scrubPoint.speed3 ?? '--'} ({formatSignedKmh(scrubPoint.speedDelta3vs1)})
                   </span>
                 )}
-                {showLap3 && scrubPoint.timeDelta3vs1Sec !== null && (
-                  <span className="text-[#38BDF8]">
-                    V3: {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
-                  </span>
-                )}
-              </div>
+              </p>
             </div>
 
-            <div className="rounded-lg border border-zinc-800/90 bg-[#050608] p-1">
-              <svg
-                ref={deltaTimeSvgRef}
-                viewBox={`0 0 ${chartW} ${deltaChartH}`}
-                className="h-36 w-full touch-none select-none cursor-crosshair sm:h-40"
-                onPointerDown={(e) => {
-                  isDraggingRef.current = true;
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  updateScrubFromSvg(deltaTimeSvgRef.current, e.clientX);
-                }}
-                onPointerMove={(e) => {
-                  if (!isDraggingRef.current && e.pointerType === 'touch') return;
-                  if (isDraggingRef.current || e.buttons === 1) {
-                    updateScrubFromSvg(deltaTimeSvgRef.current, e.clientX);
-                  }
-                }}
-                onPointerUp={(e) => {
-                  isDraggingRef.current = false;
-                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-                    e.currentTarget.releasePointerCapture(e.pointerId);
-                  }
-                }}
-                onPointerCancel={() => {
-                  isDraggingRef.current = false;
-                }}
-              >
-                {[-maxAbsDeltaTimeSec, 0, maxAbsDeltaTimeSec].map((tickVal) => {
-                  const y = yAtDeltaTime(tickVal);
-                  return (
-                    <g key={`dt_tick_${tickVal}`}>
-                      <line
-                        x1={padL}
-                        y1={y}
-                        x2={chartW - padR}
-                        y2={y}
-                        stroke={tickVal === 0 ? '#52525B' : '#181A20'}
-                        strokeDasharray={tickVal === 0 ? undefined : '3 3'}
-                      />
-                      <text
-                        x={padL - 5}
-                        y={y + 3}
-                        textAnchor="end"
-                        fill={
-                          tickVal < 0
-                            ? '#10B981'
-                            : tickVal > 0
-                              ? '#FF2A2A'
-                              : '#D4D4D8'
-                        }
-                        fontSize="8.5"
-                        fontFamily="monospace"
-                      >
-                        {tickVal === 0
-                          ? '0.00s'
-                          : `${tickVal > 0 ? '+' : ''}${tickVal.toFixed(1)}s`}
-                      </text>
-                    </g>
-                  );
-                })}
+            {/* 2. Frenagem / Aceleração (G) & Carga Lateral */}
+            <div>
+              <span className="text-[var(--ps-muted)] uppercase">Frenagem / Aceleração &amp; Lat G</span>
+              <p className="mt-0.5 font-extrabold">
+                <span className="text-[var(--ps-emerald)]">
+                  {scrubPoint.longG1 >= 0 ? '+' : ''}
+                  {scrubPoint.longG1.toFixed(2)}G
+                </span>
+                {showLap2 && (
+                  <span className="text-[var(--ps-amber)]">
+                    {' '}
+                    / V2 {scrubPoint.longG2 >= 0 ? '+' : ''}
+                    {scrubPoint.longG2.toFixed(2)}G
+                  </span>
+                )}
+                <span className="text-[var(--ps-muted)]">
+                  {' '}
+                  · Lat {Math.abs(scrubPoint.latG1).toFixed(2)}G
+                  {showLap2 ? `/${Math.abs(scrubPoint.latG2).toFixed(2)}G` : ''}
+                </span>
+              </p>
+            </div>
 
-                {/* Area Fills (Green above 0.00s for Gain, Red below 0.00s for Delay) */}
-                {showLap2 && deltaTimeShapes2.gainPoly && (
-                  <polygon fill="#10B981" fillOpacity="0.28" points={deltaTimeShapes2.gainPoly} />
+            {/* 3. Distância do Ponto de Frenagem */}
+            <div>
+              <span className="text-[var(--ps-muted)] uppercase">Ponto de Frenagem (V2 vs V1)</span>
+              <p className="mt-0.5 font-extrabold">
+                {!showLap2 ? (
+                  <span className="text-[var(--ps-muted)]">Selecione V2 para comparar freada</span>
+                ) : scrubPoint.brakeOffset2 ? (
+                  scrubPoint.brakeOffset2.offsetM > 0 ? (
+                    <span className="text-[var(--ps-emerald)]">
+                      V2 freou +{scrubPoint.brakeOffset2.offsetM}m mais tarde
+                    </span>
+                  ) : scrubPoint.brakeOffset2.offsetM < 0 ? (
+                    <span className="text-[#FF2A2A]">
+                      V2 freou {Math.abs(scrubPoint.brakeOffset2.offsetM)}m antes
+                    </span>
+                  ) : (
+                    <span className="text-[var(--ps-amber)]">Mesmo ponto de freada (0m)</span>
+                  )
+                ) : (
+                  <span className="text-[var(--ps-muted)]">Trecho de reta / sem freada próxima</span>
                 )}
-                {showLap2 && deltaTimeShapes2.lossPoly && (
-                  <polygon fill="#FF2A2A" fillOpacity="0.28" points={deltaTimeShapes2.lossPoly} />
-                )}
-
-                {!showLap2 && showLap3 && deltaTimeShapes3.gainPoly && (
-                  <polygon fill="#10B981" fillOpacity="0.28" points={deltaTimeShapes3.gainPoly} />
-                )}
-                {!showLap2 && showLap3 && deltaTimeShapes3.lossPoly && (
-                  <polygon fill="#FF2A2A" fillOpacity="0.28" points={deltaTimeShapes3.lossPoly} />
-                )}
-
-                {showLap3 && deltaTimeShapes3.linePts && (
-                  <polyline
-                    fill="none"
-                    stroke="#38BDF8"
-                    strokeWidth="2"
-                    strokeDasharray="4 3"
-                    points={deltaTimeShapes3.linePts}
-                  />
-                )}
-                {showLap2 && deltaTimeShapes2.linePts && (
-                  <polyline
-                    fill="none"
-                    stroke="#F4F4F5"
-                    strokeWidth="2"
-                    points={deltaTimeShapes2.linePts}
-                  />
-                )}
-
-                {xTicksM.map((mVal, i) => (
-                  <text
-                    key={`dt_x_${mVal}_${i}`}
-                    x={xAtM(mVal)}
-                    y={deltaChartH - 6}
-                    textAnchor={
-                      i === 0 ? 'start' : i === xTicksM.length - 1 ? 'end' : 'middle'
-                    }
-                    fill="#71717A"
-                    fontSize="8.5"
-                    fontFamily="monospace"
-                  >
-                    {mVal >= 1000 ? `${(mVal / 1000).toFixed(2)}km` : `${mVal}m`}
-                  </text>
-                ))}
-
-                {/* Synchronized Crosshair */}
-                <line
-                  x1={scrubX}
-                  y1={deltaTop}
-                  x2={scrubX}
-                  y2={deltaBottom}
-                  stroke="#FACC15"
-                  strokeWidth="1.2"
-                />
-                {showLap2 && scrubPoint.timeDelta2vs1Sec !== null && (
-                  <circle
-                    cx={scrubX}
-                    cy={yAtDeltaTime(scrubPoint.timeDelta2vs1Sec)}
-                    r="3.5"
-                    fill={scrubPoint.timeDelta2vs1Sec <= 0 ? '#10B981' : '#FF2A2A'}
-                    stroke="#FFFFFF"
-                    strokeWidth="1.2"
-                  />
-                )}
-                {showLap3 && scrubPoint.timeDelta3vs1Sec !== null && (
-                  <circle
-                    cx={scrubX}
-                    cy={yAtDeltaTime(scrubPoint.timeDelta3vs1Sec)}
-                    r="3.5"
-                    fill="#38BDF8"
-                    stroke="#FFFFFF"
-                    strokeWidth="1.2"
-                  />
-                )}
-              </svg>
+              </p>
             </div>
           </div>
+        )}
 
-          {/* DELTA SPEED Δ km/h x Distância */}
-          <div className="rounded-xl border border-zinc-800 bg-[#050608] p-3 text-white space-y-1.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase">
-                  Diferença de Velocidade (Δ km/h x Distância)
-                </h3>
-                <p className="font-mono text-[10px] text-zinc-400">
-                  Acima de 0 = Mais rápido (+km/h) · Abaixo = Mais lento (-km/h)
-                </p>
+        {/* PAINÉIS SINCRONIZADOS (1: Velocidade, 2: Pedal Virtual, 3: Força Lateral) */}
+        {lap1Samples.length > 1 ? (
+          <div className="space-y-2">
+            {/* PAINEL 1 — VELOCIDADE (km/h) + ZONAS ACEL/FREIO + TOP/MIN */}
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5">
+              <div className="mb-0.5 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
+                <span className="font-bold uppercase">
+                  Painel 1 · Velocidade (km/h) &amp; Zonas Acel/Frenagem
+                </span>
+                <span>TOP = Máxima · MIN = Ápice da Curva</span>
               </div>
-              <div className="flex items-center gap-2 font-mono text-[10px] font-bold tabular-nums">
-                {showLap2 && scrubPoint.speedDelta2vs1 !== null && (
-                  <span
-                    className={
-                      scrubPoint.speedDelta2vs1 >= 0 ? 'text-[#10B981]' : 'text-[#FF2A2A]'
-                    }
-                  >
-                    V2: {formatSignedKmh(scrubPoint.speedDelta2vs1)} km/h
-                  </span>
-                )}
-                {showLap3 && scrubPoint.speedDelta3vs1 !== null && (
-                  <span className="text-[#38BDF8]">
-                    V3: {formatSignedKmh(scrubPoint.speedDelta3vs1)} km/h
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-zinc-800/90 bg-[#050608] p-1">
               <svg
-                ref={deltaSpeedSvgRef}
-                viewBox={`0 0 ${chartW} ${deltaChartH}`}
-                className="h-36 w-full touch-none select-none cursor-crosshair sm:h-40"
+                ref={panel1Ref}
+                viewBox={`0 0 ${chartW} ${p1H}`}
+                className="h-44 w-full touch-none select-none cursor-crosshair sm:h-48"
                 onPointerDown={(e) => {
                   isDraggingRef.current = true;
                   e.currentTarget.setPointerCapture(e.pointerId);
-                  updateScrubFromSvg(deltaSpeedSvgRef.current, e.clientX);
+                  updateScrubFromSvg(panel1Ref.current, e.clientX);
                 }}
                 onPointerMove={(e) => {
                   if (!isDraggingRef.current && e.pointerType === 'touch') return;
                   if (isDraggingRef.current || e.buttons === 1) {
-                    updateScrubFromSvg(deltaSpeedSvgRef.current, e.clientX);
+                    updateScrubFromSvg(panel1Ref.current, e.clientX);
                   }
                 }}
                 onPointerUp={(e) => {
@@ -1385,79 +1003,152 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   isDraggingRef.current = false;
                 }}
               >
-                {[maxAbsDeltaSpeedKmh, 0, -maxAbsDeltaSpeedKmh].map((tickVal) => {
-                  const y = yAtDeltaSpeed(tickVal);
+                {yTicksKmh.map((val) => {
+                  const y = yAtKmh(val);
                   return (
-                    <g key={`ds_tick_${tickVal}`}>
+                    <g key={`p1_y_${val}`}>
                       <line
                         x1={padL}
                         y1={y}
                         x2={chartW - padR}
                         y2={y}
-                        stroke={tickVal === 0 ? '#52525B' : '#181A20'}
-                        strokeDasharray={tickVal === 0 ? undefined : '3 3'}
+                        stroke="var(--ps-border-strong)"
+                        strokeOpacity="0.65"
+                        strokeDasharray={val === 0 ? undefined : '3 3'}
                       />
                       <text
                         x={padL - 5}
                         y={y + 3}
                         textAnchor="end"
-                        fill={
-                          tickVal > 0
-                            ? '#10B981'
-                            : tickVal < 0
-                              ? '#FF2A2A'
-                              : '#D4D4D8'
-                        }
-                        fontSize="8.5"
+                        fill="var(--ps-muted)"
+                        fontSize="9"
                         fontFamily="monospace"
                       >
-                        {tickVal > 0 ? `+${tickVal}` : tickVal}
+                        {val}
                       </text>
                     </g>
                   );
                 })}
 
-                {showLap2 && deltaSpeedShapes2.gainPoly && (
-                  <polygon fill="#10B981" fillOpacity="0.25" points={deltaSpeedShapes2.gainPoly} />
-                )}
-                {showLap2 && deltaSpeedShapes2.lossPoly && (
-                  <polygon fill="#FF2A2A" fillOpacity="0.25" points={deltaSpeedShapes2.lossPoly} />
-                )}
+                {visibleSectorDividers.map((sec, idx) => (
+                  <line
+                    key={`p1_sec_${idx}`}
+                    x1={xAtM(sec.toM)}
+                    y1={p1Top}
+                    x2={xAtM(sec.toM)}
+                    y2={p1Bottom}
+                    stroke="var(--ps-muted)"
+                    strokeOpacity="0.45"
+                    strokeWidth="1"
+                    strokeDasharray="4 4"
+                  />
+                ))}
 
-                {!showLap2 && showLap3 && deltaSpeedShapes3.gainPoly && (
-                  <polygon fill="#10B981" fillOpacity="0.25" points={deltaSpeedShapes3.gainPoly} />
-                )}
-                {!showLap2 && showLap3 && deltaSpeedShapes3.lossPoly && (
-                  <polygon fill="#FF2A2A" fillOpacity="0.25" points={deltaSpeedShapes3.lossPoly} />
-                )}
+                {/* Zonas de Aceleração / Frenagem na pista (faixa inferior) */}
+                <rect
+                  x={padL}
+                  y={zoneStripY}
+                  width={plotW}
+                  height={zoneStripH}
+                  rx="2"
+                  fill="var(--ps-surface)"
+                />
+                {v1ZoneSegments.map((seg, idx) => (
+                  <rect
+                    key={`zone_${idx}`}
+                    x={seg.x1}
+                    y={zoneStripY}
+                    width={Math.max(1.5, seg.x2 - seg.x1)}
+                    height={zoneStripH}
+                    fill={seg.kind === 'accel' ? '#10B981' : '#FF2A2A'}
+                    fillOpacity="0.82"
+                  />
+                ))}
 
-                {showLap3 && deltaSpeedShapes3.linePts && (
+                {/* V1 (Ref): Área translúcida verde esmeralda + linha sólida 2.5px */}
+                {speedArea1 && (
+                  <polygon fill="rgba(16, 185, 129, 0.14)" points={speedArea1} />
+                )}
+                {speedLine1 && (
                   <polyline
                     fill="none"
-                    stroke="#38BDF8"
-                    strokeWidth="2"
-                    strokeDasharray="4 3"
-                    points={deltaSpeedShapes3.linePts}
+                    stroke="#10B981"
+                    strokeWidth="2.5"
+                    points={speedLine1}
                   />
                 )}
-                {showLap2 && deltaSpeedShapes2.linePts && (
+
+                {/* V2 (Comp.A): Linha sólida nítida vermelha 2px sem preenchimento */}
+                {showLap2 && speedLine2 && (
                   <polyline
                     fill="none"
                     stroke="#FF2A2A"
                     strokeWidth="2"
-                    points={deltaSpeedShapes2.linePts}
+                    points={speedLine2}
                   />
                 )}
 
+                {/* V3 (Opcional): Linha tracejada ciano 1.8px */}
+                {showLap3 && speedLine3 && (
+                  <polyline
+                    fill="none"
+                    stroke="#38BDF8"
+                    strokeWidth="1.8"
+                    strokeDasharray="5 3"
+                    points={speedLine3}
+                  />
+                )}
+
+                {/* Marcadores TOP e MIN sobre a curva */}
+                {criticalMarkers.map((pt, idx) => {
+                  const cx = xAtM(pt.distM);
+                  const cy = yAtKmh(pt.speedKmh);
+                  const isMin = pt.badge === 'MIN';
+                  const badgeW = 26;
+                  const badgeH = 12;
+                  const bx = Math.max(padL + 2, Math.min(chartW - padR - badgeW - 2, cx - badgeW / 2));
+                  const by = Math.max(
+                    p1Top + 1,
+                    Math.min(p1Bottom - badgeH - 1, isMin ? cy + 7 : cy - badgeH - 7)
+                  );
+                  const bg = isMin ? '#10B981' : '#F59E0B';
+                  const fg = isMin ? '#FFFFFF' : '#050608';
+                  return (
+                    <g key={`p1_crit_${pt.badge}_${pt.distM}_${idx}`} className="pointer-events-none">
+                      <line
+                        x1={cx}
+                        y1={cy}
+                        x2={cx}
+                        y2={isMin ? by : by + badgeH}
+                        stroke={bg}
+                        strokeWidth="1"
+                      />
+                      <circle cx={cx} cy={cy} r="2.8" fill={bg} stroke="#FFFFFF" strokeWidth="0.9" />
+                      <rect x={bx} y={by} width={badgeW} height={badgeH} rx="3" fill={bg} />
+                      <text
+                        x={bx + badgeW / 2}
+                        y={by + 8.8}
+                        textAnchor="middle"
+                        fill={fg}
+                        fontSize="7.5"
+                        fontWeight="bold"
+                        fontFamily="monospace"
+                      >
+                        {pt.badge}
+                      </text>
+                    </g>
+                  );
+                })}
+
                 {xTicksM.map((mVal, i) => (
                   <text
-                    key={`ds_x_${mVal}_${i}`}
+                    key={`p1_x_${mVal}_${i}`}
                     x={xAtM(mVal)}
-                    y={deltaChartH - 6}
+                    y={p1H - 4}
                     textAnchor={
                       i === 0 ? 'start' : i === xTicksM.length - 1 ? 'end' : 'middle'
                     }
-                    fill="#71717A"
+                    fill="var(--ps-muted)"
                     fontSize="8.5"
                     fontFamily="monospace"
                   >
@@ -1465,29 +1156,39 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   </text>
                 ))}
 
-                {/* Synchronized Crosshair */}
+                {/* Crosshair sincronizado */}
                 <line
                   x1={scrubX}
-                  y1={deltaTop}
+                  y1={p1Top}
                   x2={scrubX}
-                  y2={deltaBottom}
+                  y2={p1Bottom}
                   stroke="#FACC15"
-                  strokeWidth="1.2"
+                  strokeWidth="1.5"
                 />
-                {showLap2 && scrubPoint.speedDelta2vs1 !== null && (
+                {scrubPoint.speed1 !== null && (
                   <circle
                     cx={scrubX}
-                    cy={yAtDeltaSpeed(scrubPoint.speedDelta2vs1)}
+                    cy={yAtKmh(scrubPoint.speed1)}
+                    r="4"
+                    fill="#10B981"
+                    stroke="#FFFFFF"
+                    strokeWidth="1.4"
+                  />
+                )}
+                {showLap2 && scrubPoint.speed2 !== null && (
+                  <circle
+                    cx={scrubX}
+                    cy={yAtKmh(scrubPoint.speed2)}
                     r="3.5"
                     fill="#FF2A2A"
                     stroke="#FFFFFF"
                     strokeWidth="1.2"
                   />
                 )}
-                {showLap3 && scrubPoint.speedDelta3vs1 !== null && (
+                {showLap3 && scrubPoint.speed3 !== null && (
                   <circle
                     cx={scrubX}
-                    cy={yAtDeltaSpeed(scrubPoint.speedDelta3vs1)}
+                    cy={yAtKmh(scrubPoint.speed3)}
                     r="3.5"
                     fill="#38BDF8"
                     stroke="#FFFFFF"
@@ -1496,25 +1197,357 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 )}
               </svg>
             </div>
+
+            {/* PAINEL 2 — PEDAL VIRTUAL (+G ACELERAÇÃO vs. -G FRENAGEM) */}
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5">
+              <div className="mb-0.5 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
+                <span className="font-bold uppercase">
+                  Painel 2 · Pedal Virtual (Aceleração +G vs. Frenagem -G)
+                </span>
+                <span>
+                  <strong className="text-[var(--ps-emerald)]">Verde = Acel</strong> ·{' '}
+                  <strong className="text-[#FF2A2A]">Vermelho = Freio</strong>
+                  {showLap2 ? ' · Linha Âmbar = V2' : ''}
+                </span>
+              </div>
+              <svg
+                ref={panel2Ref}
+                viewBox={`0 0 ${chartW} ${p2H}`}
+                className="h-32 w-full touch-none select-none cursor-crosshair sm:h-36"
+                onPointerDown={(e) => {
+                  isDraggingRef.current = true;
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  updateScrubFromSvg(panel2Ref.current, e.clientX);
+                }}
+                onPointerMove={(e) => {
+                  if (!isDraggingRef.current && e.pointerType === 'touch') return;
+                  if (isDraggingRef.current || e.buttons === 1) {
+                    updateScrubFromSvg(panel2Ref.current, e.clientX);
+                  }
+                }}
+                onPointerUp={(e) => {
+                  isDraggingRef.current = false;
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                }}
+                onPointerCancel={() => {
+                  isDraggingRef.current = false;
+                }}
+              >
+                {[maxLongGScale, 0, -maxLongGScale].map((gTick) => {
+                  const y = yAtLongG(gTick);
+                  return (
+                    <g key={`p2_y_${gTick}`}>
+                      <line
+                        x1={padL}
+                        y1={y}
+                        x2={chartW - padR}
+                        y2={y}
+                        stroke={gTick === 0 ? 'var(--ps-muted)' : 'var(--ps-border)'}
+                        strokeOpacity={gTick === 0 ? '0.6' : '0.8'}
+                        strokeDasharray={gTick === 0 ? undefined : '3 3'}
+                      />
+                      <text
+                        x={padL - 5}
+                        y={y + 3}
+                        textAnchor="end"
+                        fill={
+                          gTick > 0 ? '#10B981' : gTick < 0 ? '#FF2A2A' : 'var(--ps-text)'
+                        }
+                        fontSize="8.5"
+                        fontFamily="monospace"
+                      >
+                        {gTick > 0 ? `+${gTick.toFixed(1)}` : gTick.toFixed(1)}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {visibleSectorDividers.map((sec, idx) => (
+                  <line
+                    key={`p2_sec_${idx}`}
+                    x1={xAtM(sec.toM)}
+                    y1={p2Top}
+                    x2={xAtM(sec.toM)}
+                    y2={p2Bottom}
+                    stroke="var(--ps-muted)"
+                    strokeOpacity="0.45"
+                    strokeWidth="1"
+                    strokeDasharray="4 4"
+                  />
+                ))}
+
+                {/* Área Bicolor V1 (+G Verde Aceleração / -G Vermelho Frenagem) */}
+                {pedal1.posPoly && (
+                  <polygon fill="#10B981" fillOpacity="0.34" points={pedal1.posPoly} />
+                )}
+                {pedal1.negPoly && (
+                  <polygon fill="#FF2A2A" fillOpacity="0.38" points={pedal1.negPoly} />
+                )}
+                {pedal1.linePts && (
+                  <polyline
+                    fill="none"
+                    stroke="var(--ps-text)"
+                    strokeWidth="1.6"
+                    strokeOpacity="0.82"
+                    points={pedal1.linePts}
+                  />
+                )}
+
+                {/* V2 sobreposto para comparar freada/retomada */}
+                {showLap2 && pedalLine2 && (
+                  <polyline
+                    fill="none"
+                    stroke="#FBBF24"
+                    strokeWidth="2"
+                    points={pedalLine2}
+                  />
+                )}
+
+                {/* V3 tracejado */}
+                {showLap3 && pedalLine3 && (
+                  <polyline
+                    fill="none"
+                    stroke="#38BDF8"
+                    strokeWidth="1.6"
+                    strokeDasharray="4 3"
+                    points={pedalLine3}
+                  />
+                )}
+
+                <line
+                  x1={scrubX}
+                  y1={p2Top}
+                  x2={scrubX}
+                  y2={p2Bottom}
+                  stroke="#FACC15"
+                  strokeWidth="1.3"
+                />
+                <circle
+                  cx={scrubX}
+                  cy={yAtLongG(scrubPoint.longG1)}
+                  r="3.5"
+                  fill={scrubPoint.longG1 >= 0 ? '#10B981' : '#FF2A2A'}
+                  stroke="#FFFFFF"
+                  strokeWidth="1.2"
+                />
+                {showLap2 && (
+                  <circle
+                    cx={scrubX}
+                    cy={yAtLongG(scrubPoint.longG2)}
+                    r="3.2"
+                    fill="#FBBF24"
+                    stroke="#050608"
+                    strokeWidth="1"
+                  />
+                )}
+                {showLap3 && (
+                  <circle
+                    cx={scrubX}
+                    cy={yAtLongG(scrubPoint.longG3)}
+                    r="3"
+                    fill="#38BDF8"
+                    stroke="#FFFFFF"
+                    strokeWidth="1"
+                  />
+                )}
+              </svg>
+            </div>
+
+            {/* PAINEL 3 — FORÇA LATERAL EM CURVA (LAT G) */}
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5">
+              <div className="mb-0.5 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
+                <span className="font-bold uppercase">
+                  Painel 3 · Força Lateral em Curva (Lat G)
+                </span>
+                <span>Aderência lateral (+Esq / -Dir)</span>
+              </div>
+              <svg
+                ref={panel3Ref}
+                viewBox={`0 0 ${chartW} ${p3H}`}
+                className="h-32 w-full touch-none select-none cursor-crosshair sm:h-36"
+                onPointerDown={(e) => {
+                  isDraggingRef.current = true;
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  updateScrubFromSvg(panel3Ref.current, e.clientX);
+                }}
+                onPointerMove={(e) => {
+                  if (!isDraggingRef.current && e.pointerType === 'touch') return;
+                  if (isDraggingRef.current || e.buttons === 1) {
+                    updateScrubFromSvg(panel3Ref.current, e.clientX);
+                  }
+                }}
+                onPointerUp={(e) => {
+                  isDraggingRef.current = false;
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                }}
+                onPointerCancel={() => {
+                  isDraggingRef.current = false;
+                }}
+              >
+                {[maxLatGScale, 0, -maxLatGScale].map((gTick) => {
+                  const y = yAtLatG(gTick);
+                  return (
+                    <g key={`p3_y_${gTick}`}>
+                      <line
+                        x1={padL}
+                        y1={y}
+                        x2={chartW - padR}
+                        y2={y}
+                        stroke={gTick === 0 ? 'var(--ps-muted)' : 'var(--ps-border)'}
+                        strokeOpacity={gTick === 0 ? '0.6' : '0.8'}
+                        strokeDasharray={gTick === 0 ? undefined : '3 3'}
+                      />
+                      <text
+                        x={padL - 5}
+                        y={y + 3}
+                        textAnchor="end"
+                        fill="var(--ps-muted)"
+                        fontSize="8.5"
+                        fontFamily="monospace"
+                      >
+                        {gTick > 0 ? `+${gTick.toFixed(1)}` : gTick.toFixed(1)}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {visibleSectorDividers.map((sec, idx) => (
+                  <line
+                    key={`p3_sec_${idx}`}
+                    x1={xAtM(sec.toM)}
+                    y1={p3Top}
+                    x2={xAtM(sec.toM)}
+                    y2={p3Bottom}
+                    stroke="var(--ps-muted)"
+                    strokeOpacity="0.45"
+                    strokeWidth="1"
+                    strokeDasharray="4 4"
+                  />
+                ))}
+
+                {latArea1 && <polygon fill="rgba(16, 185, 129, 0.14)" points={latArea1} />}
+                {latLine1 && (
+                  <polyline fill="none" stroke="#10B981" strokeWidth="2.2" points={latLine1} />
+                )}
+                {showLap2 && latLine2 && (
+                  <polyline fill="none" stroke="#FF2A2A" strokeWidth="1.9" points={latLine2} />
+                )}
+                {showLap3 && latLine3 && (
+                  <polyline
+                    fill="none"
+                    stroke="#38BDF8"
+                    strokeWidth="1.7"
+                    strokeDasharray="5 3"
+                    points={latLine3}
+                  />
+                )}
+
+                {xTicksM.map((mVal, i) => (
+                  <text
+                    key={`p3_x_${mVal}_${i}`}
+                    x={xAtM(mVal)}
+                    y={p3H - 4}
+                    textAnchor={
+                      i === 0 ? 'start' : i === xTicksM.length - 1 ? 'end' : 'middle'
+                    }
+                    fill="var(--ps-muted)"
+                    fontSize="8.5"
+                    fontFamily="monospace"
+                  >
+                    {mVal >= 1000 ? `${(mVal / 1000).toFixed(2)}km` : `${mVal}m`}
+                  </text>
+                ))}
+
+                <line
+                  x1={scrubX}
+                  y1={p3Top}
+                  x2={scrubX}
+                  y2={p3Bottom}
+                  stroke="#FACC15"
+                  strokeWidth="1.5"
+                />
+                <circle
+                  cx={scrubX}
+                  cy={yAtLatG(scrubPoint.latG1)}
+                  r="3.5"
+                  fill="#10B981"
+                  stroke="#FFFFFF"
+                  strokeWidth="1.2"
+                />
+                {showLap2 && (
+                  <circle
+                    cx={scrubX}
+                    cy={yAtLatG(scrubPoint.latG2)}
+                    r="3.2"
+                    fill="#FF2A2A"
+                    stroke="#FFFFFF"
+                    strokeWidth="1.1"
+                  />
+                )}
+                {showLap3 && (
+                  <circle
+                    cx={scrubX}
+                    cy={yAtLatG(scrubPoint.latG3)}
+                    r="3"
+                    fill="#38BDF8"
+                    stroke="#FFFFFF"
+                    strokeWidth="1"
+                  />
+                )}
+              </svg>
+            </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="py-12 text-center font-mono text-xs text-[var(--ps-muted)]">
+            Dados insuficientes para gerar as curvas de telemetria.
+          </p>
+        )}
+
+        {/* Slider fino de posição sincronizado com os 3 painéis */}
+        {lap1Samples.length > 1 && (
+          <div className="flex items-center gap-2 pt-0.5">
+            <Crosshair className="h-3.5 w-3.5 shrink-0 text-[var(--ps-amber)]" />
+            <input
+              type="range"
+              aria-label="Cursor de distância sincronizado nos 3 painéis"
+              min={Math.round(viewStartM)}
+              max={Math.round(viewEndM)}
+              value={Math.max(Math.round(viewStartM), Math.min(Math.round(viewEndM), scrubDistM))}
+              onChange={(e) => setScrubDistM(Number(e.target.value))}
+              className="w-full accent-[var(--ps-emerald)]"
+            />
+            <button
+              type="button"
+              onClick={() => setScrubDistM(Math.round(viewStartM))}
+              className="inline-flex h-7 items-center gap-1 rounded border border-[var(--ps-border)] bg-[var(--ps-card)] px-2 font-mono text-[10px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+              title="Voltar cursor ao início do trecho"
+            >
+              <RotateCcw className="h-3 w-3" />
+              <span>{Math.round(viewStartM)}m</span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* 4. TABELA EXPANDIDA POR TRECHO (SETORES — ATÉ 3 VOLTAS LADO A LADO) */}
-      <div className="rounded-xl border border-zinc-800 bg-[#050608] p-3 text-white space-y-2.5">
+      <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-              Telemetria por Trecho (Setores)
+              Telemetria por Trecho (Parciais)
             </h3>
-            <p className="font-mono text-[10px] text-zinc-400">
+            <p className="font-mono text-[10px] text-[var(--ps-muted)]">
               {sectorComparison.rows.some((r) => r.isTrapBased)
-                ? 'Marcos oficiais (Traps) · toque no setor para posicionar o cursor'
-                : '4 trechos iguais · toque no setor para posicionar o cursor'}
+                ? 'Marcos oficiais (Traps) · toque no trecho para ampliar zoom no datalogger'
+                : '4 parciais iguais · toque no trecho para ampliar zoom no datalogger'}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 font-mono text-[10px]">
-            <span className="font-bold text-[#10B981]">V1 #{lap1?.runNumber ?? '-'}</span>
+            <span className="font-bold text-[var(--ps-emerald)]">V1 #{lap1?.runNumber ?? '-'}</span>
             {showLap2 && (
               <span className="font-bold text-[#FF2A2A]">V2 #{lap2?.runNumber ?? '-'}</span>
             )}
@@ -1528,8 +1561,8 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums">
               <thead>
-                <tr className="border-b border-zinc-800 text-[10px] text-zinc-400 uppercase">
-                  <th className="py-2 pr-2">Trecho</th>
+                <tr className="border-b border-[var(--ps-border)] text-[10px] text-[var(--ps-muted)] uppercase">
+                  <th className="py-2 pr-2">Parcial</th>
                   <th className="px-1.5 py-2">Volta</th>
                   <th className="px-1.5 py-2 text-right">Tempo (Δ)</th>
                   <th className="px-1.5 py-2 text-right">V.Máx (Δ)</th>
@@ -1538,7 +1571,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   <th className="py-2 pl-1.5 text-right">Freio / Acel</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/80">
+              <tbody className="divide-y divide-[var(--ps-border)]">
                 {sectorComparison.rows.map((row) => {
                   const isScrubInside =
                     scrubDistM >= row.fromDistM && scrubDistM <= row.toDistM;
@@ -1548,28 +1581,29 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                     const isFirstInSector = entryIdx === 0;
                     const isLastInSector = entryIdx === row.entries.length - 1;
                     const rowBorder = isLastInSector
-                      ? 'border-b border-zinc-700/80'
-                      : 'border-b border-zinc-900';
+                      ? 'border-b border-[var(--ps-border-strong)]'
+                      : 'border-b border-[var(--ps-border)]';
 
                     return (
                       <tr
                         key={`${row.index}_${entry.slot}`}
-                        onClick={() =>
-                          setScrubDistM(Math.round((row.fromDistM + row.toDistM) / 2))
-                        }
-                        className={`cursor-pointer transition-colors hover:bg-zinc-900/70 ${rowBorder} ${
-                          isScrubInside ? 'bg-zinc-900/85' : ''
+                        onClick={() => {
+                          setZoomSectorIdx(row.index);
+                          setScrubDistM(Math.round((row.fromDistM + row.toDistM) / 2));
+                        }}
+                        className={`cursor-pointer transition-colors hover:bg-[var(--ps-card)] ${rowBorder} ${
+                          isScrubInside ? 'bg-[var(--ps-card)]' : ''
                         }`}
                       >
                         {isFirstInSector && (
                           <td
                             rowSpan={row.entries.length}
-                            className="py-2 pr-2 align-top whitespace-nowrap border-r border-zinc-800/70"
+                            className="py-2 pr-2 align-top whitespace-nowrap border-r border-[var(--ps-border)]"
                           >
-                            <span className="font-sans text-xs font-extrabold text-white">
-                              {row.label}
+                            <span className="font-sans text-xs font-extrabold text-[var(--ps-text)]">
+                              P{row.index} · {row.label}
                             </span>
-                            <span className="block text-[10px] text-zinc-500">
+                            <span className="block text-[10px] text-[var(--ps-muted)]">
                               {row.fromDistM}–{row.toDistM}m
                             </span>
                           </td>
@@ -1582,14 +1616,14 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                         </td>
 
                         <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-white">
+                          <span className="font-bold text-[var(--ps-text)]">
                             {formatSectorSec(entry.metrics.durationMs)}
                           </span>
                           {entry.timeDeltaSec !== null && (
                             <span
                               className={`block text-[10px] font-bold ${
                                 entry.timeDeltaSec <= 0
-                                  ? 'text-[#10B981]'
+                                  ? 'text-[var(--ps-emerald)]'
                                   : 'text-[#FF2A2A]'
                               }`}
                             >
@@ -1599,14 +1633,14 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                         </td>
 
                         <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-white">
+                          <span className="font-bold text-[var(--ps-text)]">
                             {entry.metrics.maxSpeedKmh ?? '--'}
                           </span>
                           {entry.maxSpeedDeltaKmh !== null && (
                             <span
                               className={`block text-[10px] font-bold ${
                                 entry.maxSpeedDeltaKmh >= 0
-                                  ? 'text-[#10B981]'
+                                  ? 'text-[var(--ps-emerald)]'
                                   : 'text-[#FF2A2A]'
                               }`}
                             >
@@ -1616,14 +1650,14 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                         </td>
 
                         <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-white">
+                          <span className="font-bold text-[var(--ps-text)]">
                             {entry.metrics.minSpeedKmh ?? '--'}
                           </span>
                           {entry.minSpeedDeltaKmh !== null && (
                             <span
                               className={`block text-[10px] font-bold ${
                                 entry.minSpeedDeltaKmh >= 0
-                                  ? 'text-[#10B981]'
+                                  ? 'text-[var(--ps-emerald)]'
                                   : 'text-[#FF2A2A]'
                               }`}
                             >
@@ -1633,14 +1667,14 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                         </td>
 
                         <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-white">
+                          <span className="font-bold text-[var(--ps-text)]">
                             {entry.metrics.avgSpeedKmh ?? '--'}
                           </span>
                           {entry.avgSpeedDeltaKmh !== null && (
                             <span
                               className={`block text-[10px] font-bold ${
                                 entry.avgSpeedDeltaKmh >= 0
-                                  ? 'text-[#10B981]'
+                                  ? 'text-[var(--ps-emerald)]'
                                   : 'text-[#FF2A2A]'
                               }`}
                             >
@@ -1653,7 +1687,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                           <span className="text-[#FF2A2A] font-bold">
                             {formatG(entry.metrics.peakBrakeG)}
                           </span>
-                          <span className="block text-[10px] text-[#10B981] font-bold">
+                          <span className="block text-[10px] text-[var(--ps-emerald)] font-bold">
                             {formatG(entry.metrics.peakAccelG)}
                           </span>
                         </td>
@@ -1665,29 +1699,29 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
             </table>
           </div>
         ) : (
-          <p className="py-4 text-xs text-zinc-500">
-            Grave ou selecione voltas com amostras GPS para calcular os setores comparativos.
+          <p className="py-4 text-xs text-[var(--ps-muted)]">
+            Grave ou selecione voltas com amostras GPS para calcular as parciais comparativas.
           </p>
         )}
       </div>
 
-      {/* 5. VOLTA IDEAL POR SETORES */}
+      {/* 5. VOLTA IDEAL POR PARCIAIS */}
       {sessionOptimal.sectors.length > 0 && (
-        <div className="rounded-xl border border-zinc-800 bg-[#050608] p-3.5 text-white">
-          <h3 className="text-xs font-bold tracking-wider text-amber-400 uppercase">
-            Volta Ideal por Setores (Marcos)
+        <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 text-[var(--ps-text)]">
+          <h3 className="text-xs font-bold tracking-wider text-[var(--ps-amber)] uppercase">
+            Volta Ideal por Parciais (Marcos)
           </h3>
           <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
             {sessionOptimal.sectors.map((sec) => (
               <div
                 key={sec.sectorIndex}
-                className="rounded-lg border border-zinc-800 bg-[#0A0C10] px-3 py-2 font-mono"
+                className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2 font-mono"
               >
-                <p className="font-sans text-xs font-bold text-[#C0C4C9]">{sec.label}</p>
-                <p className="mt-0.5 text-lg font-extrabold text-amber-300 tabular-nums">
+                <p className="font-sans text-xs font-bold text-[var(--ps-text)]">{sec.label}</p>
+                <p className="mt-0.5 text-lg font-extrabold text-[var(--ps-amber)] tabular-nums">
                   {formatStageDuration(sec.bestMs)}
                 </p>
-                <p className="text-[10px] text-zinc-500">
+                <p className="text-[10px] text-[var(--ps-muted)]">
                   {sec.bestRunNumber ? `Volta #${sec.bestRunNumber}` : 'Sem registro'}
                 </p>
               </div>
@@ -1697,7 +1731,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       )}
 
       {/* 6. VOLTAS DA SESSÃO */}
-      <div className="rounded-xl border border-zinc-800 bg-[#050608] p-3.5 text-white">
+      <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 text-[var(--ps-text)]">
         <div className="flex items-center justify-between">
           <h3 className="font-['Barlow_Condensed'] text-lg font-bold uppercase">
             Voltas da Sessão ({sessionRuns.length})
@@ -1705,7 +1739,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           <button
             type="button"
             onClick={onDeleteSession}
-            className="min-h-[36px] px-2 text-xs font-semibold text-red-400 hover:text-red-300"
+            className="min-h-[36px] px-2 text-xs font-semibold text-red-500 hover:text-red-400"
           >
             Excluir Sessão
           </button>
@@ -1713,29 +1747,29 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         <div className="mt-2 overflow-x-auto">
           <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
             <thead>
-              <tr className="border-b border-zinc-800 text-zinc-400">
+              <tr className="border-b border-[var(--ps-border)] text-[var(--ps-muted)]">
                 <th className="py-2 pr-2">Volta</th>
                 <th className="px-2 py-2">Tempo</th>
                 <th className="px-2 py-2 text-right">Dist.</th>
                 <th className="py-2 pl-2 text-right">Máx</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/70">
+            <tbody className="divide-y divide-[var(--ps-border)]">
               {sessionRuns.map((run) => {
                 const isBest = run.id === sessionOptimal.bestRunId;
                 return (
-                  <tr key={run.id} className={isBest ? 'bg-emerald-950/25' : ''}>
-                    <td className="py-2 pr-2 font-sans font-bold text-white">
+                  <tr key={run.id} className={isBest ? 'bg-emerald-500/10' : ''}>
+                    <td className="py-2 pr-2 font-sans font-bold text-[var(--ps-text)]">
                       #{run.runNumber}{' '}
-                      {isBest && <span className="text-[#10B981]">(Melhor)</span>}
+                      {isBest && <span className="text-[var(--ps-emerald)]">(Melhor)</span>}
                     </td>
-                    <td className="px-2 py-2 font-extrabold text-white">
+                    <td className="px-2 py-2 font-extrabold text-[var(--ps-text)]">
                       {formatStageDuration(run.totalMs)}
                     </td>
-                    <td className="px-2 py-2 text-right text-[#C0C4C9]">
+                    <td className="px-2 py-2 text-right text-[var(--ps-muted)]">
                       {run.distanceKm.toFixed(2)} km
                     </td>
-                    <td className="py-2 pl-2 text-right text-amber-300">
+                    <td className="py-2 pl-2 text-right text-[var(--ps-amber)]">
                       {run.maxSpeedKmh} km/h
                     </td>
                   </tr>
