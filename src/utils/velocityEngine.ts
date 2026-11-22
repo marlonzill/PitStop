@@ -101,6 +101,287 @@ export function haversineMetersVel(
   return R * c;
 }
 
+export const WEB_GPS_WATCH_OPTIONS = {
+  enableHighAccuracy: true,
+  maximumAge: 0,
+  timeout: 3000,
+} as const;
+
+export function getCapacitorGpsWatchOptions(): {
+  enableHighAccuracy: boolean;
+  maximumAge: number;
+  timeout: number;
+} {
+  return {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 3000,
+    interval: 250,
+    fastestInterval: 200,
+  } as unknown as {
+    enableHighAccuracy: boolean;
+    maximumAge: number;
+    timeout: number;
+  };
+}
+
+export interface GpsKalmanInput {
+  lat: number;
+  lon: number;
+  accuracyM: number | null;
+  rawSpeedMs: number | null;
+  rawHeadingDeg: number | null;
+  timestampMs: number;
+}
+
+export interface GpsKalmanOutput {
+  lat: number;
+  lon: number;
+  distStepM: number;
+  speedKmh: number;
+  headingDeg: number | null;
+  accuracyM: number | null;
+  movementDetected: boolean;
+}
+
+interface AxisKalmanState {
+  x: number; // meters from local origin
+  v: number; // m/s
+  p00: number;
+  p01: number;
+  p10: number;
+  p11: number;
+}
+
+/**
+ * 2D Kalman Filter (East/North local tangent plane in meters) calibrated by coords.accuracy.
+ * Eliminates stationary GPS jitter while reacting immediately to walking steps (>= 0.45m or >= 0.5 m/s).
+ */
+export function createGpsKalmanProcessor() {
+  let origin: { lat: number; lon: number; cosLat: number } | null = null;
+  let eastState: AxisKalmanState | null = null;
+  let northState: AxisKalmanState | null = null;
+  let lastTsMs = 0;
+  let lastFilteredPos: { lat: number; lon: number } | null = null;
+  let odoAnchor: { lat: number; lon: number } | null = null;
+  let headingAnchor: { lat: number; lon: number } | null = null;
+  let currentHeadingDeg: number | null = null;
+  let emaSpeedKmh = 0;
+
+  const METERS_PER_DEG_LAT = 111320;
+
+  const toLocalMeters = (lat: number, lon: number) => {
+    if (!origin) {
+      origin = {
+        lat,
+        lon,
+        cosLat: Math.max(0.1, Math.cos((lat * Math.PI) / 180)),
+      };
+    }
+    return {
+      eastM: (lon - origin.lon) * METERS_PER_DEG_LAT * origin.cosLat,
+      northM: (lat - origin.lat) * METERS_PER_DEG_LAT,
+    };
+  };
+
+  const toLatLon = (eastM: number, northM: number) => {
+    if (!origin) return { lat: 0, lon: 0 };
+    return {
+      lat: origin.lat + northM / METERS_PER_DEG_LAT,
+      lon: origin.lon + eastM / (METERS_PER_DEG_LAT * origin.cosLat),
+    };
+  };
+
+  const stepAxis = (
+    st: AxisKalmanState,
+    z: number,
+    dt: number,
+    rVar: number,
+    qAccelVar: number
+  ): AxisKalmanState => {
+    // Predict
+    const xPred = st.x + st.v * dt;
+    const vPred = st.v;
+
+    const dt2 = dt * dt;
+    const dt3 = dt2 * dt;
+    const dt4 = dt2 * dt2;
+
+    const q00 = 0.25 * dt4 * qAccelVar;
+    const q01 = 0.5 * dt3 * qAccelVar;
+    const q11 = dt2 * qAccelVar;
+
+    const p00 = st.p00 + dt * (st.p10 + st.p01) + dt2 * st.p11 + q00;
+    const p01 = st.p01 + dt * st.p11 + q01;
+    const p10 = st.p10 + dt * st.p11 + q01;
+    const p11 = st.p11 + q11;
+
+    // Update with position measurement z
+    const y = z - xPred;
+    const s = p00 + rVar;
+    const k0 = s > 1e-9 ? p00 / s : 0;
+    const k1 = s > 1e-9 ? p10 / s : 0;
+
+    return {
+      x: xPred + k0 * y,
+      v: vPred + k1 * y,
+      p00: Math.max(0.01, (1 - k0) * p00),
+      p01: (1 - k0) * p01,
+      p10: p10 - k1 * p00,
+      p11: Math.max(0.01, p11 - k1 * p01),
+    };
+  };
+
+  const reset = () => {
+    origin = null;
+    eastState = null;
+    northState = null;
+    lastTsMs = 0;
+    lastFilteredPos = null;
+    odoAnchor = null;
+    headingAnchor = null;
+    currentHeadingDeg = null;
+    emaSpeedKmh = 0;
+  };
+
+  const update = (input: GpsKalmanInput): GpsKalmanOutput => {
+    const ts = Number.isFinite(input.timestampMs) && input.timestampMs > 0 ? input.timestampMs : Date.now();
+    const accM =
+      input.accuracyM !== null && Number.isFinite(input.accuracyM)
+        ? Math.max(1, input.accuracyM)
+        : null;
+    const dopplerMs =
+      input.rawSpeedMs !== null && Number.isFinite(input.rawSpeedMs) && input.rawSpeedMs >= 0
+        ? input.rawSpeedMs
+        : 0;
+    const dopplerKmh = dopplerMs * 3.6;
+
+    const needsReset =
+      !origin ||
+      !eastState ||
+      !northState ||
+      !lastFilteredPos ||
+      ts - lastTsMs > 15000 ||
+      haversineMetersVel(lastFilteredPos.lat, lastFilteredPos.lon, input.lat, input.lon) > 500;
+
+    if (needsReset) {
+      origin = {
+        lat: input.lat,
+        lon: input.lon,
+        cosLat: Math.max(0.1, Math.cos((input.lat * Math.PI) / 180)),
+      };
+      const initR = Math.pow(Math.min(25, Math.max(2.5, accM ?? 6)), 2);
+      eastState = { x: 0, v: 0, p00: initR, p01: 0, p10: 0, p11: 4 };
+      northState = { x: 0, v: 0, p00: initR, p01: 0, p10: 0, p11: 4 };
+      lastTsMs = ts;
+      lastFilteredPos = { lat: input.lat, lon: input.lon };
+      odoAnchor = { lat: input.lat, lon: input.lon };
+      headingAnchor = { lat: input.lat, lon: input.lon };
+      if (input.rawHeadingDeg !== null && Number.isFinite(input.rawHeadingDeg)) {
+        currentHeadingDeg = Math.round(((input.rawHeadingDeg % 360) + 360) % 360);
+      }
+      emaSpeedKmh = dopplerKmh >= 1.5 ? dopplerKmh : 0;
+      return {
+        lat: input.lat,
+        lon: input.lon,
+        distStepM: 0,
+        speedKmh: emaSpeedKmh,
+        headingDeg: currentHeadingDeg,
+        accuracyM: accM !== null ? Math.round(accM) : null,
+        movementDetected: dopplerMs >= 0.5,
+      };
+    }
+
+    const dtSec = Math.min(5, Math.max(0.08, (ts - lastTsMs) / 1000));
+    const local = toLocalMeters(input.lat, input.lon);
+    const innovationM = Math.hypot(local.eastM - eastState!.x, local.northM - northState!.x);
+
+    // Calibrate measurement variance R from GPS horizontal accuracy
+    const sigmaM = Math.min(35, Math.max(2.5, accM ?? 7)) * 0.72;
+    const rVar = sigmaM * sigmaM;
+
+    // Adaptive process noise Q: responsive when walking/driving, tight when stationary
+    const activeMotionSignal =
+      dopplerMs >= 0.5 ||
+      innovationM >= Math.max(0.75, Math.min(2.2, sigmaM * 0.45));
+    const qAccelVar = activeMotionSignal ? 12.0 : 0.08;
+
+    eastState = stepAxis(eastState!, local.eastM, dtSec, rVar, qAccelVar);
+    northState = stepAxis(northState!, local.northM, dtSec, rVar, qAccelVar);
+
+    const filt = toLatLon(eastState.x, northState.x);
+    const instStepM = haversineMetersVel(
+      lastFilteredPos!.lat,
+      lastFilteredPos!.lon,
+      filt.lat,
+      filt.lon
+    );
+
+    // Odometer anchor accumulates filtered sub-steps (e.g. 250ms ticks at walking pace) until >= 0.45m
+    const anchorDistM = odoAnchor
+      ? haversineMetersVel(odoAnchor.lat, odoAnchor.lon, filt.lat, filt.lon)
+      : 0;
+    const movementDetected =
+      (anchorDistM >= 0.45 && anchorDistM < 500) ||
+      (dopplerMs >= 0.5 && anchorDistM >= 0.15 && anchorDistM < 500);
+
+    let distStepM = 0;
+    if (movementDetected && odoAnchor) {
+      distStepM = anchorDistM;
+      odoAnchor = { lat: filt.lat, lon: filt.lon };
+    }
+
+    // Heading updates only after >= 1.2m of accumulated directional displacement
+    if (headingAnchor) {
+      const hdgDistM = haversineMetersVel(headingAnchor.lat, headingAnchor.lon, filt.lat, filt.lon);
+      if (hdgDistM >= 1.2 && hdgDistM < 500) {
+        const calcBearing = bearingBetweenDeg(headingAnchor.lat, headingAnchor.lon, filt.lat, filt.lon);
+        currentHeadingDeg =
+          input.rawHeadingDeg !== null && Number.isFinite(input.rawHeadingDeg) && dopplerKmh >= 6
+            ? Math.round(((input.rawHeadingDeg % 360) + 360) % 360)
+            : calcBearing;
+        headingAnchor = { lat: filt.lat, lon: filt.lon };
+      }
+    }
+
+    // EMA speed blending (alpha = 0.65) between chip Doppler and filtered geometric speed
+    const geomSpeedKmh = dtSec >= 0.08 && instStepM < 500 ? (instStepM / dtSec) * 3.6 : 0;
+    const kalmanVelKmh = Math.hypot(eastState.v, northState.v) * 3.6;
+    const bestGeomKmh = geomSpeedKmh > 0.5 ? geomSpeedKmh : kalmanVelKmh;
+    const instSpeedKmh =
+      dopplerKmh >= 1.5
+        ? bestGeomKmh >= 1.0
+          ? 0.65 * dopplerKmh + 0.35 * bestGeomKmh
+          : dopplerKmh
+        : bestGeomKmh;
+
+    const EMA_ALPHA = 0.65;
+    emaSpeedKmh = EMA_ALPHA * instSpeedKmh + (1 - EMA_ALPHA) * emaSpeedKmh;
+
+    // Zero speed ONLY when speed < 1.5 km/h AND filtered displacement < 0.45m
+    let finalSpeedKmh = emaSpeedKmh;
+    if (finalSpeedKmh < 1.5 && anchorDistM < 0.45 && dopplerMs < 0.5) {
+      finalSpeedKmh = 0;
+      emaSpeedKmh = 0;
+    }
+
+    lastTsMs = ts;
+    lastFilteredPos = { lat: filt.lat, lon: filt.lon };
+
+    return {
+      lat: filt.lat,
+      lon: filt.lon,
+      distStepM,
+      speedKmh: finalSpeedKmh,
+      headingDeg: currentHeadingDeg,
+      accuracyM: accM !== null ? Math.round(accM) : null,
+      movementDetected,
+    };
+  };
+
+  return { update, reset };
+}
+
 export function bearingBetweenDeg(
   lat1: number,
   lon1: number,

@@ -12,6 +12,9 @@ import {
   Flag,
   MapPin,
   Navigation,
+  Pause,
+  Pencil,
+  Play,
   RotateCcw,
   Satellite,
   ShieldAlert,
@@ -20,11 +23,13 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { useNavSettings } from '../utils/navSettings';
-import { haversineMeters } from '../utils/rallyEngine';
 import {
   bearingBetweenDeg,
+  createGpsKalmanProcessor,
+  getCapacitorGpsWatchOptions,
   haversineMetersVel,
   parseTrackFileToTrack,
+  WEB_GPS_WATCH_OPTIONS,
   type VelocitySample,
   type VelocityTrack,
   type VelocityTrap,
@@ -213,8 +218,14 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   const [simRunning, setSimRunning] = useState(false);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const [isCounting, setIsCounting] = useState(true);
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState('10.00');
+  const [editingTotalOdo, setEditingTotalOdo] = useState(false);
+  const [totalOdoInput, setTotalOdoInput] = useState('0');
+  const [editingTripOdo, setEditingTripOdo] = useState(false);
+  const [tripOdoInput, setTripOdoInput] = useState('0');
+  const [odoEditUnit, setOdoEditUnit] = useState<'m' | 'km'>('m');
 
   // Limite de Velocidade configurável com alerta visual e sonoro
   const [reccePrefs, setReccePrefs] = useState<ReccePrefs>(() => loadReccePrefs());
@@ -232,7 +243,9 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(null);
   const [headingDeg, setHeadingDeg] = useState<number | null>(null);
 
-  const lastFixRef = useRef<{ lat: number; lon: number; ts: number } | null>(null);
+  const kalmanRef = useRef(createGpsKalmanProcessor());
+  const isCountingRef = useRef(isCounting);
+  isCountingRef.current = isCounting;
   const simProgressKmRef = useRef(0);
   const lastSpokenStepKeyRef = useRef<string>('');
   const calFactorRef = useRef(settings.calibrationPct / 100);
@@ -280,12 +293,13 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     [loadedTrack]
   );
 
-  // Real GPS watcher (active only when tab is active and GPS mode selected)
+  // Continuous High-Accuracy GPS watcher with 2D Kalman Filter (detects walking step-by-step)
   useEffect(() => {
     if (!isActive || source !== 'gps') return;
     let cancelled = false;
     let webWid: number | null = null;
     let capWid: string | null = null;
+    kalmanRef.current.reset();
 
     const handlePos = (
       lat: number,
@@ -297,38 +311,31 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     ) => {
       if (cancelled) return;
       setGpsError(null);
-      setGpsAccuracy(accM !== null ? Math.round(accM) : null);
-      setCurrentPos({ lat, lon });
 
-      const prev = lastFixRef.current;
-      let spd =
-        rawSpeedMs !== null && Number.isFinite(rawSpeedMs) ? Math.max(0, rawSpeedMs * 3.6) : 0;
+      const filtered = kalmanRef.current.update({
+        lat,
+        lon,
+        accuracyM: accM,
+        rawSpeedMs,
+        rawHeadingDeg: rawHeading,
+        timestampMs: ts,
+      });
 
-      if (prev) {
-        const distM = haversineMeters(prev.lat, prev.lon, lat, lon);
-        if (distM >= 0.45 && distM < 450) {
-          const scaledKm = (distM / 1000) * calFactorRef.current;
-          setTotalKm((v) => Math.max(0, v + scaledKm));
-          setTripKm((v) => Math.max(0, v + scaledKm));
-          const dtSec = Math.max(0.2, (ts - prev.ts) / 1000);
-          if (rawSpeedMs === null || rawSpeedMs <= 0) {
-            spd = (distM / dtSec) * 3.6;
-          }
-          if (distM >= 2) {
-            const calcHdg = bearingBetweenDeg(prev.lat, prev.lon, lat, lon);
-            setHeadingDeg(
-              rawHeading !== null && Number.isFinite(rawHeading) ? Math.round(rawHeading) : calcHdg
-            );
-          }
-        }
-      } else if (rawHeading !== null && Number.isFinite(rawHeading)) {
-        setHeadingDeg(Math.round(rawHeading));
+      setGpsAccuracy(filtered.accuracyM);
+      setCurrentPos({ lat: filtered.lat, lon: filtered.lon });
+      if (filtered.headingDeg !== null) {
+        setHeadingDeg(filtered.headingDeg);
       }
 
-      lastFixRef.current = { lat, lon, ts };
-      const spdRounded = Math.round(spd);
+      if (isCountingRef.current && filtered.distStepM > 0) {
+        const scaledKm = (filtered.distStepM / 1000) * calFactorRef.current;
+        setTotalKm((v) => Math.max(0, v + scaledKm));
+        setTripKm((v) => Math.max(0, v + scaledKm));
+      }
+
+      const spdRounded = Math.round(filtered.speedKmh);
       setSpeedKmh(spdRounded);
-      if (spdRounded > 3) {
+      if (isCountingRef.current && spdRounded >= 2) {
         setMaxSpeedKmh((m) => Math.max(m, spdRounded));
         setAvgSpeedSamples((arr) => [...arr.slice(-119), spdRounded]);
       }
@@ -340,7 +347,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           await Geolocation.requestPermissions();
           if (cancelled) return;
           const wid = await Geolocation.watchPosition(
-            { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 },
+            getCapacitorGpsWatchOptions(),
             (pos, err) => {
               if (!cancelled && !err && pos) {
                 handlePos(
@@ -376,7 +383,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           () => {
             if (!cancelled) setGpsError('GPS aguardando sinal (ou use o Simulador).');
           },
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+          WEB_GPS_WATCH_OPTIONS
         );
       } else {
         setGpsError('GPS indisponível neste dispositivo.');
@@ -399,13 +406,15 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
 
     const id = window.setInterval(() => {
       const kmTick = (simSpeedKmh / 3600) * 0.25 * calFactorRef.current;
-      setTotalKm((v) => v + kmTick);
-      setTripKm((v) => v + kmTick);
-      setSpeedKmh(simSpeedKmh);
-      if (simSpeedKmh > 3) {
-        setMaxSpeedKmh((m) => Math.max(m, simSpeedKmh));
-        setAvgSpeedSamples((arr) => [...arr.slice(-119), simSpeedKmh]);
+      if (isCountingRef.current) {
+        setTotalKm((v) => v + kmTick);
+        setTripKm((v) => v + kmTick);
+        if (simSpeedKmh >= 2) {
+          setMaxSpeedKmh((m) => Math.max(m, simSpeedKmh));
+          setAvgSpeedSamples((arr) => [...arr.slice(-119), simSpeedKmh]);
+        }
       }
+      setSpeedKmh(simSpeedKmh);
 
       if (routeSamples.length >= 2 && totalRouteKm > 0.005) {
         const nextDist = simProgressKmRef.current + kmTick;
@@ -613,13 +622,33 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     }
   };
 
-  const adjustDistanceMeters = (deltaMeters: number) => {
-    const deltaKm = deltaMeters / 1000;
-    setTotalKm((v) => Math.max(0, v + deltaKm));
-    setTripKm((v) => Math.max(0, v + deltaKm));
+  const applyOdometerKeyboardValue = (which: 'total' | 'trip', rawText: string) => {
+    const num = Number(rawText.replace(',', '.'));
+    if (Number.isFinite(num) && num >= 0) {
+      const nextKm = odoEditUnit === 'm' ? num / 1000 : num;
+      if (which === 'total') {
+        setTotalKm(nextKm);
+      } else {
+        setTripKm(regressive ? Math.max(0, targetKm - nextKm) : nextKm);
+      }
+    }
+    if (which === 'total') setEditingTotalOdo(false);
+    else setEditingTripOdo(false);
+  };
+
+  const handleResetAllSurvey = () => {
+    setTotalKm(0);
+    setTripKm(0);
+    setMaxSpeedKmh(0);
+    setAvgSpeedSamples([]);
+    setRecceOverCount(0);
+    setReccePeakSpeedKmh(0);
+    simProgressKmRef.current = 0;
   };
 
   const displayedTripKm = regressive ? Math.max(0, targetKm - tripKm) : tripKm;
+  const totalMeters = Math.round(totalKm * 1000);
+  const tripMeters = Math.round(displayedTripKm * 1000);
   const avgSpeedKmh =
     avgSpeedSamples.length > 0
       ? Math.round(avgSpeedSamples.reduce((a, b) => a + b, 0) / avgSpeedSamples.length)
@@ -649,13 +678,19 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   );
 
   return (
-    <div className="mx-auto max-w-5xl space-y-3 text-white">
-      {/* Top Header: Levantamento + GPS/Simulador + Importar KML/KMZ */}
+    <div
+      className={`mx-auto max-w-5xl space-y-2.5 text-white rounded-2xl transition-all ${
+        recceZone === 'over'
+          ? 'ring-2 ring-red-500 bg-red-950/20 p-1.5 shadow-[0_0_32px_rgba(239,68,68,0.45)]'
+          : ''
+      }`}
+    >
+      {/* Top Header: Levantamento & Hodômetro + GPS/Simulador + Importar KML/KMZ */}
       <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2">
         <div className="flex items-center gap-2">
           <Compass className="h-4 w-4 text-[#E10600]" />
           <h1 className="font-['Barlow_Condensed'] text-lg font-extrabold italic tracking-wide uppercase">
-            Levantamento · KML
+            Levantamento &amp; Hodômetro
           </h1>
         </div>
 
@@ -862,12 +897,52 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
         />
       </section>
 
-      {/* Full Odometer Total & Trip Blocks */}
+      {/* Primary Controls: PLAY / PAUSE & ZERAR */}
+      <section className="grid grid-cols-2 gap-2.5">
+        <button
+          type="button"
+          onClick={() => {
+            setIsCounting((prev) => {
+              const next = !prev;
+              if (source === 'simulator') setSimRunning(next);
+              return next;
+            });
+          }}
+          className={`flex min-h-[50px] items-center justify-center gap-2 rounded-xl border px-4 text-sm font-extrabold tracking-wider uppercase transition-colors ${
+            isCounting
+              ? 'border-amber-500/70 bg-amber-600/20 text-amber-300 hover:bg-amber-600/30'
+              : 'border-emerald-500/70 bg-emerald-600/25 text-emerald-300 hover:bg-emerald-600/35'
+          }`}
+        >
+          {isCounting ? (
+            <>
+              <Pause className="h-4 w-4 fill-current" />
+              <span>Pausar Contagem</span>
+            </>
+          ) : (
+            <>
+              <Play className="h-4 w-4 fill-current" />
+              <span>Play Contagem</span>
+            </>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleResetAllSurvey}
+          className="pitstop-btn-metal flex min-h-[50px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-extrabold tracking-wider text-white uppercase"
+        >
+          <RotateCcw className="h-4 w-4 text-[#E10600]" />
+          <span>Zerar Tudo</span>
+        </button>
+      </section>
+
+      {/* Unified Odometer Total & Trip Blocks (Meters + KM, Tap-to-Edit Keyboard Input) */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 sm:p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="font-mono text-xs font-bold tracking-widest text-[#B5B5B5] uppercase">
-              Hodômetro Total (km)
+              Odômetro Total
             </span>
             <button
               type="button"
@@ -878,27 +953,81 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-[#14161A] px-2.5 py-1 text-[11px] font-bold text-[#C0C4C9] hover:text-white"
             >
               <RotateCcw className="h-3 w-3" />
-              <span>Zerar Total</span>
+              <span>Zerar</span>
             </button>
           </div>
-          <div className="my-2 text-center font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
-            {totalKm.toFixed(3).replace('.', ',')}
-          </div>
-          <div className="grid grid-cols-4 gap-1.5">
-            {[-100, -10, 10, 100].map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => adjustDistanceMeters(m)}
-                className="min-h-[42px] rounded-lg border border-zinc-700 bg-[#14161A] font-mono text-xs font-extrabold text-white hover:border-[#E10600] active:scale-[0.97]"
-              >
-                {m > 0 ? `+${m}m` : `${m}m`}
-              </button>
-            ))}
-          </div>
+
+          {editingTotalOdo ? (
+            <div className="my-2.5 space-y-2">
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="any"
+                  autoFocus
+                  value={totalOdoInput}
+                  onChange={(e) => setTotalOdoInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') applyOdometerKeyboardValue('total', totalOdoInput);
+                    if (e.key === 'Escape') setEditingTotalOdo(false);
+                  }}
+                  aria-label="Editar Odômetro Total"
+                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[#E10600] bg-[#14161A] px-3 text-center font-mono text-2xl font-black text-white focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextUnit = odoEditUnit === 'm' ? 'km' : 'm';
+                    setOdoEditUnit(nextUnit);
+                    setTotalOdoInput(
+                      nextUnit === 'm' ? String(totalMeters) : totalKm.toFixed(3)
+                    );
+                  }}
+                  className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#14161A] px-3 font-mono text-xs font-extrabold text-amber-300 uppercase"
+                >
+                  {odoEditUnit}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingTotalOdo(false)}
+                  className="min-h-[36px] rounded-lg border border-zinc-700 bg-[#14161A] text-xs font-bold text-zinc-300"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyOdometerKeyboardValue('total', totalOdoInput)}
+                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold text-white"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setTotalOdoInput(odoEditUnit === 'm' ? String(totalMeters) : totalKm.toFixed(3));
+                setEditingTotalOdo(true);
+              }}
+              title="Toque para digitar a metragem desejada"
+              className="group my-2 flex flex-col items-center justify-center rounded-xl border border-transparent py-1.5 transition-colors hover:border-zinc-700 hover:bg-[#0D0F12]"
+            >
+              <span className="font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
+                {totalMeters.toLocaleString('pt-BR')}{' '}
+                <span className="text-lg font-bold text-zinc-400">m</span>
+              </span>
+              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-zinc-400 tabular-nums">
+                <span>{totalKm.toFixed(2).replace('.', ',')} km</span>
+                <Pencil className="h-3 w-3 text-zinc-500 group-hover:text-[#E10600]" />
+              </span>
+            </button>
+          )}
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 sm:p-5 flex flex-col justify-between">
+        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 flex flex-col justify-between">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
@@ -912,60 +1041,137 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               Trip: {regressive ? 'Regressivo' : 'Progressivo'}
             </button>
 
-            {regressive &&
-              (editingTarget ? (
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  autoFocus
-                  value={targetInput}
-                  onChange={(e) => setTargetInput(e.target.value)}
-                  onBlur={() => {
-                    const n = Number(targetInput.replace(',', '.'));
-                    if (Number.isFinite(n) && n > 0) setTargetKm(n);
-                    setEditingTarget(false);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+            <div className="flex items-center gap-1.5">
+              {regressive &&
+                (editingTarget ? (
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="any"
+                    autoFocus
+                    value={targetInput}
+                    onChange={(e) => setTargetInput(e.target.value)}
+                    onBlur={() => {
                       const n = Number(targetInput.replace(',', '.'));
                       if (Number.isFinite(n) && n > 0) setTargetKm(n);
                       setEditingTarget(false);
-                    }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const n = Number(targetInput.replace(',', '.'));
+                        if (Number.isFinite(n) && n > 0) setTargetKm(n);
+                        setEditingTarget(false);
+                      }
+                    }}
+                    className="w-24 rounded border border-[#E10600] bg-[#14161A] px-2 py-0.5 text-center font-mono text-xs font-bold text-white focus:outline-none"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTargetInput(targetKm.toFixed(2));
+                      setEditingTarget(true);
+                    }}
+                    className="rounded border border-zinc-700 bg-[#14161A] px-2 py-0.5 font-mono text-[11px] font-bold text-[#C0C4C9]"
+                  >
+                    Alvo: {targetKm.toFixed(2)} km
+                  </button>
+                ))}
+
+              <button
+                type="button"
+                onClick={() => setTripKm(0)}
+                className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-[#14161A] px-2.5 py-1 text-[11px] font-bold text-[#C0C4C9] hover:text-white"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>Zerar Trip</span>
+              </button>
+            </div>
+          </div>
+
+          {editingTripOdo ? (
+            <div className="my-2.5 space-y-2">
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="any"
+                  autoFocus
+                  value={tripOdoInput}
+                  onChange={(e) => setTripOdoInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') applyOdometerKeyboardValue('trip', tripOdoInput);
+                    if (e.key === 'Escape') setEditingTripOdo(false);
                   }}
-                  className="w-24 rounded border border-[#E10600] bg-[#14161A] px-2 py-0.5 text-center font-mono text-xs font-bold text-white focus:outline-none"
+                  aria-label="Editar Trip Parcial"
+                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[#E10600] bg-[#14161A] px-3 text-center font-mono text-2xl font-black text-amber-300 focus:outline-none"
                 />
-              ) : (
                 <button
                   type="button"
                   onClick={() => {
-                    setTargetInput(targetKm.toFixed(2));
-                    setEditingTarget(true);
+                    const nextUnit = odoEditUnit === 'm' ? 'km' : 'm';
+                    setOdoEditUnit(nextUnit);
+                    setTripOdoInput(
+                      nextUnit === 'm' ? String(tripMeters) : displayedTripKm.toFixed(3)
+                    );
                   }}
-                  className="rounded border border-zinc-700 bg-[#14161A] px-2 py-0.5 font-mono text-[11px] font-bold text-[#C0C4C9]"
+                  className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#14161A] px-3 font-mono text-xs font-extrabold text-amber-300 uppercase"
                 >
-                  Alvo: {targetKm.toFixed(2)} km
+                  {odoEditUnit}
                 </button>
-              ))}
-          </div>
-
-          <div className="my-3 text-center font-mono text-5xl font-black tracking-tight text-amber-300 tabular-nums sm:text-6xl">
-            {displayedTripKm.toFixed(3).replace('.', ',')}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setTripKm(0)}
-            className="pitstop-btn-red min-h-[48px] w-full rounded-xl text-sm font-extrabold text-white uppercase tracking-wider"
-          >
-            Zerar Trip
-          </button>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingTripOdo(false)}
+                  className="min-h-[36px] rounded-lg border border-zinc-700 bg-[#14161A] text-xs font-bold text-zinc-300"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyOdometerKeyboardValue('trip', tripOdoInput)}
+                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold text-white"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setTripOdoInput(
+                  odoEditUnit === 'm' ? String(tripMeters) : displayedTripKm.toFixed(3)
+                );
+                setEditingTripOdo(true);
+              }}
+              title="Toque para digitar a metragem do Trip"
+              className="group my-2 flex flex-col items-center justify-center rounded-xl border border-transparent py-1.5 transition-colors hover:border-zinc-700 hover:bg-[#0D0F12]"
+            >
+              <span className="font-mono text-4xl font-black tracking-tight text-amber-300 tabular-nums sm:text-5xl">
+                {tripMeters.toLocaleString('pt-BR')}{' '}
+                <span className="text-lg font-bold text-amber-200/70">m</span>
+              </span>
+              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-amber-200/80 tabular-nums">
+                <span>{displayedTripKm.toFixed(2).replace('.', ',')} km</span>
+                <Pencil className="h-3 w-3 text-amber-300/60 group-hover:text-[#E10600]" />
+              </span>
+            </button>
+          )}
         </div>
       </section>
 
       {/* Live Speed Metrics + Limite de Velocidade (Levantamento) */}
       <section className="space-y-3">
         <div className="grid grid-cols-3 gap-2.5 font-mono tabular-nums">
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-center">
+          <div
+            className={`rounded-xl border p-3 text-center transition-colors ${
+              recceZone === 'over'
+                ? 'animate-pulse border-red-500 bg-red-950/80'
+                : 'border-zinc-800 bg-[#111214]'
+            }`}
+          >
             <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Atual</p>
             <p
               className={`mt-0.5 text-3xl font-black sm:text-4xl ${

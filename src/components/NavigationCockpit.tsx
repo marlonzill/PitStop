@@ -57,9 +57,13 @@ import {
 import {
   formatClockMs,
   formatElapsedMs,
-  haversineMeters,
   parseRaceStartTimestampMs,
 } from '../utils/rallyEngine';
+import {
+  createGpsKalmanProcessor,
+  getCapacitorGpsWatchOptions,
+  WEB_GPS_WATCH_OPTIONS,
+} from '../utils/velocityEngine';
 import {
   extractRoadbookDiagnosticDataTxt,
   findActiveTulipaIndexByKm,
@@ -1106,7 +1110,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     message?: string;
   }>({ state: 'idle', accuracyM: null });
 
-  const lastGpsCoordRef = useRef<{ lat: number; lon: number; ts: number } | null>(null);
+  const kalmanRef = useRef(createGpsKalmanProcessor());
+  const calibrationPctRef = useRef(calibrationPct);
+  calibrationPctRef.current = calibrationPct;
   const webWatchIdRef = useRef<number | null>(null);
   const capWatchIdRef = useRef<string | null>(null);
   const lastAlertedTulipaRef = useRef<number>(-1);
@@ -1324,7 +1330,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
       startTimeStr.length === 5 ? `${startTimeStr}:00` : startTimeStr;
     setStartTimeStr(normalized);
     setStartTimestampMs(parseRaceStartTimestampMs(raceDate, normalized));
-    lastGpsCoordRef.current = null;
+    kalmanRef.current.reset();
     setIsRunning(true);
     triggerNavAlertCue('bell');
   };
@@ -1379,38 +1385,33 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     }
 
     setGpsStatus({ state: 'waiting', accuracyM: null });
+    kalmanRef.current.reset();
 
     const onPosition = (
       lat: number,
       lon: number,
       accuracy: number | null,
       speedMs: number | null,
+      heading: number | null,
       ts: number
     ) => {
       if (cancelled) return;
       lastGpsFixTsRef.current = ts || Date.now();
-      const acc = accuracy !== null && Number.isFinite(accuracy) ? Math.round(accuracy) : null;
-      setGpsStatus({ state: 'active', accuracyM: acc });
+      const filtered = kalmanRef.current.update({
+        lat,
+        lon,
+        accuracyM: accuracy,
+        rawSpeedMs: speedMs,
+        rawHeadingDeg: heading,
+        timestampMs: ts,
+      });
 
-      if (speedMs !== null && Number.isFinite(speedMs) && speedMs >= 0) {
-        setCurrentSpeedKmh(Number((speedMs * 3.6).toFixed(1)));
-      }
+      setGpsStatus({ state: 'active', accuracyM: filtered.accuracyM });
+      setCurrentSpeedKmh(Number(filtered.speedKmh.toFixed(1)));
 
-      const prev = lastGpsCoordRef.current;
-      if (prev) {
-        const distM = haversineMeters(prev.lat, prev.lon, lat, lon);
-        const dtSec = Math.max(0.2, (ts - prev.ts) / 1000);
-        const impliedSpeedKmh = (distM / 1000) / (dtSec / 3600);
-        if (distM >= 3.5 && impliedSpeedKmh <= 190) {
-          const calibratedKm = (distM / 1000) * (calibrationPct / 100);
-          setOdometerKm((curr) => Number((curr + calibratedKm).toFixed(4)));
-          lastGpsCoordRef.current = { lat, lon, ts };
-          if (speedMs === null || !Number.isFinite(speedMs)) {
-            setCurrentSpeedKmh(Number(impliedSpeedKmh.toFixed(1)));
-          }
-        }
-      } else {
-        lastGpsCoordRef.current = { lat, lon, ts };
+      if (filtered.distStepM > 0 && filtered.speedKmh <= 210) {
+        const calibratedKm = (filtered.distStepM / 1000) * (calibrationPctRef.current / 100);
+        setOdometerKm((curr) => Number((curr + calibratedKm).toFixed(4)));
       }
     };
 
@@ -1429,7 +1430,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             return;
           }
           const id = await Geolocation.watchPosition(
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 1000 },
+            getCapacitorGpsWatchOptions(),
             (pos, err) => {
               if (err) {
                 setGpsStatus({
@@ -1445,6 +1446,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   pos.coords.longitude,
                   pos.coords.accuracy ?? null,
                   pos.coords.speed ?? null,
+                  pos.coords.heading ?? null,
                   pos.timestamp || Date.now()
                 );
               }
@@ -1487,6 +1489,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
           pos.coords.longitude,
           pos.coords.accuracy ?? null,
           pos.coords.speed ?? null,
+          pos.coords.heading ?? null,
           pos.timestamp || Date.now()
         ),
       (err) => {
@@ -1499,14 +1502,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               : 'Sinal GPS indisponível. Use o Simulador para treinar.',
         });
       },
-      { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+      WEB_GPS_WATCH_OPTIONS
     );
 
     return () => {
       cancelled = true;
       cleanup();
     };
-  }, [isRunning, driveSource, calibrationPct]);
+  }, [isRunning, driveSource]);
 
   // Auto-advance with configurable Totem transition advance (meters before next tulipa)
   useEffect(() => {
