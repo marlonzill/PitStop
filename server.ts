@@ -648,6 +648,342 @@ async function startServer(): Promise<void> {
     }
   });
 
+  const SATCRON_ALLOWED_HOSTS = new Set(['satcron.com', 'www.satcron.com']);
+
+  function sanitizeSatcronText(raw: string): string {
+    return raw
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function resolveSafeSatcronUrl(rawUrl?: string, race?: string, mod?: string, ss?: string): URL | null {
+    const defaultUrl = new URL('https://satcron.com/stages/?race=novaitalia26&mod=1&ss=G');
+    let parsed: URL;
+    try {
+      const candidate = (rawUrl || '').trim();
+      if (!candidate) {
+        parsed = defaultUrl;
+      } else {
+        parsed = new URL(candidate.startsWith('http') ? candidate : `https://${candidate}`);
+      }
+    } catch {
+      return null;
+    }
+
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:';
+    }
+    if (parsed.protocol !== 'https:') return null;
+    if (parsed.username || parsed.password) return null;
+    if (!SATCRON_ALLOWED_HOSTS.has(parsed.hostname.toLowerCase())) return null;
+
+    if (race && /^[a-zA-Z0-9_-]{2,48}$/.test(race.trim())) {
+      parsed.searchParams.set('race', race.trim());
+    }
+    if (mod && /^[a-zA-Z0-9_-]{1,12}$/.test(mod.trim())) {
+      parsed.searchParams.set('mod', mod.trim());
+    }
+    if (ss && /^[a-zA-Z0-9_-]{1,12}$/.test(ss.trim())) {
+      parsed.searchParams.set('ss', ss.trim());
+    }
+    return parsed;
+  }
+
+  function extractBalancedJson(source: string, keyMarker: string): Record<string, unknown> | null {
+    const idx = source.indexOf(keyMarker);
+    if (idx === -1) return null;
+    const braceStart = source.indexOf('{', idx + keyMarker.length);
+    if (braceStart === -1) return null;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = braceStart; i < source.length && i < braceStart + 65000; i += 1) {
+      const ch = source[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (ch === '{') depth += 1;
+        else if (ch === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            try {
+              const snippet = source.slice(braceStart, i + 1);
+              return JSON.parse(snippet) as Record<string, unknown>;
+            } catch {
+              return null;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  app.get('/api/satcron/stages', async (req: Request, res: Response) => {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url : undefined;
+    const qRace = typeof req.query.race === 'string' ? req.query.race : undefined;
+    const qMod = typeof req.query.mod === 'string' ? req.query.mod : undefined;
+    const qSs = typeof req.query.ss === 'string' ? req.query.ss : undefined;
+
+    const targetUrl = resolveSafeSatcronUrl(rawUrl, qRace, qMod, qSs);
+    if (!targetUrl) {
+      res.status(400).json({
+        ok: false,
+        error: 'URL inválida. Apenas endereços oficiais satcron.com são permitidos.',
+      });
+      return;
+    }
+
+    const race = targetUrl.searchParams.get('race') || 'novaitalia26';
+    const mod = targetUrl.searchParams.get('mod') || '1';
+    const ss = targetUrl.searchParams.get('ss') || 'G';
+
+    try {
+      const pageResp = await fetch(targetUrl.toString(), {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 PitStopSports/1.0',
+          Accept: 'text/html,application/xhtml+xml',
+        },
+        signal: AbortSignal.timeout(9000),
+      });
+
+      if (!pageResp.ok) {
+        res.status(502).json({
+          ok: false,
+          error: `Satcron respondeu com HTTP ${pageResp.status}.`,
+        });
+        return;
+      }
+
+      const html = await pageResp.text();
+
+      const pageTitleMatch = html.match(/id=["']PageTitle["'][^>]*>([\s\S]*?)<\/div>/i);
+      const htmlTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+      const eventTitle = sanitizeSatcronText(
+        pageTitleMatch?.[1] || htmlTitleMatch?.[1] || `Satcron (${race})`
+      ).replace(/\s*-\s*ChronoStages$/i, '');
+
+      const bodyStripped = html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ');
+      const subtitleMatch = html.match(/class=["'][^"']*bfw-subtitle[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+      const stageHeaderMatch = html.match(/class=["'][^"']*CS-stage-title[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+      const stageRegexMatch = sanitizeSatcronText(bodyStripped).match(/(SS\d+[^.]{0,90}\(\d+(?:\.\d+)?\s*km\))/i);
+
+      const subtitle = subtitleMatch ? sanitizeSatcronText(subtitleMatch[1]) : '';
+      const stageTitle = stageHeaderMatch
+        ? sanitizeSatcronText(stageHeaderMatch[1])
+        : stageRegexMatch?.[1] || (ss === 'G' ? 'Classificação Geral (Acumulado)' : `Especial SS${ss}`);
+
+      const modernConfig = extractBalancedJson(html, 'modernApiConfig:');
+      const rawModalidades =
+        modernConfig && typeof modernConfig.modalidades === 'object' && modernConfig.modalidades
+          ? (modernConfig.modalidades as Record<string, Record<string, unknown>>)
+          : {};
+
+      const modalities = Object.entries(rawModalidades).map(([id, cfg]) => {
+        const rawCats = Array.isArray(cfg.cats)
+          ? (cfg.cats as Array<Record<string, unknown>>)
+          : [];
+        const splitDists =
+          cfg.splitDists && typeof cfg.splitDists === 'object'
+            ? Object.keys(cfg.splitDists as Record<string, unknown>)
+            : [];
+        return {
+          id,
+          name: typeof cfg.name === 'string' ? cfg.name : `Mod ${id}`,
+          apiArgs: typeof cfg.apiArgs === 'string' ? cfg.apiArgs : '',
+          staticJSONFile: typeof cfg.staticJSONFile === 'string' ? cfg.staticJSONFile : '',
+          stageIds: splitDists,
+          categories: rawCats.map((c) => ({
+            cat: String(c.cat || ''),
+            desc: String(c.cat_desc || c.cat || ''),
+          })),
+        };
+      });
+
+      const activeMod =
+        modalities.find((m) => m.id === mod) || modalities[0] || null;
+
+      // Parse HTML <select> menus & static tables if rendered by ChronoStages
+      const selectControls: Array<{
+        id: string;
+        options: Array<{ value: string; label: string; selected: boolean }>;
+      }> = [];
+      for (const sm of html.matchAll(/<select([^>]*)>([\s\S]*?)<\/select>/gi)) {
+        const idM = sm[1].match(/id=["']([^"']+)["']/i);
+        const options: Array<{ value: string; label: string; selected: boolean }> = [];
+        for (const om of sm[2].matchAll(/<option([^>]*)>([\s\S]*?)<\/option>/gi)) {
+          const valM = om[1].match(/value=["']([^"']*)["']/i);
+          const lbl = sanitizeSatcronText(om[2]);
+          if (lbl && lbl !== 'Carregando...') {
+            options.push({
+              value: valM ? valM[1] : lbl,
+              label: lbl,
+              selected: /selected/i.test(om[1]),
+            });
+          }
+        }
+        if (options.length > 0) {
+          selectControls.push({ id: idM?.[1] || 'select', options });
+        }
+      }
+
+      const tables: Array<{ headers: string[]; rows: string[][] }> = [];
+      for (const tm of html.matchAll(/<table[^>]*>([\s\S]*?)<\/table>/gi)) {
+        const headers: string[] = [];
+        const rows: string[][] = [];
+        for (const tr of tm[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+          const thCells = [...tr[1].matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)].map((m) =>
+            sanitizeSatcronText(m[1])
+          );
+          const tdCells = [...tr[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) =>
+            sanitizeSatcronText(m[1])
+          );
+          if (thCells.length > 0 && headers.length === 0) {
+            headers.push(...thCells);
+          } else if (tdCells.length > 0) {
+            rows.push(tdCells);
+          }
+        }
+        if (rows.length > 0 || headers.length > 0) {
+          tables.push({ headers, rows });
+        }
+      }
+
+      // Try Satcron cache_api.php endpoints cleanly using allowlisted origin
+      let liveStatusMessage = '';
+      const standings: Array<{
+        pos: string;
+        carNo: string;
+        crew: string;
+        category: string;
+        stageTime: string;
+        totalTime: string;
+        diffLeader: string;
+      }> = [];
+
+      const safeApiArgs = activeMod?.apiArgs
+        ? activeMod.apiArgs.replace(/[^a-zA-Z0-9=&_-]/g, '')
+        : 'db=9';
+
+      const fetchSatcronEndpoint = async (endpoint: string) => {
+        const epUrl = new URL('https://satcron.com/stages/api/cache_api.php');
+        epUrl.searchParams.set('race', race);
+        if (safeApiArgs) {
+          for (const pair of safeApiArgs.split('&')) {
+            const [k, v] = pair.split('=');
+            if (k && v) epUrl.searchParams.set(k, v);
+          }
+        }
+        epUrl.searchParams.set('endpoint', endpoint);
+        const r = await fetch(epUrl.toString(), {
+          signal: AbortSignal.timeout(5000),
+          headers: { Accept: 'application/json' },
+        });
+        if (!r.ok) return null;
+        return (await r.json()) as Record<string, unknown>;
+      };
+
+      const [crewsData, raceTimesData, stageTimesData] = await Promise.all([
+        fetchSatcronEndpoint('crews').catch(() => null),
+        fetchSatcronEndpoint('racetimes').catch(() => null),
+        fetchSatcronEndpoint('stagetimes').catch(() => null),
+      ]);
+
+      const errorPayload = [crewsData, raceTimesData, stageTimesData].find(
+        (d) => d && d.status === 'error' && typeof d.message === 'string'
+      );
+      if (errorPayload && typeof errorPayload.message === 'string') {
+        liveStatusMessage = errorPayload.message;
+      }
+
+      // Normalize rows if live JSON arrays or maps are returned
+      const crewsMap = new Map<string, { crew: string; category: string }>();
+      const rawCrewList = Array.isArray(crewsData?.data)
+        ? crewsData.data
+        : Array.isArray(crewsData?.crews)
+          ? crewsData.crews
+          : Array.isArray(crewsData)
+            ? crewsData
+            : [];
+      for (const item of rawCrewList as Array<Record<string, unknown>>) {
+        const carNo = String(item.car ?? item.carNo ?? item.num ?? item.id ?? '');
+        if (!carNo) continue;
+        const driver = String(item.driver ?? item.piloto ?? item.crew ?? '');
+        const codriver = String(item.codriver ?? item.navegador ?? '');
+        const crewName = codriver ? `${driver} / ${codriver}` : driver || `Carro #${carNo}`;
+        const cat = String(item.cat ?? item.category ?? '');
+        crewsMap.set(carNo, { crew: crewName, category: cat });
+      }
+
+      const timeSource = ss === 'G' ? raceTimesData : stageTimesData || raceTimesData;
+      const rawTimeRows = Array.isArray(timeSource?.data)
+        ? timeSource.data
+        : Array.isArray(timeSource?.rows)
+          ? timeSource.rows
+          : Array.isArray(timeSource)
+            ? timeSource
+            : [];
+      for (let i = 0; i < (rawTimeRows as Array<Record<string, unknown>>).length; i += 1) {
+        const row = (rawTimeRows as Array<Record<string, unknown>>)[i];
+        const carNo = String(row.car ?? row.carNo ?? row.num ?? '');
+        const crewInfo = crewsMap.get(carNo);
+        standings.push({
+          pos: String(row.pos ?? row.rank ?? i + 1),
+          carNo: carNo || '-',
+          crew: String(row.crew ?? crewInfo?.crew ?? `Carro #${carNo || i + 1}`),
+          category: String(row.cat ?? row.category ?? crewInfo?.category ?? '-'),
+          stageTime: String(row.stagetime ?? row.ss_time ?? row.time ?? '-'),
+          totalTime: String(row.total ?? row.racetime ?? row.accumulated ?? row.time ?? '-'),
+          diffLeader: String(row.diff ?? row.diff_first ?? row.gap ?? '-'),
+        });
+      }
+
+      res.json({
+        ok: true,
+        sourceUrl: targetUrl.toString(),
+        race,
+        mod,
+        ss,
+        eventTitle,
+        subtitle,
+        stageTitle,
+        liveStatusMessage,
+        modalities,
+        categories: activeMod?.categories || [],
+        stageIds: activeMod?.stageIds || [],
+        selectControls,
+        tables,
+        standings,
+        fetchedAtMs: Date.now(),
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Falha de conexão com Satcron';
+      res.status(502).json({
+        ok: false,
+        error: `Não foi possível consultar o Satcron: ${detail}`,
+      });
+    }
+  });
+
   const isProd = process.env.NODE_ENV === 'production';
   if (!isProd) {
     const vite = await createViteServer({

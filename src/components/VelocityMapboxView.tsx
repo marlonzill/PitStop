@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
+  Compass,
   Crosshair,
   Layers,
   LocateFixed,
@@ -43,6 +44,8 @@ interface VelocityMapboxViewProps {
   postEditIdx: number;
   currentPos: { lat: number; lon: number } | null;
   navigationMode?: boolean;
+  headingUp?: boolean;
+  onToggleHeadingUp?: () => void;
   navHeadingDeg?: number | null;
   heatmapMode?: 'none' | 'speed' | 'accel';
   containerClassName?: string;
@@ -186,6 +189,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   postEditIdx,
   currentPos,
   navigationMode = false,
+  headingUp,
+  onToggleHeadingUp,
   navHeadingDeg = null,
   heatmapMode = 'none',
   containerClassName = 'relative mt-2 h-80 w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[420px]',
@@ -223,6 +228,13 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
 
   const [styleIndex, setStyleIndex] = useState(0); // Default: Satélite
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [internalHeadingUp, setInternalHeadingUp] = useState(true);
+
+  const effectiveHeadingUp = headingUp !== undefined ? headingUp : internalHeadingUp;
+  const rotationDeg =
+    navigationMode && effectiveHeadingUp && typeof navHeadingDeg === 'number'
+      ? -navHeadingDeg
+      : 0;
 
   const currentStyle = MAP_STYLES[styleIndex];
 
@@ -642,10 +654,38 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   return (
     <div
       className={
-        isFullscreen ? 'fixed inset-0 z-50 bg-[#080B0D]' : containerClassName
+        isFullscreen ? 'fixed inset-0 z-50 overflow-hidden bg-[#080B0D]' : containerClassName
       }
     >
-      <div ref={containerRef} className="h-full w-full" />
+      <div
+        ref={containerRef}
+        className="h-full w-full transition-transform duration-300 ease-out will-change-transform"
+        style={
+          rotationDeg !== 0
+            ? { transform: `rotate(${rotationDeg}deg) scale(1.42)` }
+            : undefined
+        }
+      />
+
+      {/* Live Heading-Up vs Norte Fixo mode toggle when navigationMode is enabled */}
+      {navigationMode && (
+        <button
+          type="button"
+          onClick={() => {
+            if (onToggleHeadingUp) onToggleHeadingUp();
+            else setInternalHeadingUp((v) => !v);
+          }}
+          className={`absolute top-2.5 left-2.5 z-[400] inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-extrabold shadow-lg backdrop-blur-xs ${
+            effectiveHeadingUp
+              ? 'border-[#E10600]/80 bg-[#1A0D0E]/90 text-white'
+              : 'border-zinc-700 bg-[#080B0D]/90 text-[#C0C4C9]'
+          }`}
+          title="Alternar entre seguir sentido do veículo (Heading-Up) ou Norte Fixo"
+        >
+          <Compass className={`h-3.5 w-3.5 ${effectiveHeadingUp ? 'text-[#E10600]' : 'text-sky-400'}`} />
+          <span>{effectiveHeadingUp ? 'Heading-Up' : 'Norte Fixo'}</span>
+        </button>
+      )}
 
       {/* Central Crosshair Mira overlay when placing Marcos interactively */}
       {placementKind && (

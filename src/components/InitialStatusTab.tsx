@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
-import { Battery, Calculator, Flag, Route, Satellite, Settings } from 'lucide-react';
+import { Battery, Calculator, Flag, Route, Satellite, Settings, Wifi, WifiOff } from 'lucide-react';
 import type { ActiveTab } from '../types/rally';
 import { useNavSettings } from '../utils/navSettings';
 import { listSavedRoadbooks } from '../utils/roadbookStorage';
@@ -28,6 +28,20 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
   const [gpsActive, setGpsActive] = useState(false);
   const [batteryPct, setBatteryPct] = useState<number | null>(null);
   const [savedCount, setSavedCount] = useState(0);
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
 
   useEffect(() => {
     listSavedRoadbooks()
@@ -92,13 +106,13 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
 
   return (
     <div className="relative -mx-2 -mt-2.5 flex min-h-[calc(100dvh-7.8rem)] flex-col items-center justify-end overflow-hidden bg-[#080B0D] px-3 pt-44 pb-7 text-center sm:-mx-6 sm:-mt-5 sm:min-h-[calc(100dvh-8.4rem)] sm:px-6 sm:pt-56 sm:pb-8">
-      {/* Full-bleed PitStop-Sports Hero Background + Pulsing Side LED Glow Overlays (100% pointer-events-none) */}
+      {/* Clean Full-Bleed PitStop-Sports Hero Background */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 overflow-hidden select-none"
       >
-        {/* Centered portrait emblem canvas matching original image proportions */}
-        <div className="relative mx-auto h-full w-full max-w-[540px]">
+        {/* Centered portrait emblem canvas */}
+        <div className="relative mx-auto h-full w-full max-w-[540px] overflow-hidden">
           <img
             src={HOME_BG_URL}
             alt=""
@@ -113,17 +127,6 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
                 'radial-gradient(ellipse 64% 58% at 50% 34%, transparent 48%, rgba(8,11,13,0.72) 82%, #080B0D 100%)',
             }}
           />
-
-          {/* Side Pulsing LED Glow Overlays (-18deg) emerging from left & right edges without covering center PITSTOP SPORTS text */}
-          {/* Left Side Red Neon + Cool White LED Beams */}
-          <div className="pitstop-led-red-left absolute top-[34%] -left-[10%] h-8 w-[34%] sm:h-10" />
-          <div className="pitstop-led-white-left absolute top-[29.5%] -left-[10%] h-3.5 w-[30%] sm:h-4" />
-          <div className="pitstop-led-ignition-left absolute top-[32%] -left-[10%] h-4 w-[31%]" />
-
-          {/* Right Side Cool White + Red Neon LED Beams */}
-          <div className="pitstop-led-white-right absolute top-[20.5%] -right-[10%] h-4 w-[31%] sm:h-5" />
-          <div className="pitstop-led-red-right absolute top-[25%] -right-[10%] h-6 w-[30%] sm:h-8" />
-          <div className="pitstop-led-ignition-right absolute top-[22%] -right-[10%] h-4 w-[30%]" />
         </div>
 
         {/* Top & Bottom Dark Asphalt Fades for Clean Integration and Crisp Button Contrast */}
@@ -186,8 +189,8 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
           </button>
         </div>
 
-        {/* Minimal Unboxed Readiness Line */}
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 font-mono text-[11px] text-[#B5B5B5] tabular-nums">
+        {/* Minimal Unboxed Readiness Line with Internet Signal */}
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3.5 gap-y-1.5 font-mono text-[11px] text-[#B5B5B5] tabular-nums">
           <span className="inline-flex items-center gap-1.5">
             <Satellite className={`h-3.5 w-3.5 ${gpsActive ? 'text-emerald-400' : 'text-[#E10600]'}`} />
             <span>
@@ -198,6 +201,17 @@ export const InitialStatusTab: React.FC<InitialStatusTabProps> = ({ onNavigate }
           <span className="inline-flex items-center gap-1.5">
             <Battery className="h-3.5 w-3.5 text-[#C0C4C9]" />
             <span>Bateria {batteryPct !== null ? `${batteryPct}%` : '--'}</span>
+          </span>
+          <span aria-hidden="true" className="text-zinc-700">·</span>
+          <span className="inline-flex items-center gap-1.5">
+            {isOnline ? (
+              <Wifi className="h-3.5 w-3.5 text-emerald-400" />
+            ) : (
+              <WifiOff className="h-3.5 w-3.5 text-amber-400" />
+            )}
+            <span className={isOnline ? 'text-emerald-400' : 'text-amber-300'}>
+              {isOnline ? 'Online' : 'Offline'}
+            </span>
           </span>
           <span aria-hidden="true" className="text-zinc-700">·</span>
           <span>

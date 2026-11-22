@@ -1286,34 +1286,129 @@ export function ensureTraceGForces(samples: VelocitySample[]): VelocitySample[] 
 }
 
 /**
- * Reconhece automaticamente o circuito/especial mais próximo dentro do raio em metros.
+ * Infere o azimute (0-360°) mais próximo ao longo de um traçado base já gravado/importado.
+ */
+export function inferNearestBaseTraceBearing(
+  lat: number,
+  lon: number,
+  trace?: VelocitySample[]
+): number | null {
+  if (!trace || trace.length < 2) return null;
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < trace.length; i += 1) {
+    const d = haversineMetersVel(lat, lon, trace[i].lat, trace[i].lon);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  const p0 = trace[Math.max(0, bestIdx - 1)];
+  const p1 = trace[Math.min(trace.length - 1, bestIdx + 2)];
+  if (!p0 || !p1 || (p0.lat === p1.lat && p0.lon === p1.lon)) return null;
+  return bearingBetweenDeg(p0.lat, p0.lon, p1.lat, p1.lon);
+}
+
+/**
+ * Se uma pista possui traçado (baseTrace >= 2 pontos) e nenhum Marco cadastrado,
+ * gera automaticamente Largada (ponto inicial) e Chegada (ponto final) ou Largada/Chegada no circuito.
+ */
+export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrack {
+  if (track.traps.length > 0 || !track.baseTrace || track.baseTrace.length < 2) {
+    return track;
+  }
+  const pts = track.baseTrace;
+  const pStart = pts[0];
+  const pStartNext = pts[Math.min(3, pts.length - 1)];
+  const startBearing =
+    pStart.lat === pStartNext.lat && pStart.lon === pStartNext.lon
+      ? 0
+      : bearingBetweenDeg(pStart.lat, pStart.lon, pStartNext.lat, pStartNext.lon);
+
+  if (track.mode === 'circuit') {
+    return {
+      ...track,
+      traps: [
+        {
+          id: `trap_sf_auto_${track.id}`,
+          name: 'Largada / Chegada',
+          kind: 'start_finish',
+          lat: pStart.lat,
+          lon: pStart.lon,
+          bearingDeg: startBearing,
+          widthM: 25,
+          unidirectional: true,
+        },
+      ],
+    };
+  }
+
+  const pEnd = pts[pts.length - 1];
+  const pEndPrev = pts[Math.max(0, pts.length - 4)];
+  const endBearing =
+    pEndPrev.lat === pEnd.lat && pEndPrev.lon === pEnd.lon
+      ? startBearing
+      : bearingBetweenDeg(pEndPrev.lat, pEndPrev.lon, pEnd.lat, pEnd.lon);
+
+  return {
+    ...track,
+    traps: [
+      {
+        id: `trap_start_auto_${track.id}`,
+        name: 'Largada (Start)',
+        kind: 'start',
+        lat: pStart.lat,
+        lon: pStart.lon,
+        bearingDeg: startBearing,
+        widthM: 25,
+        unidirectional: true,
+      },
+      {
+        id: `trap_finish_auto_${track.id}`,
+        name: 'Chegada (Finish)',
+        kind: 'finish',
+        lat: pEnd.lat,
+        lon: pEnd.lon,
+        bearingDeg: endBearing,
+        widthM: 25,
+        unidirectional: true,
+      },
+    ],
+  };
+}
+
+/**
+ * Reconhece automaticamente o circuito/especial mais próximo medindo EXCLUSIVAMENTE
+ * a distância até a linha de Largada (Start / Start-Finish) ou ponto inicial do traçado.
  */
 export function autoDetectNearestTrack(
   lat: number,
   lon: number,
   tracks: VelocityTrack[],
-  radiusM = 2500
+  radiusM = 35
 ): { track: VelocityTrack; distanceM: number } | null {
   let bestTrack: VelocityTrack | null = null;
   let bestDist = Infinity;
 
   for (const trk of tracks) {
-    for (const trap of trk.traps) {
-      const d = haversineMetersVel(lat, lon, trap.lat, trap.lon);
-      if (d <= radiusM && d < bestDist) {
-        bestDist = d;
-        bestTrack = trk;
-      }
-    }
-    if (trk.baseTrace && trk.baseTrace.length > 0) {
-      const step = Math.max(1, Math.floor(trk.baseTrace.length / 12));
-      for (let i = 0; i < trk.baseTrace.length; i += step) {
-        const pt = trk.baseTrace[i];
-        const d = haversineMetersVel(lat, lon, pt.lat, pt.lon);
+    const startGates = trk.traps.filter(
+      (t) => t.kind === 'start' || t.kind === 'start_finish'
+    );
+
+    if (startGates.length > 0) {
+      for (const gate of startGates) {
+        const d = haversineMetersVel(lat, lon, gate.lat, gate.lon);
         if (d <= radiusM && d < bestDist) {
           bestDist = d;
           bestTrack = trk;
         }
+      }
+    } else if (trk.baseTrace && trk.baseTrace.length > 0) {
+      const p0 = trk.baseTrace[0];
+      const d = haversineMetersVel(lat, lon, p0.lat, p0.lon);
+      if (d <= radiusM && d < bestDist) {
+        bestDist = d;
+        bestTrack = trk;
       }
     }
   }

@@ -33,10 +33,12 @@ import {
   Square,
   Trash2,
   TrendingUp,
+  Trophy,
   Upload,
   X,
 } from 'lucide-react';
 import { OdometerCockpit } from './OdometerCockpit';
+import { SatcronLivePanel } from './SatcronLivePanel';
 import { SurveyCockpit } from './SurveyCockpit';
 import { VelocityMapboxView } from './VelocityMapboxView';
 import { useNavSettings } from '../utils/navSettings';
@@ -61,6 +63,7 @@ import {
   computeSampleGForces,
   createDemoSpecialStage,
   detectTrapCrossing,
+  ensureAutoTrapsFromBaseTrace,
   ensureTraceGForces,
   exportTrackGeoJson,
   exportTrackGpx,
@@ -68,6 +71,7 @@ import {
   formatStageDuration,
   getOrderedTrackTraps,
   haversineMetersVel,
+  inferNearestBaseTraceBearing,
   parseTrackFileToTrack,
   recalculateRunsForTrack,
   type LapComparisonSummary,
@@ -96,7 +100,8 @@ type VelocityScreen =
   | 'track-editor'
   | 'settings'
   | 'odometer'
-  | 'survey';
+  | 'survey'
+  | 'satcron';
 
 type LivePanelMode = 'timer' | 'gauges';
 type VelDriveSource = 'gps' | 'simulator';
@@ -108,7 +113,7 @@ interface VelocityPrefs {
   useDeviceImu: boolean;
 }
 
-const VEL_PREFS_KEY = 'pitstop_velocity_prefs_v2';
+const VEL_PREFS_KEY = 'pitstop_velocity_prefs_v3';
 const GAUGE_PREFS_KEY = 'pitstop_velocity_gauges_v1';
 
 interface GaugeVisibility {
@@ -124,7 +129,7 @@ interface GaugeVisibility {
 
 const DEFAULT_VEL_PREFS: VelocityPrefs = {
   autoDetectTrack: true,
-  autoDetectRadiusM: 2500,
+  autoDetectRadiusM: 35,
   autoSnapHdop: true,
   useDeviceImu: true,
 };
@@ -534,6 +539,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [goproDrawerOpen, setGoproDrawerOpen] = useState(false);
   const [editingGoProId, setEditingGoProId] = useState<string | null>(null);
   const [editingGoProName, setEditingGoProName] = useState('');
+  const [showLiveMap, setShowLiveMap] = useState(true);
+  const [liveHeadingUp, setLiveHeadingUp] = useState(true);
+  const [liveHeatmapMode, setLiveHeatmapMode] = useState<'accel' | 'speed'>('accel');
 
   const tracksRef = useRef<VelocityTrack[]>(tracks);
   tracksRef.current = tracks;
@@ -580,11 +588,12 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     const syncDb = () => {
       loadVelocityDatabase().then(({ tracks: loadedTracks, runs: loadedRuns }) => {
         if (!alive) return;
-        setTracks(loadedTracks);
+        const normalizedTracks = loadedTracks.map((t) => ensureAutoTrapsFromBaseTrace(t));
+        setTracks(normalizedTracks);
         setRuns(loadedRuns);
         setActiveTrackId((prev) => {
-          if (prev && loadedTracks.some((t) => t.id === prev)) return prev;
-          return loadedTracks[0]?.id ?? '';
+          if (prev && normalizedTracks.some((t) => t.id === prev)) return prev;
+          return normalizedTracks[0]?.id ?? '';
         });
         setDbLoaded(true);
       });
@@ -768,7 +777,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     (
       finishedAtMs: number,
       splitsOverride?: Record<string, number>,
-      continueNextLap = false
+      continueNextLap = false,
+      rearmAfterFinish = false
     ) => {
       const startMs = stageStartMsRef.current;
       if (!startMs) return;
@@ -799,11 +809,11 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         setTracks((prev) =>
           prev.map((t) =>
             t.id === activeTrack.id && (!t.baseTrace || t.baseTrace.length === 0)
-              ? {
+              ? ensureAutoTrapsFromBaseTrace({
                   ...t,
                   referenceDistanceKm: distKm,
                   baseTrace: samples,
-                }
+                })
               : t
           )
         );
@@ -815,9 +825,22 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         setStageState('running');
         setTotalDistKm(0);
         setTripDistKm(0);
+        setMaxSpeedKmh(0);
         setCurrentSplitTimesMs({});
         setLiveSamples([]);
         showToast(`Volta #${nextNum}: ${formatStageDuration(elapsedTotal)}`);
+      } else if (rearmAfterFinish) {
+        setStageStartMs(null);
+        setStageState('armed');
+        setTotalDistKm(0);
+        setTripDistKm(0);
+        setMaxSpeedKmh(0);
+        setCurrentSplitTimesMs({});
+        setLiveSamples([]);
+        setIsRecording(true);
+        showToast(
+          `Chegada #${nextNum}: ${formatStageDuration(elapsedTotal)} · Armado para próxima!`
+        );
       } else {
         setStageState('finished');
         setIsRecording(false);
@@ -833,22 +856,64 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       lat: number;
       lon: number;
       speedKmh: number;
+      rawDopplerSpeedKmh?: number | null;
       accuracyM: number | null;
       headingDeg: number | null;
       altitudeM: number | null;
       timestampMs: number;
     }) => {
-      setCurrentPos({ lat: fix.lat, lon: fix.lon });
-      setSpeedKmh(fix.speedKmh);
+      // Filtro rigoroso de precisão GPS (descarta pacotes > 20m para evitar saltos fora da estrada)
       setGpsAccuracyM(fix.accuracyM);
-      setAltitudeM(fix.altitudeM);
       setGpsActive(true);
+      if (source === 'gps' && fix.accuracyM !== null && fix.accuracyM > 20) {
+        setGpsError(`Sinal GPS fraco (±${fix.accuracyM}m > 20m) — aguardando precisão melhor.`);
+        return;
+      }
+
+      setCurrentPos({ lat: fix.lat, lon: fix.lon });
+      setAltitudeM(fix.altitudeM);
       setGpsError(null);
 
+      const prev = prevSampleRef.current;
+      const stepM = prev ? haversineMetersVel(prev.lat, prev.lon, fix.lat, fix.lon) : 0;
+      const dtSec = prev ? (fix.timestampMs - prev.timestampMs) / 1000 : 0;
+      const geomSpeedKmh =
+        prev && dtSec > 0.05 && dtSec < 15 && stepM < 500 ? (stepM / dtSec) * 3.6 : 0;
+
+      let resolvedSpeedKmh = fix.speedKmh;
+      if (source === 'gps') {
+        const doppler =
+          typeof fix.rawDopplerSpeedKmh === 'number' && fix.rawDopplerSpeedKmh > 0
+            ? fix.rawDopplerSpeedKmh
+            : fix.speedKmh > 0
+              ? fix.speedKmh
+              : null;
+        const blended =
+          doppler !== null
+            ? geomSpeedKmh > 0
+              ? 0.7 * doppler + 0.3 * geomSpeedKmh
+              : doppler
+            : geomSpeedKmh;
+
+        // Deadzone anti-ruído estacionário
+        if (
+          (prev && stepM < 1.2) ||
+          blended < 2.0 ||
+          (blended < 4.0 && (fix.accuracyM ?? 0) > 15)
+        ) {
+          resolvedSpeedKmh = 0;
+        } else {
+          resolvedSpeedKmh = blended;
+        }
+      }
+      setSpeedKmh(resolvedSpeedKmh);
+
+      // Auto-detecção exclusiva pela Largada (raio 35m) + Auto-armar (WAITING FOR START)
+      let detectedTrackOverride: VelocityTrack | null = null;
       if (
         velPrefsRef.current.autoDetectTrack &&
         !userPickedTrackManually &&
-        stageStateRef.current === 'idle' &&
+        stageStateRef.current !== 'running' &&
         tracksRef.current.length > 0
       ) {
         const hitTrack = autoDetectNearestTrack(
@@ -857,31 +922,44 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           tracksRef.current,
           velPrefsRef.current.autoDetectRadiusM
         );
-        if (hitTrack && hitTrack.track.id !== activeTrack?.id) {
-          setActiveTrackId(hitTrack.track.id);
-          setAutoDetectedNotice(`GPS ${hitTrack.distanceM}m`);
+        if (hitTrack) {
+          const preparedTrack = ensureAutoTrapsFromBaseTrace(hitTrack.track);
+          if (preparedTrack !== hitTrack.track) {
+            setTracks((list) =>
+              list.map((t) => (t.id === preparedTrack.id ? preparedTrack : t))
+            );
+          }
+          detectedTrackOverride = preparedTrack;
+          if (preparedTrack.id !== activeTrack?.id) {
+            setActiveTrackId(preparedTrack.id);
+          }
+          setAutoDetectedNotice(`Largada ${hitTrack.distanceM}m`);
+          if (stageStateRef.current === 'idle') {
+            setStageState('armed');
+          }
         }
       }
 
-      const prev = prevSampleRef.current;
-      let deltaDistKm = 0;
-      let resolvedHeading = fix.headingDeg;
+      const trackForCrossing = detectedTrackOverride ?? activeTrack;
 
-      if (prev) {
-        const stepM = haversineMetersVel(prev.lat, prev.lon, fix.lat, fix.lon);
-        if (stepM >= 0.4 && stepM < 500) {
-          deltaDistKm = (stepM / 1000) * calFactorRef.current;
-          if (resolvedHeading === null && stepM >= 2) {
-            resolvedHeading = bearingBetweenDeg(prev.lat, prev.lon, fix.lat, fix.lon);
-          }
-        }
+      let deltaDistKm = 0;
+      let resolvedHeading: number | null = prev?.headingDeg ?? null;
+
+      if (fix.headingDeg !== null && resolvedSpeedKmh >= 4) {
+        resolvedHeading = fix.headingDeg;
+      } else if (prev && stepM >= 1.5 && stepM < 500) {
+        resolvedHeading = bearingBetweenDeg(prev.lat, prev.lon, fix.lat, fix.lon);
+      }
+
+      if (prev && stepM >= 0.4 && stepM < 500 && resolvedSpeedKmh > 0) {
+        deltaDistKm = (stepM / 1000) * calFactorRef.current;
       }
       if (resolvedHeading !== null) {
         setHeadingDeg(Math.round(resolvedHeading));
       }
 
       const kinG = computeSampleGForces(prev, {
-        speedKmh: fix.speedKmh,
+        speedKmh: resolvedSpeedKmh,
         headingDeg: resolvedHeading,
         timestampMs: fix.timestampMs,
       });
@@ -906,10 +984,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       }
 
       if (
-        fix.speedKmh > maxSpeedRef.current &&
+        resolvedSpeedKmh > maxSpeedRef.current &&
         (isRecording || stageStateRef.current === 'running')
       ) {
-        setMaxSpeedKmh(Math.round(fix.speedKmh));
+        setMaxSpeedKmh(Math.round(resolvedSpeedKmh));
       }
 
       let activeStartMs = stageStartMsRef.current;
@@ -917,11 +995,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       const updatedSplits = { ...currentSplitTimesRef.current };
 
       if (
-        activeTrack &&
+        trackForCrossing &&
         prev &&
-        (stageStateRef.current === 'armed' || stageStateRef.current === 'running')
+        (nextStageState === 'armed' || nextStageState === 'running')
       ) {
-        const ordered = getOrderedTrackTraps(activeTrack);
+        const ordered = getOrderedTrackTraps(trackForCrossing);
+        let startedThisFix = false;
+
         for (const trap of ordered) {
           const hit = detectTrapCrossing(
             { lat: prev.lat, lon: prev.lon, timestampMs: prev.timestampMs },
@@ -938,13 +1018,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             (trap.kind === 'start' || trap.kind === 'start_finish') &&
             nextStageState === 'armed'
           ) {
+            startedThisFix = true;
             activeStartMs = hit.crossTimestampMs;
             nextStageState = 'running';
             setStageStartMs(hit.crossTimestampMs);
             setStageState('running');
+            setIsRecording(true);
             setTotalDistKm(0);
             setTripDistKm(0);
-            setMaxSpeedKmh(Math.round(fix.speedKmh));
+            setMaxSpeedKmh(Math.round(resolvedSpeedKmh));
             setCurrentSplitTimesMs({});
             window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
             showToast(`Largada automática (${trap.name})`);
@@ -957,7 +1039,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             const lapMs = hit.crossTimestampMs - activeStartMs;
             updatedSplits[trap.id] = lapMs;
             setCurrentSplitTimesMs({ ...updatedSplits });
-            finalizeRun(hit.crossTimestampMs, updatedSplits, true);
+            finalizeRun(hit.crossTimestampMs, updatedSplits, true, false);
             activeStartMs = hit.crossTimestampMs;
           } else if (
             trap.kind === 'split' &&
@@ -977,8 +1059,32 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             const finMs = Math.max(100, hit.crossTimestampMs - activeStartMs);
             updatedSplits[trap.id] = finMs;
             setCurrentSplitTimesMs({ ...updatedSplits });
-            finalizeRun(hit.crossTimestampMs, updatedSplits, false);
-            nextStageState = 'finished';
+            finalizeRun(hit.crossTimestampMs, updatedSplits, false, true);
+            nextStageState = 'armed';
+            activeStartMs = null;
+          }
+        }
+
+        // Fallback de segurança por proximidade (< 12m da Largada com velocidade >= 4 km/h)
+        if (!startedThisFix && nextStageState === 'armed' && resolvedSpeedKmh >= 4) {
+          const startGate = ordered.find(
+            (t) => t.kind === 'start' || t.kind === 'start_finish'
+          );
+          if (
+            startGate &&
+            haversineMetersVel(fix.lat, fix.lon, startGate.lat, startGate.lon) <= 12
+          ) {
+            activeStartMs = fix.timestampMs;
+            nextStageState = 'running';
+            setStageStartMs(fix.timestampMs);
+            setStageState('running');
+            setIsRecording(true);
+            setTotalDistKm(0);
+            setTripDistKm(0);
+            setMaxSpeedKmh(Math.round(resolvedSpeedKmh));
+            setCurrentSplitTimesMs({});
+            window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
+            showToast(`Largada por proximidade (${startGate.name})`);
           }
         }
       }
@@ -993,7 +1099,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       const sample: VelocitySample = {
         lat: fix.lat,
         lon: fix.lon,
-        speedKmh: fix.speedKmh,
+        speedKmh: resolvedSpeedKmh,
         accuracyM: fix.accuracyM,
         headingDeg: resolvedHeading,
         altitudeM: fix.altitudeM,
@@ -1014,7 +1120,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         setLiveSamples((arr) => [...arr, sample]);
       }
     },
-    [activeTrack, userPickedTrackManually, isRecording, finalizeRun, showToast]
+    [activeTrack, source, userPickedTrackManually, isRecording, finalizeRun, showToast]
   );
 
   const processIncomingFixRef = useRef(processIncomingFix);
@@ -1046,14 +1152,22 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             return;
           }
           const wid = await Geolocation.watchPosition(
-            { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 },
             (pos, err) => {
               if (cancelled || err || !pos) return;
+              const rawDopplerSpeedKmh =
+                pos.coords.speed !== null && Number.isFinite(pos.coords.speed) && pos.coords.speed > 0
+                  ? pos.coords.speed * 3.6
+                  : null;
               processIncomingFixRef.current({
                 lat: pos.coords.latitude,
                 lon: pos.coords.longitude,
-                speedKmh: pos.coords.speed ? Math.max(0, pos.coords.speed * 3.6) : 0,
-                accuracyM: pos.coords.accuracy ? Math.round(pos.coords.accuracy) : null,
+                speedKmh: rawDopplerSpeedKmh ?? 0,
+                rawDopplerSpeedKmh,
+                accuracyM:
+                  pos.coords.accuracy !== null && Number.isFinite(pos.coords.accuracy)
+                    ? Math.round(pos.coords.accuracy)
+                    : null,
                 headingDeg:
                   pos.coords.heading !== null && Number.isFinite(pos.coords.heading)
                     ? Math.round(pos.coords.heading)
@@ -1085,11 +1199,19 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       webWatchRef.current = navigator.geolocation.watchPosition(
         (pos) => {
           if (cancelled) return;
+          const rawDopplerSpeedKmh =
+            pos.coords.speed !== null && Number.isFinite(pos.coords.speed) && pos.coords.speed > 0
+              ? pos.coords.speed * 3.6
+              : null;
           processIncomingFixRef.current({
             lat: pos.coords.latitude,
             lon: pos.coords.longitude,
-            speedKmh: pos.coords.speed ? Math.max(0, pos.coords.speed * 3.6) : 0,
-            accuracyM: pos.coords.accuracy ? Math.round(pos.coords.accuracy) : null,
+            speedKmh: rawDopplerSpeedKmh ?? 0,
+            rawDopplerSpeedKmh,
+            accuracyM:
+              pos.coords.accuracy !== null && Number.isFinite(pos.coords.accuracy)
+                ? Math.round(pos.coords.accuracy)
+                : null,
             headingDeg:
               pos.coords.heading !== null && Number.isFinite(pos.coords.heading)
                 ? Math.round(pos.coords.heading)
@@ -1110,7 +1232,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               : 'Aguardando sinal GPS em área aberta (ou ative Simulador em ⚙️).'
           );
         },
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
       );
     };
 
@@ -1186,9 +1308,30 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     showToast('Especial SS-01 armada no Simulador!');
   };
 
+  const handleForceManualStart = () => {
+    const now = Date.now();
+    prevSampleRef.current = null;
+    setLiveSamples([]);
+    setTotalDistKm(0);
+    setTripDistKm(0);
+    setMaxSpeedKmh(0);
+    setCurrentSplitTimesMs({});
+    setLastFinishedMs(null);
+    setStageStartMs(now);
+    setStageState('running');
+    setIsRecording(true);
+    setScreen('live');
+    if (source === 'simulator' && !simPlaying) {
+      simProgressRef.current = 0;
+      setSimPlaying(true);
+    }
+    window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
+    showToast('Largada manual acionada! Cronômetro rodando.');
+  };
+
   const handleStartOrArmStage = () => {
     if (stageState === 'running') {
-      finalizeRun(Date.now());
+      finalizeRun(Date.now(), undefined, false, false);
       return;
     }
 
@@ -1288,12 +1431,22 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       }
 
       const lastExisting = targetTrack.traps[targetTrack.traps.length - 1];
+      const traceBearing = inferNearestBaseTraceBearing(lat, lon, targetTrack.baseTrace);
+      const hasValidHeading = headingDeg !== null && speedKmh >= 3;
       const inferredBearing =
         draftBearingDeg > 0
           ? draftBearingDeg
-          : lastExisting
-            ? bearingBetweenDeg(lastExisting.lat, lastExisting.lon, lat, lon)
-            : headingDeg ?? 0;
+          : traceBearing !== null
+            ? traceBearing
+            : lastExisting
+              ? bearingBetweenDeg(lastExisting.lat, lastExisting.lon, lat, lon)
+              : hasValidHeading
+                ? headingDeg!
+                : 0;
+      const effectiveUnidirectional =
+        inferredBearing === 0 && !hasValidHeading && traceBearing === null && !lastExisting
+          ? false
+          : newTrapUnidirectional;
 
       const trapLabel = buildTrapName(targetTrack, targetKind);
       const newTrap: VelocityTrap = {
@@ -1304,7 +1457,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         lon,
         bearingDeg: inferredBearing,
         widthM: newTrapWidthM,
-        unidirectional: newTrapUnidirectional,
+        unidirectional: effectiveUnidirectional,
       };
 
       const isSingleGate =
@@ -1322,7 +1475,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       });
       setSelectedTrapId(newTrap.id);
       setPlacementKind(null);
-      showToast(`${trapLabel} posicionado (${inferredBearing.toFixed(1)}° · ${newTrapWidthM}m).`);
+      showToast(
+        `${trapLabel} posicionado (${inferredBearing.toFixed(1)}° · ${newTrapWidthM}m · ${effectiveUnidirectional ? 'Unidir.' : 'Bidir.'}).`
+      );
     },
     [
       activeTrack,
@@ -1331,6 +1486,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       placementKind,
       draftBearingDeg,
       headingDeg,
+      speedKmh,
       newTrapWidthM,
       newTrapUnidirectional,
       applyTrackUpdateAndRecalc,
@@ -1361,7 +1517,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         ? {
             lat: currentPos.lat,
             lon: currentPos.lon,
-            headingDeg: headingDeg ?? draftBearingDeg,
+            headingDeg: headingDeg !== null && speedKmh >= 3 ? headingDeg : null,
           }
         : null);
 
@@ -1372,6 +1528,24 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       return;
     }
 
+    const traceBearing = inferNearestBaseTraceBearing(
+      pos.lat,
+      pos.lon,
+      targetTrack.baseTrace
+    );
+    const resolvedBearing =
+      pos.headingDeg !== null && pos.headingDeg !== undefined
+        ? pos.headingDeg
+        : draftBearingDeg > 0
+          ? draftBearingDeg
+          : traceBearing !== null
+            ? traceBearing
+            : 0;
+    const effectiveUnidirectional =
+      resolvedBearing === 0 && (pos.headingDeg === null || pos.headingDeg === undefined) && traceBearing === null
+        ? false
+        : newTrapUnidirectional;
+
     const trapLabel = buildTrapName(targetTrack, kind);
     const newTrap: VelocityTrap = {
       id: `trap_${kind}_${Date.now()}`,
@@ -1379,9 +1553,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       kind,
       lat: pos.lat,
       lon: pos.lon,
-      bearingDeg: pos.headingDeg ?? headingDeg ?? draftBearingDeg,
+      bearingDeg: resolvedBearing,
       widthM: newTrapWidthM,
-      unidirectional: newTrapUnidirectional,
+      unidirectional: effectiveUnidirectional,
     };
 
     const isSingleGate =
@@ -1399,7 +1573,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     });
     setSelectedTrapId(newTrap.id);
     setPlacementKind(null);
-    showToast(`${trapLabel} marcado (${newTrap.bearingDeg}° · ${newTrapWidthM}m)!`);
+    showToast(
+      `${trapLabel} marcado (${resolvedBearing.toFixed(1)}° · ${newTrapWidthM}m · ${effectiveUnidirectional ? 'Unidir.' : 'Bidir.'})!`
+    );
   };
 
   const handleDragTrapEnd = useCallback(
@@ -1590,7 +1766,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
   const handleImportGeoFile = async (file: File) => {
     try {
-      const parsed = await parseTrackFileToTrack(file);
+      const parsedRaw = await parseTrackFileToTrack(file);
+      const parsed = ensureAutoTrapsFromBaseTrace(parsedRaw);
       setTracks((prev) => [parsed, ...prev]);
       setActiveTrackId(parsed.id);
       setUserPickedTrackManually(true);
@@ -1830,6 +2007,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     settings: 'Configurações GPS',
     odometer: 'Hodômetro',
     survey: 'Levantamento',
+    satcron: 'Satcron Ao Vivo',
   };
 
   const hasAnyGoPro =
@@ -2224,9 +2402,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 aria-label="Selecionar pista para cronometragem"
                 value={activeTrackId}
                 onChange={(e) => {
+                  const chosenId = e.target.value;
                   setUserPickedTrackManually(true);
                   setAutoDetectedNotice(null);
-                  setActiveTrackId(e.target.value);
+                  if (chosenId) {
+                    setTracks((prev) =>
+                      prev.map((t) => (t.id === chosenId ? ensureAutoTrapsFromBaseTrace(t) : t))
+                    );
+                  }
+                  setActiveTrackId(chosenId);
                   setStageState('idle');
                   setStageStartMs(null);
                   setLastFinishedMs(null);
@@ -2302,8 +2486,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </button>
           </div>
 
-          {/* Rally Tools Strip (Uniform Icon Styling — Levantamento Identical to Others) */}
-          <div className="grid grid-cols-3 gap-2">
+          {/* Rally Tools Strip (Uniform Icon Styling + Satcron Live Results) */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <button
               type="button"
               onClick={handleOpenQuickAnalysis}
@@ -2330,42 +2514,133 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               <Compass className="h-4 w-4 text-[#E10600]" />
               <span>Levantamento</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setScreen('satcron')}
+              className="flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-xl border border-zinc-800 bg-[#111214] px-2 py-2 text-xs font-bold text-[#C0C4C9] hover:border-zinc-600 hover:text-white"
+            >
+              <Trophy className="h-4 w-4 text-[#E10600]" />
+              <span>Satcron Ao Vivo</span>
+            </button>
           </div>
 
           {goproQuickBar}
         </section>
       )}
 
-      {/* SCREEN: LIVE COCKPIT (Unified Cronômetro SS + Mostradores Toggle) */}
-      {screen === 'live' && (
+      {/* SCREEN: LIVE COCKPIT (Unified Cronômetro SS + Mostradores + Live Map) */}
+      {screen === 'live' && (() => {
+        const startGate = orderedTraps.find(
+          (t) => t.kind === 'start' || t.kind === 'start_finish'
+        );
+        const distToStartM =
+          currentPos && startGate
+            ? Math.round(haversineMetersVel(currentPos.lat, currentPos.lon, startGate.lat, startGate.lon))
+            : null;
+        const liveMapTrace =
+          liveSamples.length > 0 ? liveSamples : activeTrack?.baseTrace ?? [];
+
+        return (
         <section className="space-y-3">
-          {/* Clean 2-way toggle inside Live Cockpit */}
-          <div className="grid grid-cols-2 gap-1 rounded-xl border border-zinc-800 bg-[#111214] p-1">
+          {/* Clean 2-way toggle + Satcron quick link inside Live Cockpit */}
+          <div className="flex items-center gap-1.5">
+            <div className="grid flex-1 grid-cols-2 gap-1 rounded-xl border border-zinc-800 bg-[#111214] p-1">
+              <button
+                type="button"
+                onClick={() => setLiveMode('timer')}
+                className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg text-xs font-extrabold uppercase transition-colors ${
+                  liveMode === 'timer'
+                    ? 'pitstop-btn-red text-white'
+                    : 'text-[#B5B5B5] hover:text-white'
+                }`}
+              >
+                <Flag className="h-3.5 w-3.5" />
+                <span>Cronômetro SS</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLiveMode('gauges')}
+                className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg text-xs font-extrabold uppercase transition-colors ${
+                  liveMode === 'gauges'
+                    ? 'pitstop-btn-red text-white'
+                    : 'text-[#B5B5B5] hover:text-white'
+                }`}
+              >
+                <Activity className="h-3.5 w-3.5" />
+                <span>Mostradores</span>
+              </button>
+            </div>
             <button
               type="button"
-              onClick={() => setLiveMode('timer')}
-              className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg text-xs font-extrabold uppercase transition-colors ${
-                liveMode === 'timer'
-                  ? 'pitstop-btn-red text-white'
-                  : 'text-[#B5B5B5] hover:text-white'
-              }`}
+              onClick={() => setScreen('satcron')}
+              className="inline-flex h-[50px] items-center gap-1 rounded-xl border border-zinc-800 bg-[#111214] px-2.5 text-[11px] font-bold text-[#C0C4C9] hover:border-[#E10600] hover:text-white shrink-0"
+              title="Abrir Cronometragem Satcron Ao Vivo"
             >
-              <Flag className="h-3.5 w-3.5" />
-              <span>Cronômetro SS</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setLiveMode('gauges')}
-              className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg text-xs font-extrabold uppercase transition-colors ${
-                liveMode === 'gauges'
-                  ? 'pitstop-btn-red text-white'
-                  : 'text-[#B5B5B5] hover:text-white'
-              }`}
-            >
-              <Activity className="h-3.5 w-3.5" />
-              <span>Mostradores</span>
+              <Trophy className="h-4 w-4 text-[#E10600]" />
+              <span className="hidden sm:inline">Satcron</span>
             </button>
           </div>
+
+          {/* Live GPS Diagnostics Telemetry Bar */}
+          <div className="grid grid-cols-4 gap-1.5 rounded-xl border border-zinc-800 bg-[#0C0D10] px-2.5 py-2 font-mono text-[10px] tabular-nums sm:text-[11px]">
+            <div className="text-center">
+              <p className="text-zinc-500 uppercase">Precisão</p>
+              <p
+                className={`font-bold ${
+                  gpsAccuracyM !== null && gpsAccuracyM <= 10
+                    ? 'text-emerald-400'
+                    : gpsAccuracyM !== null && gpsAccuracyM <= 20
+                      ? 'text-amber-300'
+                      : 'text-[#FF2A2A]'
+                }`}
+              >
+                {gpsAccuracyM !== null ? `±${gpsAccuracyM}m` : '--'}
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-zinc-500 uppercase">Vel GPS</p>
+              <p className="font-bold text-white">{Math.round(speedKmh)} km/h</p>
+            </div>
+            <div className="text-center">
+              <p className="text-zinc-500 uppercase">Dist. Start</p>
+              <p className="font-bold text-amber-300">
+                {distToStartM !== null ? `${distToStartM}m` : '--'}
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-zinc-500 uppercase">Status</p>
+              <p
+                className={`font-bold uppercase ${
+                  stageState === 'running'
+                    ? 'text-emerald-400'
+                    : stageState === 'armed'
+                      ? 'text-amber-300'
+                      : 'text-zinc-300'
+                }`}
+              >
+                {stageState === 'running'
+                  ? 'Rodando'
+                  : stageState === 'armed'
+                    ? 'Armado'
+                    : stageState === 'finished'
+                      ? 'Salva'
+                      : 'Pronto'}
+              </p>
+            </div>
+          </div>
+
+          {/* Manual Play Override whenever Waiting for Start or Idle */}
+          {(stageState === 'idle' || stageState === 'armed') && (
+            <button
+              type="button"
+              onClick={handleForceManualStart}
+              className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/60 bg-emerald-600/20 px-3 text-xs font-extrabold tracking-wider text-emerald-300 uppercase shadow transition-colors hover:bg-emerald-600/30 active:scale-[0.99] sm:text-sm"
+            >
+              <Play className="h-4 w-4 fill-current" />
+              <span>Largar Agora (Play Manual)</span>
+            </button>
+          )}
 
           {liveMode === 'timer' && (
             <>
@@ -2660,20 +2935,70 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </>
           )}
 
-          {stageState === 'finished' && (activeTrack || runs.length > 0) && (
+          {(stageState === 'finished' || lastFinishedMs !== null) && (activeTrack || runs.length > 0) && (
             <button
               type="button"
               onClick={() => openSessionDetail(activeTrack?.id || 'free_stage', 'analysis')}
-              className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/60 bg-emerald-950/30 text-sm font-bold text-emerald-300 hover:bg-emerald-950/50"
+              className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/60 bg-emerald-950/30 text-sm font-bold text-emerald-300 hover:bg-emerald-950/50"
             >
               <TrendingUp className="h-4 w-4" />
               <span>Abrir Análise &amp; Treinador IA</span>
             </button>
           )}
 
+          {/* Collapsible Live Map with Heading-Up vs Fixed North and Heatmap trace */}
+          <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#111214]">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => setShowLiveMap((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-xs font-extrabold text-white uppercase"
+              >
+                <MapIcon className="h-3.5 w-3.5 text-[#E10600]" />
+                <span>Mapa ao Vivo</span>
+                {showLiveMap ? (
+                  <ChevronUp className="h-3.5 w-3.5 text-zinc-400" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
+                )}
+              </button>
+
+              {showLiveMap && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setLiveHeatmapMode((m) => (m === 'accel' ? 'speed' : 'accel'))
+                    }
+                    className="rounded-md border border-zinc-700 bg-[#080B0D] px-2 py-1 font-mono text-[10px] font-bold text-[#C0C4C9] hover:text-white"
+                  >
+                    Cor: {liveHeatmapMode === 'accel' ? 'Força G' : 'Veloc.'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {showLiveMap && (
+              <VelocityMapboxView
+                trackId={activeTrack?.id || 'live_free'}
+                editableTrace={liveMapTrace}
+                orderedTraps={orderedTraps}
+                postEditIdx={Math.max(0, liveMapTrace.length - 1)}
+                currentPos={currentPos}
+                navigationMode={true}
+                headingUp={liveHeadingUp}
+                onToggleHeadingUp={() => setLiveHeadingUp((v) => !v)}
+                navHeadingDeg={headingDeg}
+                heatmapMode={liveHeatmapMode}
+                containerClassName="relative h-60 w-full overflow-hidden border-t border-zinc-800 bg-[#000000] sm:h-72"
+              />
+            )}
+          </div>
+
           {goproQuickBar}
         </section>
-      )}
+        );
+      })()}
 
       {/* SCREEN: SESSIONS LIST (Clean RaceChrono Sessions List) */}
       {screen === 'sessions' && (
@@ -4267,7 +4592,11 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               <div>
                 <p className="text-xs font-bold text-white">Detecção Automática de Pista (GPS)</p>
                 <p className="text-[11px] text-zinc-400">
-                  Reconhece pistas salvas num raio de {(velPrefs.autoDetectRadiusM / 1000).toFixed(1)} km.
+                  Reconhece pistas salvas num raio de{' '}
+                  {velPrefs.autoDetectRadiusM >= 1000
+                    ? `${(velPrefs.autoDetectRadiusM / 1000).toFixed(1)} km`
+                    : `${velPrefs.autoDetectRadiusM} metros`}{' '}
+                  da Largada.
                 </p>
               </div>
               <input
@@ -4326,6 +4655,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       {screen === 'survey' && (
         <SurveyCockpit isActive={isActive && screen === 'survey'} />
       )}
+
+      {/* SCREEN: SATCRON LIVE RALLY RESULTS */}
+      {screen === 'satcron' && <SatcronLivePanel />}
 
       {/* Modal: Create New Special Stage or Circuit Track */}
       {showNewTrackModal && (
