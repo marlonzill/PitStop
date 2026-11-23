@@ -116,21 +116,21 @@ export const PitStopLogo: React.FC<PitStopLogoProps> = ({
     );
   }
 
-  // Full Início Hero: 3333.png seamlessly edge-dissolved into #080B0D with synchronized diagonal metallic & crimson light sweeps
+  // Full Início Hero: pitstop-hero-3333.webp seamlessly edge-dissolved with synchronized diagonal metallic & crimson light sweeps
   const heroSrc = `${import.meta.env.BASE_URL}pitstop-hero-3333.webp`;
   return (
-    <div className={`relative flex w-full items-center justify-center ${className}`}>
+    <div className={`mx-auto flex w-full flex-col items-center justify-center text-center ${className}`}>
       {!imgError ? (
-        <div className="pitstop-hero-mask relative w-full max-w-3xl overflow-hidden">
+        <div className="pitstop-hero-mask relative mx-auto w-full max-w-[440px] overflow-hidden sm:max-w-[520px]">
           <img
             src={heroSrc}
             alt="PitStop-Sports"
             referrerPolicy="no-referrer"
             onError={() => setImgError(true)}
-            className="block h-auto w-full select-none object-cover mix-blend-lighten"
+            className="mx-auto block h-auto w-full select-none object-contain mix-blend-lighten"
           />
 
-          {/* Synchronized animated diagonal lighting running along the 3333.png speed blades */}
+          {/* Synchronized animated diagonal lighting running along the PitStop Sports speed blades */}
           {animated && (
             <div
               aria-hidden="true"

@@ -710,27 +710,27 @@ export const CompetitorCollector: React.FC = () => {
           </div>
         )}
 
-        <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl">
+        <div className="relative overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute top-1 right-0 h-32 w-48 bg-rally-checkered opacity-35 [mask-image:linear-gradient(to_bottom_left,black,transparent)]"
           />
 
-          <div className="relative border-b border-zinc-800/90 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="relative border-b border-[var(--ps-border)] px-4 py-4 sm:px-6 sm:py-5">
             <div className="flex flex-wrap items-center justify-between gap-2.5">
               <div>
-                <p className="text-[10px] font-bold tracking-[0.16em] text-[#E10600] uppercase sm:text-[11px]">
+                <p className="text-[10px] font-bold tracking-[0.16em] text-[var(--ps-accent)] uppercase sm:text-[11px]">
                   EM PROVA · Modo Secundário Silencioso
                 </p>
-                <h2 className="mt-1 font-['Barlow_Condensed'] text-2xl font-extrabold italic tracking-wide text-white sm:text-3xl">
+                <h2 className="mt-1 font-['Barlow_Condensed'] text-2xl font-extrabold italic tracking-wide text-[var(--ps-text)] sm:text-3xl">
                   Carro {config.carNumber}
                 </h2>
               </div>
               <div className="text-right">
-                <p className="text-[10px] font-bold tracking-[0.15em] text-[#B5B5B5] uppercase sm:text-[11px]">
+                <p className="text-[10px] font-bold tracking-[0.15em] text-[var(--ps-muted)] uppercase sm:text-[11px]">
                   Largada Oficial
                 </p>
-                <p className="font-mono text-lg font-bold text-[#C0C4C9] tabular-nums sm:text-xl">
+                <p className="font-mono text-lg font-bold text-[var(--ps-text)] tabular-nums sm:text-xl">
                   {config.startTimeStr}
                 </p>
               </div>
@@ -739,25 +739,25 @@ export const CompetitorCollector: React.FC = () => {
 
           <div className="relative space-y-4 px-4 py-4 sm:space-y-5 sm:px-6 sm:py-6">
             {/* Visor de Prova Digital */}
-            <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-4 text-center shadow-inner sm:p-5">
-              <p className="text-[10px] font-bold tracking-[0.16em] text-[#B5B5B5] uppercase sm:text-[11px]">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-4 text-center shadow-inner sm:p-5">
+              <p className="text-[10px] font-bold tracking-[0.16em] text-[var(--ps-muted)] uppercase sm:text-[11px]">
                 {isPreStart
                   ? 'Contagem Regressiva para Largada'
                   : 'Visor de Prova — Tempo Decorrido'}
               </p>
-              <p className="mt-1.5 font-['Barlow_Condensed'] text-4xl font-extrabold italic tracking-tight text-white tabular-nums sm:text-5xl">
+              <p className="mt-1.5 font-['Barlow_Condensed'] text-4xl font-extrabold italic tracking-tight text-[var(--ps-text)] tabular-nums sm:text-5xl">
                 {formatElapsedMs(elapsedMs)}
               </p>
-              <p className="mt-1.5 font-mono text-[11px] text-[#B5B5B5] tabular-nums sm:text-xs">
+              <p className="mt-1.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums sm:text-xs">
                 {roadbook.eventName} · Raio {config.detectionRadiusM}m
               </p>
             </div>
 
-            <div className="divide-y divide-zinc-800/80 rounded-xl border border-zinc-800 bg-[#080B0D]">
+            <div className="divide-y divide-[var(--ps-border)] rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
               <div className="flex items-center justify-between px-4 py-3.5 text-sm">
-                <span className="text-[#C0C4C9]">Receptor GPS</span>
+                <span className="text-[var(--ps-muted)]">Receptor GPS</span>
                 {liveGpsState.status === 'active' ? (
-                  <span className="font-mono text-xs font-semibold text-emerald-400 tabular-nums">
+                  <span className="font-mono text-xs font-semibold text-[var(--ps-emerald)] tabular-nums">
                     Ativo (±{liveGpsState.accuracyM ?? '--'}m · {liveGpsState.fixCount} leituras)
                   </span>
                 ) : liveGpsState.status === 'error' ? (
@@ -765,17 +765,17 @@ export const CompetitorCollector: React.FC = () => {
                     {liveGpsState.errorMessage}
                   </span>
                 ) : (
-                  <span className="text-xs font-medium text-amber-400">
+                  <span className="text-xs font-medium text-[var(--ps-amber)]">
                     Buscando satélites...
                   </span>
                 )}
               </div>
 
               <div className="flex items-center justify-between px-4 py-3.5 text-sm">
-                <span className="text-[#C0C4C9]">Tela Ativa (Wake Lock)</span>
+                <span className="text-[var(--ps-muted)]">Tela Ativa (Wake Lock)</span>
                 <span
                   className={`text-xs font-medium ${
-                    wakeLockActive ? 'text-emerald-400' : 'text-[#B5B5B5]'
+                    wakeLockActive ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-muted)]'
                   }`}
                 >
                   {wakeLockActive ? 'Bloqueio de sono ativo' : 'Gerenciado pelo sistema'}
@@ -783,9 +783,9 @@ export const CompetitorCollector: React.FC = () => {
               </div>
 
               <div className="flex items-center justify-between px-4 py-3.5 text-sm">
-                <span className="text-[#C0C4C9]">Painel do Competidor</span>
-                <span className="inline-flex items-center gap-1.5 text-xs text-[#B5B5B5]">
-                  <Lock className="h-3.5 w-3.5 text-[#E10600]" />
+                <span className="text-[var(--ps-muted)]">Painel do Competidor</span>
+                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--ps-muted)]">
+                  <Lock className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                   Dados protegidos para a organização
                 </span>
               </div>
@@ -795,16 +795,16 @@ export const CompetitorCollector: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setBlackoutMode(true)}
-                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-slate-700 bg-[#161b26] px-4 py-3 text-sm font-semibold text-slate-200 transition-colors hover:bg-[#1e2533]"
+                className="pitstop-btn-metal inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition-colors"
               >
-                <EyeOff className="h-4 w-4 text-slate-400" />
+                <EyeOff className="h-4 w-4 text-[var(--ps-muted)]" />
                 <span>Escurecer Tela</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setConfirmFinishOpen(true)}
-                className="rally-btn-red inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold tracking-wide text-white uppercase transition-all"
+                className="rally-btn-red inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold tracking-wide uppercase transition-all"
               >
                 <Square className="h-4 w-4 fill-current" />
                 <span>Encerrar e Gerar TXT</span>
@@ -815,14 +815,14 @@ export const CompetitorCollector: React.FC = () => {
 
         {confirmFinishOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
-            <div className="w-full max-w-md overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl">
+            <div className="w-full max-w-md overflow-hidden rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
               <div className="p-6">
-                <h3 className="font-['Barlow_Condensed'] text-2xl font-bold text-white">
+                <h3 className="font-['Barlow_Condensed'] text-2xl font-bold text-[var(--ps-text)]">
                   Encerrar coleta do Carro {config.carNumber}?
                 </h3>
-                <p className="mt-2 text-sm leading-relaxed text-[#C0C4C9]">
+                <p className="mt-2 text-sm leading-relaxed text-[var(--ps-muted)]">
                   Ao confirmar, o registro GPS será encerrado e o arquivo{' '}
-                  <span className="font-mono text-xs font-semibold text-amber-300">
+                  <span className="font-mono text-xs font-semibold text-[var(--ps-amber)]">
                     {resultFileName}
                   </span>{' '}
                   será gerado para envio à organização.
@@ -831,14 +831,14 @@ export const CompetitorCollector: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setConfirmFinishOpen(false)}
-                    className="min-h-[44px] rounded-xl border border-zinc-700 bg-[#080B0D] px-4 py-2.5 text-sm font-semibold text-[#C0C4C9] hover:bg-zinc-800"
+                    className="pitstop-btn-metal min-h-[44px] rounded-xl px-4 py-2.5 text-sm font-semibold"
                   >
                     Continuar Gravando
                   </button>
                   <button
                     type="button"
                     onClick={handleFinishRace}
-                    className="pitstop-btn-red min-h-[44px] rounded-xl px-5 py-2.5 text-sm font-bold text-white"
+                    className="pitstop-btn-red min-h-[44px] rounded-xl px-5 py-2.5 text-sm font-bold"
                   >
                     Confirmar Encerramento
                   </button>
@@ -855,7 +855,7 @@ export const CompetitorCollector: React.FC = () => {
   if (phase === 'finished' && roadbook) {
     return (
       <div className="mx-auto max-w-2xl">
-        <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl">
+        <div className="relative overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute top-1.5 right-0 h-28 w-44 bg-rally-checkered opacity-35 [mask-image:linear-gradient(to_bottom_left,black,transparent)]"
@@ -863,19 +863,19 @@ export const CompetitorCollector: React.FC = () => {
 
           <div className="relative p-4 sm:p-7">
             <div className="flex items-start gap-3 sm:gap-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/15 text-emerald-400 sm:h-11 sm:w-11">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/15 text-[var(--ps-emerald)] sm:h-11 sm:w-11">
                 <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6" />
               </div>
               <div>
-                <p className="text-[10px] font-bold tracking-[0.18em] text-emerald-400 uppercase sm:text-[11px]">
+                <p className="text-[10px] font-bold tracking-[0.18em] text-[var(--ps-emerald)] uppercase sm:text-[11px]">
                   Registro Concluído
                 </p>
-                <h2 className="mt-0.5 font-['Barlow_Condensed'] text-xl font-bold italic text-white sm:text-2xl">
+                <h2 className="mt-0.5 font-['Barlow_Condensed'] text-xl font-bold italic text-[var(--ps-text)] sm:text-2xl">
                   Coleta Encerrada — Carro {config.carNumber}
                 </h2>
-                <p className="mt-1 text-sm text-[#C0C4C9]">
+                <p className="mt-1 text-sm text-[var(--ps-muted)]">
                   Arquivo de registro gerado para a planilha{' '}
-                  <strong className="font-semibold text-white">
+                  <strong className="font-semibold text-[var(--ps-text)]">
                     {roadbook.eventName}
                   </strong>
                   . Envie o arquivo abaixo diretamente para a organização fazer a apuração oficial.
@@ -883,19 +883,19 @@ export const CompetitorCollector: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-6 rounded-xl border border-zinc-800 bg-[#080B0D] px-4 py-3.5 text-sm text-[#C0C4C9]">
+            <div className="mt-6 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-4 py-3.5 text-sm text-[var(--ps-muted)]">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-mono text-xs font-semibold text-amber-300">
+                <span className="font-mono text-xs font-semibold text-[var(--ps-amber)]">
                   {resultFileName}
                 </span>
-                <span className="font-mono text-xs text-zinc-400 tabular-nums">
+                <span className="font-mono text-xs text-[var(--ps-muted)] tabular-nums">
                   Largada {config.startTimeStr} · Raio {config.detectionRadiusM}m
                 </span>
               </div>
             </div>
 
             {exportFeedback && (
-              <p className="mt-4 text-xs font-medium text-emerald-400">
+              <p className="mt-4 text-xs font-medium text-[var(--ps-emerald)]">
                 {exportFeedback}
               </p>
             )}
@@ -904,8 +904,8 @@ export const CompetitorCollector: React.FC = () => {
               <p
                 className={`mt-4 rounded-xl border px-3.5 py-2.5 text-xs font-medium ${
                   uploadStatus.ok
-                    ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300'
-                    : 'border-amber-500/40 bg-amber-950/30 text-amber-200'
+                    ? 'border-emerald-500/40 bg-emerald-500/15 text-[var(--ps-emerald)]'
+                    : 'border-amber-500/40 bg-amber-500/15 text-[var(--ps-amber)]'
                 }`}
               >
                 {uploadStatus.message}
@@ -917,7 +917,7 @@ export const CompetitorCollector: React.FC = () => {
                 type="button"
                 disabled={uploadStatus.sending}
                 onClick={handleSendToBase}
-                className="pitstop-btn-red inline-flex w-full min-h-[50px] items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-extrabold tracking-wide text-white uppercase transition-all disabled:opacity-60"
+                className="pitstop-btn-red inline-flex w-full min-h-[50px] items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-extrabold tracking-wide uppercase transition-all disabled:opacity-60"
               >
                 <UploadCloud className="h-5 w-5" />
                 <span>
@@ -931,28 +931,28 @@ export const CompetitorCollector: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleShareTxt}
-                  className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-[#1E1E22] px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-zinc-800"
+                  className="pitstop-btn-metal inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold transition-colors"
                 >
-                  <Share2 className="h-4 w-4 text-[#C0C4C9]" />
+                  <Share2 className="h-4 w-4 text-[var(--ps-muted)]" />
                   <span>Compartilhar (.txt)</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={handleDownloadTxt}
-                  className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-[#1E1E22] px-5 py-3 text-sm font-semibold text-[#F4F4F4] transition-colors hover:bg-zinc-800"
+                  className="pitstop-btn-metal inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors"
                 >
-                  <Download className="h-4 w-4 text-[#C0C4C9]" />
+                  <Download className="h-4 w-4 text-[var(--ps-muted)]" />
                   <span>Salvar Arquivo (.txt)</span>
                 </button>
               </div>
             </div>
 
-            <div className="mt-6 flex items-center justify-end border-t border-zinc-800 pt-5">
+            <div className="mt-6 flex items-center justify-end border-t border-[var(--ps-border)] pt-5">
               <button
                 type="button"
                 onClick={handleReset}
-                className="inline-flex min-h-[40px] items-center gap-1.5 text-sm font-medium text-zinc-400 hover:text-white"
+                className="inline-flex min-h-[40px] items-center gap-1.5 text-sm font-medium text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 <RotateCcw className="h-4 w-4" />
                 <span>Preparar Nova Largada</span>
@@ -968,7 +968,7 @@ export const CompetitorCollector: React.FC = () => {
   return (
     <div className="space-y-4">
       {pendingUploads.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/40 bg-amber-950/30 px-4 py-2.5 text-xs text-amber-200">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-xs text-[var(--ps-amber)]">
           <span>
             Existem <strong>{pendingUploads.length}</strong> coleta(s) aguardando envio na fila offline.
           </span>
@@ -986,21 +986,21 @@ export const CompetitorCollector: React.FC = () => {
 
       <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-12 lg:items-start">
       <div className="space-y-4 lg:col-span-7">
-        <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 text-[#F4F4F4] shadow-lg sm:p-6">
+        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] shadow-lg sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-2.5">
             <div>
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase sm:text-2xl">
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase sm:text-2xl">
                 01. Identificação e Hora de Largada
               </h2>
-              <p className="mt-0.5 text-xs text-[#B5B5B5] sm:text-sm">
+              <p className="mt-0.5 text-xs text-[var(--ps-muted)] sm:text-sm">
                 Preencha antes de alinhar no pórtico de largada.
               </p>
             </div>
 
-            <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5">
+            <div className="flex items-center gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5">
               <label
                 htmlFor="gps-radius-select"
-                className="text-[11px] font-semibold text-[#B5B5B5] whitespace-nowrap"
+                className="text-[11px] font-semibold text-[var(--ps-muted)] whitespace-nowrap"
               >
                 Raio GPS
               </label>
@@ -1014,10 +1014,10 @@ export const CompetitorCollector: React.FC = () => {
                   }))
                 }
                 aria-label="Raio de detecção GPS em metros"
-                className="bg-transparent font-mono text-xs font-bold text-[#E10600] focus:outline-none cursor-pointer"
+                className="bg-transparent font-mono text-xs font-bold text-[var(--ps-accent)] focus:outline-none cursor-pointer"
               >
                 {[2, 5, 10, 15, 20, 30, 40, 50, 75, 100, 150].map((r) => (
-                  <option key={r} value={r} className="bg-[#080B0D] text-[#F4F4F4]">
+                  <option key={r} value={r} className="bg-[var(--ps-surface)] text-[var(--ps-text)]">
                     {r} m
                   </option>
                 ))}
@@ -1029,7 +1029,7 @@ export const CompetitorCollector: React.FC = () => {
             <div>
               <label
                 htmlFor="car-number"
-                className="block text-sm font-semibold text-[#C0C4C9]"
+                className="block text-sm font-semibold text-[var(--ps-muted)]"
               >
                 Número do Carro *
               </label>
@@ -1042,14 +1042,14 @@ export const CompetitorCollector: React.FC = () => {
                 onChange={(e) =>
                   setConfig((prev) => ({ ...prev, carNumber: e.target.value }))
                 }
-                className="mt-1.5 w-full min-h-[46px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3.5 font-mono text-base font-bold text-white placeholder:font-sans placeholder:font-normal placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none focus:ring-2 focus:ring-[#E10600]/20"
+                className="mt-1.5 w-full min-h-[46px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3.5 font-mono text-base font-bold text-[var(--ps-text)] placeholder:font-sans placeholder:font-normal placeholder:text-[var(--ps-muted)] focus:border-[var(--ps-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--ps-accent-soft)]"
               />
             </div>
 
             <div>
               <label
                 htmlFor="crew-name"
-                className="block text-sm font-semibold text-[#C0C4C9]"
+                className="block text-sm font-semibold text-[var(--ps-muted)]"
               >
                 Dupla / Equipe (opcional)
               </label>
@@ -1061,14 +1061,14 @@ export const CompetitorCollector: React.FC = () => {
                 onChange={(e) =>
                   setConfig((prev) => ({ ...prev, crewName: e.target.value }))
                 }
-                className="mt-1.5 w-full min-h-[46px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3.5 text-sm text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none focus:ring-2 focus:ring-[#E10600]/20"
+                className="mt-1.5 w-full min-h-[46px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3.5 text-sm text-[var(--ps-text)] placeholder:text-[var(--ps-muted)] focus:border-[var(--ps-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--ps-accent-soft)]"
               />
             </div>
 
             <div>
               <label
                 htmlFor="race-date"
-                className="block text-sm font-semibold text-[#C0C4C9]"
+                className="block text-sm font-semibold text-[var(--ps-muted)]"
               >
                 Data da Prova
               </label>
@@ -1079,14 +1079,14 @@ export const CompetitorCollector: React.FC = () => {
                 onChange={(e) =>
                   setConfig((prev) => ({ ...prev, raceDate: e.target.value }))
                 }
-                className="mt-1.5 w-full min-h-[46px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3.5 font-mono text-sm text-white [color-scheme:dark] focus:border-[#E10600] focus:outline-none focus:ring-2 focus:ring-[#E10600]/20"
+                className="mt-1.5 w-full min-h-[46px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3.5 font-mono text-sm text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--ps-accent-soft)]"
               />
             </div>
 
             <div>
               <label
                 htmlFor="start-time"
-                className="block text-sm font-semibold text-[#C0C4C9]"
+                className="block text-sm font-semibold text-[var(--ps-muted)]"
               >
                 Hora de Largada (HH:MM:SS) *
               </label>
@@ -1099,7 +1099,7 @@ export const CompetitorCollector: React.FC = () => {
                   onChange={(e) =>
                     setConfig((prev) => ({ ...prev, startTimeStr: e.target.value }))
                   }
-                  className="w-full min-h-[46px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3.5 font-mono text-base font-bold text-white tabular-nums [color-scheme:dark] focus:border-[#E10600] focus:outline-none focus:ring-2 focus:ring-[#E10600]/20"
+                  className="w-full min-h-[46px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3.5 font-mono text-base font-bold text-[var(--ps-text)] tabular-nums focus:border-[var(--ps-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--ps-accent-soft)]"
                 />
                 <button
                   type="button"
@@ -1112,7 +1112,7 @@ export const CompetitorCollector: React.FC = () => {
                   }
                   className="pitstop-btn-metal inline-flex min-h-[46px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold whitespace-nowrap shrink-0"
                 >
-                  <Clock className="h-3.5 w-3.5 text-[#E10600]" />
+                  <Clock className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                   <span>Agora</span>
                 </button>
               </div>
@@ -1120,13 +1120,13 @@ export const CompetitorCollector: React.FC = () => {
           </div>
         </section>
 
-        <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 text-[#F4F4F4] shadow-lg sm:p-6">
+        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] shadow-lg sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-2.5">
             <div>
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase sm:text-2xl">
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase sm:text-2xl">
                 02. Importar Planilha (.txt / .nbp)
               </h2>
-              <p className="mt-0.5 text-xs text-[#B5B5B5] sm:text-sm">
+              <p className="mt-0.5 text-xs text-[var(--ps-muted)] sm:text-sm">
                 Carregue o arquivo enviado pela organização antes da largada.
               </p>
             </div>
@@ -1137,19 +1137,19 @@ export const CompetitorCollector: React.FC = () => {
               disabled={loadingSample}
               className="pitstop-btn-metal inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold whitespace-nowrap shrink-0"
             >
-              <FileText className="h-3.5 w-3.5 text-[#C0C4C9]" />
+              <FileText className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
               <span>
                 {loadingSample ? 'Carregando...' : 'Carregar Modelo'}
               </span>
             </button>
           </div>
 
-          <label className="mt-4 flex min-h-[108px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-zinc-700 bg-[#080B0D] px-4 py-5 text-center transition-colors hover:border-[#E10600] hover:bg-[#E10600]/5">
-            <Upload className="h-6 w-6 text-[#E10600]" />
-            <span className="mt-2 text-sm font-semibold text-white">
+          <label className="mt-4 flex min-h-[108px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 py-5 text-center transition-colors hover:border-[var(--ps-accent)] hover:bg-[var(--ps-accent-soft)]">
+            <Upload className="h-6 w-6 text-[var(--ps-accent)]" />
+            <span className="mt-2 text-sm font-semibold text-[var(--ps-text)]">
               Selecionar arquivo .txt ou .nbp no celular
             </span>
-            <span className="mt-1 text-xs text-[#B5B5B5]">
+            <span className="mt-1 text-xs text-[var(--ps-muted)]">
               Arquivo digital da prova (.NBP, .NBP.ZIP ou .TXT) enviado pela organização.
             </span>
             <input
@@ -1165,32 +1165,32 @@ export const CompetitorCollector: React.FC = () => {
           </label>
 
           {parseError && (
-            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-950/50 p-3 text-xs text-red-300">
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/15 p-3 text-xs text-red-400">
               <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#FF2A2A]" />
               <span>{parseError}</span>
             </div>
           )}
 
           {roadbook && (
-            <div className="mt-4 rounded-xl border border-emerald-500/30 bg-[#080B0D] p-4">
+            <div className="mt-4 rounded-xl border border-emerald-500/35 bg-[var(--ps-card-deep)] p-4">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-sm font-semibold text-white">
+                <p className="text-sm font-semibold text-[var(--ps-text)]">
                   {roadbook.eventName}
                 </p>
-                <span className="font-mono text-xs text-[#B5B5B5]">
+                <span className="font-mono text-xs text-[var(--ps-muted)]">
                   {roadbook.fileName}
                 </span>
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#B5B5B5] tabular-nums">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--ps-muted)] tabular-nums">
                 <span>
-                  <strong className="text-[#C0C4C9]">{roadbook.tulipas.length}</strong> referências
+                  <strong className="text-[var(--ps-text)]">{roadbook.tulipas.length}</strong> referências
                 </span>
                 <span aria-hidden="true">·</span>
                 <span>
-                  <strong className="text-white">{roadbook.totalKm.toFixed(2)} km</strong> totais
+                  <strong className="text-[var(--ps-text)]">{roadbook.totalKm.toFixed(2)} km</strong> totais
                 </span>
                 <span aria-hidden="true">·</span>
-                <span className="text-emerald-400">Planilha validada para coleta GPS</span>
+                <span className="text-[var(--ps-emerald)]">Planilha validada para coleta GPS</span>
               </div>
             </div>
           )}
@@ -1198,26 +1198,26 @@ export const CompetitorCollector: React.FC = () => {
       </div>
 
       <div className="space-y-6 lg:col-span-5">
-        <section className="relative overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-xl">
+        <section className="relative overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-xl">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute top-1 right-0 h-24 w-36 bg-rally-checkered opacity-30 [mask-image:linear-gradient(to_bottom_left,black,transparent)]"
           />
 
           <div className="relative p-4 sm:p-6">
-            <p className="text-[10px] font-bold tracking-[0.18em] text-[#E10600] uppercase sm:text-[11px]">
+            <p className="text-[10px] font-bold tracking-[0.18em] text-[var(--ps-accent)] uppercase sm:text-[11px]">
               Pré-Largada
             </p>
-            <h2 className="mt-0.5 font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase sm:text-2xl">
+            <h2 className="mt-0.5 font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase sm:text-2xl">
               Verificação de GPS e Largada
             </h2>
-            <p className="mt-0.5 text-xs text-[#B5B5B5] sm:text-sm">
+            <p className="mt-0.5 text-xs text-[var(--ps-muted)] sm:text-sm">
               Confirme a permissão de localização antes de iniciar a coleta.
             </p>
 
-            <div className="mt-4 rounded-xl border border-zinc-800 bg-[#080B0D] p-4">
+            <div className="mt-4 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-4">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-[#C0C4C9]">
+                <span className="text-sm font-medium text-[var(--ps-text)]">
                   Sinal GPS do Aparelho
                 </span>
                 <button
@@ -1225,7 +1225,7 @@ export const CompetitorCollector: React.FC = () => {
                   onClick={handleTestGps}
                   className="pitstop-btn-metal inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap shrink-0"
                 >
-                  <Navigation className="h-3.5 w-3.5 text-[#E10600]" />
+                  <Navigation className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                   <span>
                     {gpsTestState.status === 'checking' ? 'Buscando...' : 'Testar GPS'}
                   </span>
@@ -1233,7 +1233,7 @@ export const CompetitorCollector: React.FC = () => {
               </div>
 
               {gpsTestState.status === 'ok' && (
-                <div className="mt-3 font-mono text-xs text-emerald-400 tabular-nums">
+                <div className="mt-3 font-mono text-xs text-[var(--ps-emerald)] tabular-nums">
                   Sinal OK · Precisão ±{gpsTestState.accuracyM}m · Lat{' '}
                   {gpsTestState.lat?.toFixed(5)} / Lon {gpsTestState.lon?.toFixed(5)}
                 </div>
@@ -1243,18 +1243,18 @@ export const CompetitorCollector: React.FC = () => {
               )}
             </div>
 
-            <div className="mt-5 space-y-2.5 border-t border-zinc-800 pt-5 text-xs leading-relaxed text-[#B5B5B5]">
+            <div className="mt-5 space-y-2.5 border-t border-[var(--ps-border)] pt-5 text-xs leading-relaxed text-[var(--ps-muted)]">
               <p className="flex items-start gap-2">
-                <Sliders className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#E10600]" />
+                <Sliders className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
                 <span>
-                  <strong className="text-white">Registro Automático:</strong> O app grava
+                  <strong className="text-[var(--ps-text)]">Registro Automático:</strong> O app grava
                   a passagem pelo ponto mais próximo dentro do raio configurado.
                 </span>
               </p>
               <p className="flex items-start gap-2">
-                <EyeOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#C0C4C9]" />
+                <EyeOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ps-muted)]" />
                 <span>
-                  <strong className="text-white">Visor Silencioso:</strong> Durante a
+                  <strong className="text-[var(--ps-text)]">Visor Silencioso:</strong> Durante a
                   prova, os dados seguem direto para a Base PitStop Sports sem exposição na tela.
                 </span>
               </p>
@@ -1264,14 +1264,14 @@ export const CompetitorCollector: React.FC = () => {
               type="button"
               disabled={!canStart}
               onClick={handleStartRace}
-              className="pitstop-btn-red mt-6 inline-flex w-full min-h-[52px] items-center justify-center gap-2 rounded-lg px-5 py-3.5 text-base font-bold tracking-wide text-white uppercase transition-all"
+              className="pitstop-btn-red mt-6 inline-flex w-full min-h-[52px] items-center justify-center gap-2 rounded-lg px-5 py-3.5 text-base font-bold tracking-wide uppercase transition-all"
             >
               <Play className="h-4 w-4 fill-current" />
               <span>Iniciar Coleta da Prova</span>
             </button>
 
             {!canStart && (
-              <p className="mt-2.5 text-center text-xs text-zinc-500">
+              <p className="mt-2.5 text-center text-xs text-[var(--ps-muted)]">
                 Informe o número do carro e carregue a planilha para liberar a largada.
               </p>
             )}

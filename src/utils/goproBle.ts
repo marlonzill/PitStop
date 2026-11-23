@@ -15,7 +15,6 @@ export const GOPRO_QRY_RSP_UUID = 'b5f90077-aa8d-11e3-9046-0002a5d5c51b';
 
 const SAVED_GOPRO_KEY = 'pitstop_saved_gopro_devices_v1';
 const GOPRO_ALIASES_KEY = 'pitstop_gopro_aliases_v1';
-const NAV_SETTINGS_KEY = 'pitstop_nav_settings_v1';
 
 export type GoProResolution = '4K' | '2.7K' | '1080p';
 export type GoProFps = 30 | 60 | 120;
@@ -572,17 +571,6 @@ function upsertCameraInFleet(cam: GoProCameraState) {
   notifyFleet();
 }
 
-function readAutoRecEnabled(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    const raw = window.localStorage.getItem(NAV_SETTINGS_KEY);
-    if (!raw) return false;
-    return Boolean((JSON.parse(raw) as { goproAutoRecOnStart?: boolean }).goproAutoRecOnStart);
-  } catch {
-    return false;
-  }
-}
-
 function ensureGlobalFleetLoops() {
   if (globalLoopsStarted || typeof window === 'undefined') return;
   globalLoopsStarted = true;
@@ -621,12 +609,6 @@ function ensureGlobalFleetLoops() {
       pollAllGoProKeepAlive();
     }
   }, 3000);
-
-  // Auto-REC when special stage starts
-  window.addEventListener('pitstop:stage-started', () => {
-    if (!readAutoRecEnabled() || fleetState.cameras.length === 0) return;
-    shutterAllGoPro(true).catch(() => {});
-  });
 }
 
 export async function scanAndAddGoProToFleet(): Promise<void> {
@@ -716,6 +698,8 @@ export async function modeSingleGoPro(
 export async function shutterAllGoPro(start: boolean): Promise<void> {
   for (const cam of fleetState.cameras) {
     if (!cam.connected || cam.sleeping) continue;
+    if (start && cam.recording) continue;
+    if (!start && !cam.recording) continue;
     if (!cam.isSimulated) {
       await sendGoProShutter(cam.id, start).catch(() => {});
     }
@@ -724,6 +708,27 @@ export async function shutterAllGoPro(start: boolean): Promise<void> {
       encodingDurationSec: start ? 0 : cam.encodingDurationSec,
     });
   }
+}
+
+export async function autoStartGoProRecording(): Promise<void> {
+  if (fleetState.cameras.length === 0 && fleetState.savedDevices.length === 0) return;
+  const needsWake =
+    fleetState.cameras.some((c) => c.sleeping || !c.connected) ||
+    fleetState.savedDevices.some((sd) => !fleetState.cameras.some((c) => c.id === sd.deviceId));
+  const hasRealBleCamera =
+    fleetState.cameras.some((c) => !c.isSimulated) || fleetState.savedDevices.length > 0;
+  if (needsWake) {
+    await wakeAllGoPro().catch(() => {});
+    if (hasRealBleCamera) {
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+    }
+  }
+  await shutterAllGoPro(true);
+}
+
+export async function autoStopGoProRecording(): Promise<void> {
+  if (fleetState.cameras.length === 0) return;
+  await shutterAllGoPro(false);
 }
 
 export async function modeAllGoPro(mode: GoProCaptureMode): Promise<void> {

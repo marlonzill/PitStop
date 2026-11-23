@@ -14,7 +14,17 @@ export type SensorMode = 'gps' | 'blue';
 export type VoiceUnit = 'meters' | 'seconds';
 export type AlertStyle = 'voice' | 'beep_short' | 'beep_long' | 'vibration';
 export type ScreenOrientationLock = 'auto' | 'portrait' | 'landscape';
-export type AppThemeId = 'pitstop' | 'fueltech' | 'night' | 'solar' | 'gt';
+export type AppThemeId =
+  | 'pitstop'
+  | 'gt'
+  | 'fueltech'
+  | 'subaru'
+  | 'gulf'
+  | 'martini'
+  | 'cyberpunk'
+  | 'castrol'
+  | 'night'
+  | 'solar';
 
 export interface PilotDisplayOptions {
   showDistance: boolean;
@@ -225,10 +235,15 @@ export function getNavSettings(): PitStopNavSettings {
           : 'auto',
       goproAutoRecOnStart: Boolean(parsed.goproAutoRecOnStart),
       appTheme:
+        parsed.appTheme === 'gt' ||
         parsed.appTheme === 'fueltech' ||
+        parsed.appTheme === 'subaru' ||
+        parsed.appTheme === 'gulf' ||
+        parsed.appTheme === 'martini' ||
+        parsed.appTheme === 'cyberpunk' ||
+        parsed.appTheme === 'castrol' ||
         parsed.appTheme === 'night' ||
-        parsed.appTheme === 'solar' ||
-        parsed.appTheme === 'gt'
+        parsed.appTheme === 'solar'
           ? parsed.appTheme
           : 'pitstop',
       voiceThresholds:
@@ -251,10 +266,15 @@ export function applyAppThemeToDocument(themeId: AppThemeId): void {
   if (metaTheme) {
     const colorMap: Record<AppThemeId, string> = {
       pitstop: '#090A0D',
-      fueltech: '#000000',
-      night: '#100C0D',
-      solar: '#F1F5F9',
       gt: '#0F172A',
+      fueltech: '#000000',
+      subaru: '#071430',
+      gulf: '#081929',
+      martini: '#0A1324',
+      cyberpunk: '#0B0514',
+      castrol: '#051610',
+      night: '#050506',
+      solar: '#F1F5F9',
     };
     metaTheme.setAttribute('content', colorMap[themeId]);
   }

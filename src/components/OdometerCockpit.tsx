@@ -193,11 +193,11 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
   const officialClockMs = nowMs + settings.clockOffsetMs;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-3 text-white">
+    <div className="mx-auto max-w-4xl space-y-3 text-[var(--ps-text)]">
       {/* Top Bar: Mode & GPS/Simulator Switch */}
-      <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3.5 py-2.5">
+      <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 py-2.5">
         <div className="flex items-center gap-2">
-          <Gauge className="h-5 w-5 text-[#E10600]" />
+          <Gauge className="h-5 w-5 text-[var(--ps-accent)]" />
           <div>
             <h1 className="font-['Barlow_Condensed'] text-xl font-extrabold italic tracking-wide uppercase sm:text-2xl">
               Hodômetro Digital &amp; W Fino
@@ -206,7 +206,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-0.5">
+          <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
             <button
               type="button"
               onClick={() => {
@@ -214,7 +214,9 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                 setSimRunning(false);
               }}
               className={`min-h-[34px] rounded-md px-3 text-xs font-bold ${
-                source === 'gps' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
+                source === 'gps'
+                  ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                  : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
               }`}
             >
               GPS {gpsAccuracy !== null ? `±${gpsAccuracy}m` : ''}
@@ -223,33 +225,35 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
               type="button"
               onClick={() => setSource('simulator')}
               className={`min-h-[34px] rounded-md px-3 text-xs font-bold ${
-                source === 'simulator' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5] hover:text-white'
+                source === 'simulator'
+                  ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                  : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
               }`}
             >
               Simulador
             </button>
           </div>
 
-          <span className="font-mono text-xs font-bold text-[#C0C4C9] tabular-nums">
-            <Satellite className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />
+          <span className="font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
+            <Satellite className="mr-1 inline h-3.5 w-3.5 text-[var(--ps-emerald)]" />
             {formatClockTime(officialClockMs)}
           </span>
         </div>
       </section>
 
       {source === 'simulator' && (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-[#111214] px-4 py-3">
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-4 py-3">
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setSimRunning((v) => !v)}
               className={`min-h-[38px] rounded-lg px-4 text-xs font-extrabold uppercase ${
-                simRunning ? 'bg-zinc-700 text-white' : 'pitstop-btn-red text-white'
+                simRunning ? 'pitstop-btn-metal' : 'pitstop-btn-red'
               }`}
             >
               {simRunning ? 'Pausar Simulador' : 'Iniciar Simulador'}
             </button>
-            <span className="font-mono text-xs font-bold text-amber-300 tabular-nums">
+            <span className="font-mono text-xs font-bold text-[var(--ps-amber)] tabular-nums">
               {simSpeedKmh} km/h
             </span>
           </div>
@@ -260,14 +264,14 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
             step={2}
             value={simSpeedKmh}
             onChange={(e) => setSimSpeedKmh(Number(e.target.value))}
-            className="flex-1 min-w-[160px] accent-[#E10600]"
+            className="flex-1 min-w-[160px] accent-[var(--ps-accent)]"
             aria-label="Velocidade do simulador"
           />
         </section>
       )}
 
       {gpsError && source === 'gps' && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 px-3.5 py-2 text-xs text-amber-200">
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3.5 py-2 text-xs text-[var(--ps-amber)]">
           {gpsError}
         </div>
       )}
@@ -278,8 +282,8 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
           onClick={() => setIsCounting((v) => !v)}
           className={`flex min-h-[48px] items-center justify-center gap-2 rounded-xl border px-4 text-sm font-extrabold uppercase ${
             isCounting
-              ? 'border-amber-500/70 bg-amber-600/20 text-amber-300'
-              : 'border-emerald-500/70 bg-emerald-600/25 text-emerald-300'
+              ? 'border-amber-500/60 bg-amber-500/15 text-[var(--ps-amber)]'
+              : 'border-emerald-500/60 bg-emerald-500/15 text-[var(--ps-emerald)]'
           }`}
         >
           {isCounting ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -293,24 +297,24 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
             setMaxSpeedKmh(0);
             setAvgSpeedSamples([]);
           }}
-          className="pitstop-btn-metal flex min-h-[48px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-extrabold text-white uppercase"
+          className="pitstop-btn-metal flex min-h-[48px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-extrabold uppercase"
         >
-          <RotateCcw className="h-4 w-4 text-[#E10600]" />
+          <RotateCcw className="h-4 w-4 text-[var(--ps-accent)]" />
           <span>Zerar Tudo</span>
         </button>
       </section>
 
       {/* Giant Daylight-Readable Total & Trip Odometers */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 sm:p-5 flex flex-col justify-between">
+        <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 flex flex-col justify-between">
           <div className="flex items-center justify-between">
-            <span className="font-mono text-xs font-bold tracking-widest text-[#B5B5B5] uppercase">
+            <span className="font-mono text-xs font-bold tracking-widest text-[var(--ps-muted)] uppercase">
               Hodômetro Total
             </span>
             <button
               type="button"
               onClick={() => setTotalKm(0)}
-              className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-[#14161A] px-2.5 py-1 text-[11px] font-bold text-[#C0C4C9] hover:text-white"
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
             >
               <RotateCcw className="h-3 w-3" />
               <span>Zerar Total</span>
@@ -330,7 +334,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                     if (e.key === 'Enter') applyOdoEdit('total', totalOdoInput);
                     if (e.key === 'Escape') setEditingTotalOdo(false);
                   }}
-                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[#E10600] bg-[#14161A] px-3 text-center font-mono text-2xl font-black text-white focus:outline-none"
+                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[var(--ps-accent)] bg-[var(--ps-card-deep)] px-3 text-center font-mono text-2xl font-black text-[var(--ps-text)] focus:outline-none"
                 />
                 <button
                   type="button"
@@ -339,7 +343,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                     setOdoEditUnit(nextUnit);
                     setTotalOdoInput(nextUnit === 'm' ? String(totalMeters) : totalKm.toFixed(3));
                   }}
-                  className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#14161A] px-3 font-mono text-xs font-extrabold text-amber-300 uppercase"
+                  className="min-h-[44px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 font-mono text-xs font-extrabold text-[var(--ps-amber)] uppercase"
                 >
                   {odoEditUnit}
                 </button>
@@ -348,14 +352,14 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                 <button
                   type="button"
                   onClick={() => setEditingTotalOdo(false)}
-                  className="min-h-[36px] rounded-lg border border-zinc-700 bg-[#14161A] text-xs font-bold text-zinc-300"
+                  className="min-h-[36px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-xs font-bold text-[var(--ps-muted)]"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={() => applyOdoEdit('total', totalOdoInput)}
-                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold text-white"
+                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold"
                 >
                   Confirmar
                 </button>
@@ -368,29 +372,29 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                 setTotalOdoInput(odoEditUnit === 'm' ? String(totalMeters) : totalKm.toFixed(3));
                 setEditingTotalOdo(true);
               }}
-              className="group my-2 flex flex-col items-center justify-center rounded-xl py-1 hover:bg-[#0D0F12]"
+              className="group my-2 flex flex-col items-center justify-center rounded-xl py-1 hover:bg-[var(--ps-card)]"
             >
-              <span className="font-mono text-4xl font-black tracking-tight text-white tabular-nums sm:text-5xl">
+              <span className="font-mono text-4xl font-black tracking-tight text-[var(--ps-text)] tabular-nums sm:text-5xl">
                 {totalMeters.toLocaleString('pt-BR')}{' '}
-                <span className="text-lg font-bold text-zinc-400">m</span>
+                <span className="text-lg font-bold text-[var(--ps-muted)]">m</span>
               </span>
-              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-zinc-400 tabular-nums">
+              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-[var(--ps-muted)] tabular-nums">
                 <span>{totalKm.toFixed(2).replace('.', ',')} km</span>
-                <Pencil className="h-3 w-3 text-zinc-500 group-hover:text-[#E10600]" />
+                <Pencil className="h-3 w-3 opacity-60 group-hover:text-[var(--ps-accent)]" />
               </span>
             </button>
           )}
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-[#000000] p-4 sm:p-5 flex flex-col justify-between">
+        <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 flex flex-col justify-between">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => setRegressive((v) => !v)}
               className={`rounded-md border px-2.5 py-1 font-mono text-[11px] font-bold uppercase ${
                 regressive
-                  ? 'border-[#E10600] bg-[#E10600]/20 text-white'
-                  : 'border-zinc-700 bg-[#14161A] text-amber-300'
+                  ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                  : 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-amber)]'
               }`}
             >
               Trip: {regressive ? 'Regressivo' : 'Progressivo'}
@@ -417,7 +421,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                       setEditingTarget(false);
                     }
                   }}
-                  className="w-24 rounded border border-[#E10600] bg-[#14161A] px-2 py-0.5 text-center font-mono text-xs font-bold text-white focus:outline-none"
+                  className="w-24 rounded border border-[var(--ps-accent)] bg-[var(--ps-card-deep)] px-2 py-0.5 text-center font-mono text-xs font-bold text-[var(--ps-text)] focus:outline-none"
                 />
               ) : (
                 <button
@@ -426,7 +430,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                     setTargetInput(targetKm.toFixed(2));
                     setEditingTarget(true);
                   }}
-                  className="rounded border border-zinc-700 bg-[#14161A] px-2 py-0.5 font-mono text-[11px] font-bold text-[#C0C4C9]"
+                  className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 py-0.5 font-mono text-[11px] font-bold text-[var(--ps-muted)]"
                 >
                   Alvo: {targetKm.toFixed(2)} km
                 </button>
@@ -448,7 +452,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                     if (e.key === 'Enter') applyOdoEdit('trip', tripOdoInput);
                     if (e.key === 'Escape') setEditingTripOdo(false);
                   }}
-                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[#E10600] bg-[#14161A] px-3 text-center font-mono text-2xl font-black text-amber-300 focus:outline-none"
+                  className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[var(--ps-accent)] bg-[var(--ps-card-deep)] px-3 text-center font-mono text-2xl font-black text-[var(--ps-amber)] focus:outline-none"
                 />
                 <button
                   type="button"
@@ -459,7 +463,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                       nextUnit === 'm' ? String(tripMeters) : displayedTripKm.toFixed(3)
                     );
                   }}
-                  className="min-h-[44px] rounded-lg border border-zinc-700 bg-[#14161A] px-3 font-mono text-xs font-extrabold text-amber-300 uppercase"
+                  className="min-h-[44px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 font-mono text-xs font-extrabold text-[var(--ps-amber)] uppercase"
                 >
                   {odoEditUnit}
                 </button>
@@ -468,14 +472,14 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                 <button
                   type="button"
                   onClick={() => setEditingTripOdo(false)}
-                  className="min-h-[36px] rounded-lg border border-zinc-700 bg-[#14161A] text-xs font-bold text-zinc-300"
+                  className="min-h-[36px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-xs font-bold text-[var(--ps-muted)]"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={() => applyOdoEdit('trip', tripOdoInput)}
-                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold text-white"
+                  className="pitstop-btn-red min-h-[36px] rounded-lg text-xs font-extrabold"
                 >
                   Confirmar
                 </button>
@@ -490,15 +494,15 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
                 );
                 setEditingTripOdo(true);
               }}
-              className="group my-2 flex flex-col items-center justify-center rounded-xl py-1 hover:bg-[#0D0F12]"
+              className="group my-2 flex flex-col items-center justify-center rounded-xl py-1 hover:bg-[var(--ps-card)]"
             >
-              <span className="font-mono text-4xl font-black tracking-tight text-amber-300 tabular-nums sm:text-5xl">
+              <span className="font-mono text-4xl font-black tracking-tight text-[var(--ps-amber)] tabular-nums sm:text-5xl">
                 {tripMeters.toLocaleString('pt-BR')}{' '}
-                <span className="text-lg font-bold text-amber-200/70">m</span>
+                <span className="text-lg font-bold opacity-75">m</span>
               </span>
-              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-amber-200/80 tabular-nums">
+              <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-[var(--ps-amber)] opacity-85 tabular-nums">
                 <span>{displayedTripKm.toFixed(2).replace('.', ',')} km</span>
-                <Pencil className="h-3 w-3 text-amber-300/60 group-hover:text-[#E10600]" />
+                <Pencil className="h-3 w-3 opacity-60 group-hover:text-[var(--ps-accent)]" />
               </span>
             </button>
           )}
@@ -506,7 +510,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
           <button
             type="button"
             onClick={() => setTripKm(0)}
-            className="pitstop-btn-red min-h-[48px] w-full rounded-xl text-sm font-extrabold text-white uppercase tracking-wider"
+            className="pitstop-btn-red min-h-[48px] w-full rounded-xl text-sm font-extrabold uppercase tracking-wider"
           >
             Zerar Trip
           </button>
@@ -515,26 +519,26 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
 
       {/* Live Speed Metrics */}
       <section className="grid grid-cols-3 gap-2.5 font-mono tabular-nums">
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-center">
-          <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Atual</p>
-          <p className="mt-0.5 text-2xl font-black text-white sm:text-3xl">{speedKmh}</p>
-          <p className="text-[10px] font-bold text-[#E10600]">KM/H</p>
+        <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 text-center">
+          <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Vel. Atual</p>
+          <p className="mt-0.5 text-2xl font-black text-[var(--ps-text)] sm:text-3xl">{speedKmh}</p>
+          <p className="text-[10px] font-bold text-[var(--ps-accent)]">KM/H</p>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-center">
-          <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Média</p>
-          <p className="mt-0.5 text-2xl font-black text-emerald-400 sm:text-3xl">{avgSpeedKmh}</p>
-          <p className="text-[10px] text-zinc-400">KM/H</p>
+        <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 text-center">
+          <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Vel. Média</p>
+          <p className="mt-0.5 text-2xl font-black text-[var(--ps-emerald)] sm:text-3xl">{avgSpeedKmh}</p>
+          <p className="text-[10px] text-[var(--ps-muted)]">KM/H</p>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-center">
-          <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Máxima</p>
-          <p className="mt-0.5 text-2xl font-black text-amber-300 sm:text-3xl">{maxSpeedKmh}</p>
+        <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 text-center">
+          <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máxima</p>
+          <p className="mt-0.5 text-2xl font-black text-[var(--ps-amber)] sm:text-3xl">{maxSpeedKmh}</p>
           <button
             type="button"
             onClick={() => {
               setMaxSpeedKmh(0);
               setAvgSpeedSamples([]);
             }}
-            className="text-[10px] text-zinc-500 hover:text-white underline"
+            className="text-[10px] text-[var(--ps-muted)] hover:text-[var(--ps-text)] underline"
           >
             limpar
           </button>
@@ -542,15 +546,15 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
       </section>
 
       {/* Inline Quick W Fino Adjustment */}
-      <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-2.5">
+      <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <SlidersHorizontal className="h-4 w-4 text-[#E10600]" />
+            <SlidersHorizontal className="h-4 w-4 text-[var(--ps-accent)]" />
             <span className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
               Ajuste Rápido W Fino ({settings.sensorMode === 'blue' ? `W ${activeW}` : `${settings.calibrationPct.toFixed(2)}%`})
             </span>
           </div>
-          <span className="font-mono text-[11px] text-[#B5B5B5]">
+          <span className="font-mono text-[11px] text-[var(--ps-muted)]">
             Base W {settings.wBaseValue}
           </span>
         </div>
@@ -559,36 +563,36 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
           <button
             type="button"
             onClick={() => adjustCalPct(-1)}
-            className="min-h-[42px] rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-extrabold text-[#C0C4C9] hover:text-white"
+            className="min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
           >
             -1%
           </button>
           <button
             type="button"
             onClick={() => adjustCalPct(-0.1)}
-            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-[#1E1E22] text-sm font-black text-white hover:border-[#E10600]"
+            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
           >
             <Minus className="h-4 w-4" />
           </button>
-          <div className="flex flex-col items-center justify-center rounded-lg border border-zinc-700 bg-black px-2 text-center tabular-nums">
-            <span className="text-sm font-black text-white">
+          <div className="flex flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2 text-center tabular-nums">
+            <span className="text-sm font-black text-[var(--ps-text)]">
               {settings.sensorMode === 'blue' ? `W ${activeW}` : `${settings.calibrationPct.toFixed(2)}%`}
             </span>
-            <span className="text-[9px] text-[#B5B5B5]">
+            <span className="text-[9px] text-[var(--ps-muted)]">
               {calibrationPctFromWValue(activeW, settings.wBaseValue).toFixed(1)}%
             </span>
           </div>
           <button
             type="button"
             onClick={() => adjustCalPct(0.1)}
-            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-[#1E1E22] text-sm font-black text-white hover:border-[#E10600]"
+            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
           >
             <Plus className="h-4 w-4" />
           </button>
           <button
             type="button"
             onClick={() => adjustCalPct(1)}
-            className="min-h-[42px] rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-extrabold text-[#C0C4C9] hover:text-white"
+            className="min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
           >
             +1%
           </button>

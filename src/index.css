@@ -9,9 +9,9 @@
 :root,
 [data-theme="pitstop"] {
   --ps-bg: #090A0D;
-  --ps-surface: #12141A;
-  --ps-card: #1A1D26;
-  --ps-card-deep: #07080B;
+  --ps-surface: #111318;
+  --ps-card: #181B22;
+  --ps-card-deep: #06070A;
   --ps-header: rgba(9, 10, 13, 0.96);
   --ps-border: rgba(255, 255, 255, 0.08);
   --ps-border-strong: rgba(255, 255, 255, 0.16);
@@ -26,69 +26,7 @@
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-}
-
-[data-theme="fueltech"] {
-  --ps-bg: #000000;
-  --ps-surface: #07090E;
-  --ps-card: #0D121B;
-  --ps-card-deep: #000000;
-  --ps-header: rgba(0, 0, 0, 0.97);
-  --ps-border: rgba(14, 165, 233, 0.22);
-  --ps-border-strong: rgba(245, 158, 11, 0.42);
-  --ps-text: #F8FAFC;
-  --ps-muted: #94A3B8;
-  --ps-accent: #0EA5E9;
-  --ps-accent-2: #38BDF8;
-  --ps-accent-soft: rgba(14, 165, 233, 0.18);
-  --ps-accent-text: #FFFFFF;
-  --ps-amber: #F59E0B;
-  --ps-emerald: #10B981;
-  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
-  --ps-font-display: "Barlow Condensed", sans-serif;
-  --ps-font-mono: "Barlow Condensed", "JetBrains Mono", sans-serif;
-}
-
-[data-theme="night"] {
-  --ps-bg: #100C0D;
-  --ps-surface: #181214;
-  --ps-card: #21181A;
-  --ps-card-deep: #0C090A;
-  --ps-header: rgba(16, 12, 13, 0.96);
-  --ps-border: rgba(249, 115, 22, 0.18);
-  --ps-border-strong: rgba(220, 38, 38, 0.36);
-  --ps-text: #FCEBE3;
-  --ps-muted: #C29D90;
-  --ps-accent: #DC2626;
-  --ps-accent-2: #F97316;
-  --ps-accent-soft: rgba(220, 38, 38, 0.18);
-  --ps-accent-text: #FFF7ED;
-  --ps-amber: #F97316;
-  --ps-emerald: #34D399;
-  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
-  --ps-font-display: "Barlow Condensed", sans-serif;
-  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-}
-
-[data-theme="solar"] {
-  --ps-bg: #F1F5F9;
-  --ps-surface: #FFFFFF;
-  --ps-card: #F8FAFC;
-  --ps-card-deep: #E2E8F0;
-  --ps-header: rgba(255, 255, 255, 0.96);
-  --ps-border: rgba(15, 23, 42, 0.12);
-  --ps-border-strong: rgba(15, 23, 42, 0.24);
-  --ps-text: #090D16;
-  --ps-muted: #475569;
-  --ps-accent: #E10600;
-  --ps-accent-2: #B91C1C;
-  --ps-accent-soft: rgba(225, 6, 0, 0.1);
-  --ps-accent-text: #FFFFFF;
-  --ps-amber: #B45309;
-  --ps-emerald: #047857;
-  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
-  --ps-font-display: "Barlow Condensed", sans-serif;
-  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
 }
 
 [data-theme="gt"] {
@@ -110,6 +48,183 @@
   --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
   --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
   --ps-font-mono: "Outfit", "JetBrains Mono", sans-serif;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="fueltech"] {
+  --ps-bg: #000000;
+  --ps-surface: #070B12;
+  --ps-card: #0F1724;
+  --ps-card-deep: #000000;
+  --ps-header: rgba(0, 0, 0, 0.98);
+  --ps-border: rgba(14, 165, 233, 0.24);
+  --ps-border-strong: rgba(245, 158, 11, 0.48);
+  --ps-text: #F8FAFC;
+  --ps-muted: #94A3B8;
+  --ps-accent: #0EA5E9;
+  --ps-accent-2: #F59E0B;
+  --ps-accent-soft: rgba(14, 165, 233, 0.16);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #F59E0B;
+  --ps-emerald: #10B981;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "Barlow Condensed", "JetBrains Mono", sans-serif;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="subaru"] {
+  --ps-bg: #071430;
+  --ps-surface: #0C214D;
+  --ps-card: #132F68;
+  --ps-card-deep: #040D20;
+  --ps-header: rgba(7, 20, 48, 0.97);
+  --ps-border: rgba(250, 204, 21, 0.22);
+  --ps-border-strong: rgba(250, 204, 21, 0.48);
+  --ps-text: #F8FAFC;
+  --ps-muted: #93C5FD;
+  --ps-accent: #1D4ED8;
+  --ps-accent-2: #FACC15;
+  --ps-accent-soft: rgba(29, 78, 216, 0.26);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #FACC15;
+  --ps-emerald: #34D399;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="gulf"] {
+  --ps-bg: #081929;
+  --ps-surface: #0E2942;
+  --ps-card: #163959;
+  --ps-card-deep: #05111C;
+  --ps-header: rgba(8, 25, 41, 0.97);
+  --ps-border: rgba(56, 189, 248, 0.24);
+  --ps-border-strong: rgba(249, 115, 22, 0.5);
+  --ps-text: #F0F9FF;
+  --ps-muted: #7DD3FC;
+  --ps-accent: #38BDF8;
+  --ps-accent-2: #F97316;
+  --ps-accent-soft: rgba(56, 189, 248, 0.18);
+  --ps-accent-text: #06131F;
+  --ps-amber: #F97316;
+  --ps-emerald: #38BDF8;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="martini"] {
+  --ps-bg: #0A1324;
+  --ps-surface: #111F38;
+  --ps-card: #192C4D;
+  --ps-card-deep: #060C18;
+  --ps-header: rgba(10, 19, 36, 0.97);
+  --ps-border: rgba(56, 189, 248, 0.22);
+  --ps-border-strong: rgba(225, 29, 72, 0.45);
+  --ps-text: #F8FAFC;
+  --ps-muted: #93C5FD;
+  --ps-accent: #E11D48;
+  --ps-accent-2: #38BDF8;
+  --ps-accent-soft: rgba(225, 29, 72, 0.18);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #38BDF8;
+  --ps-emerald: #10B981;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="cyberpunk"] {
+  --ps-bg: #0B0514;
+  --ps-surface: #150A24;
+  --ps-card: #211038;
+  --ps-card-deep: #06030C;
+  --ps-header: rgba(11, 5, 20, 0.97);
+  --ps-border: rgba(236, 72, 153, 0.26);
+  --ps-border-strong: rgba(6, 182, 212, 0.5);
+  --ps-text: #FDF4FF;
+  --ps-muted: #C4B5FD;
+  --ps-accent: #EC4899;
+  --ps-accent-2: #06B6D4;
+  --ps-accent-soft: rgba(236, 72, 153, 0.18);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #06B6D4;
+  --ps-emerald: #22D3EE;
+  --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="castrol"] {
+  --ps-bg: #051610;
+  --ps-surface: #09241B;
+  --ps-card: #0F3527;
+  --ps-card-deep: #030E0A;
+  --ps-header: rgba(5, 22, 16, 0.97);
+  --ps-border: rgba(16, 185, 129, 0.25);
+  --ps-border-strong: rgba(239, 68, 68, 0.45);
+  --ps-text: #ECFDF5;
+  --ps-muted: #6EE7B7;
+  --ps-accent: #10B981;
+  --ps-accent-2: #EF4444;
+  --ps-accent-soft: rgba(16, 185, 129, 0.18);
+  --ps-accent-text: #022C22;
+  --ps-amber: #F59E0B;
+  --ps-emerald: #10B981;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="night"] {
+  --ps-bg: #050506;
+  --ps-surface: #0B0B0E;
+  --ps-card: #121216;
+  --ps-card-deep: #020203;
+  --ps-header: rgba(5, 5, 6, 0.98);
+  --ps-border: rgba(220, 38, 38, 0.22);
+  --ps-border-strong: rgba(217, 119, 6, 0.4);
+  --ps-text: #E5D4CE;
+  --ps-muted: #9C7E76;
+  --ps-accent: #DC2626;
+  --ps-accent-2: #D97706;
+  --ps-accent-soft: rgba(220, 38, 38, 0.15);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #D97706;
+  --ps-emerald: #B45309;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(0.92) sepia(0.35) hue-rotate(315deg) contrast(1.1);
+}
+
+[data-theme="solar"] {
+  --ps-bg: #F1F5F9;
+  --ps-surface: #FFFFFF;
+  --ps-card: #F8FAFC;
+  --ps-card-deep: #E2E8F0;
+  --ps-header: rgba(255, 255, 255, 0.96);
+  --ps-border: rgba(15, 23, 42, 0.12);
+  --ps-border-strong: rgba(15, 23, 42, 0.24);
+  --ps-text: #090D16;
+  --ps-muted: #475569;
+  --ps-accent: #E10600;
+  --ps-accent-2: #B91C1C;
+  --ps-accent-soft: rgba(225, 6, 0, 0.1);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #B45309;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
 }
 
 @layer base {
@@ -331,18 +446,18 @@
   will-change: transform, opacity;
 }
 
-/* True inside-bounds elliptical radial fade so square image edges dissolve 100% before hitting box boundaries */
+/* True inside-bounds elliptical radial fade so image edges dissolve 100% before hitting box boundaries */
 .pitstop-hero-mask {
   -webkit-mask-image: radial-gradient(
-    ellipse 46% 42% at 50% 50%,
-    rgba(0, 0, 0, 1) 34%,
-    rgba(0, 0, 0, 0.6) 64%,
+    ellipse 50% 48% at 50% 50%,
+    rgba(0, 0, 0, 1) 46%,
+    rgba(0, 0, 0, 0.72) 72%,
     rgba(0, 0, 0, 0) 98%
   );
   mask-image: radial-gradient(
-    ellipse 46% 42% at 50% 50%,
-    rgba(0, 0, 0, 1) 34%,
-    rgba(0, 0, 0, 0.6) 64%,
+    ellipse 50% 48% at 50% 50%,
+    rgba(0, 0, 0, 1) 46%,
+    rgba(0, 0, 0, 0.72) 72%,
     rgba(0, 0, 0, 0) 98%
   );
   -webkit-mask-repeat: no-repeat;
@@ -350,27 +465,89 @@
 }
 
 @keyframes pitstopSloganMetallic {
+  0% {
+    background-position: 180% 50%;
+  }
+  100% {
+    background-position: -80% 50%;
+  }
+}
+
+@keyframes pitstopSloganPulse {
   0%, 100% {
-    background-position: 0% 50%;
+    filter: drop-shadow(0 0 4px color-mix(in srgb, var(--ps-accent) 22%, transparent));
   }
   50% {
-    background-position: 100% 50%;
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--ps-accent) 55%, transparent));
+  }
+}
+
+@keyframes pitstopDividerBeam {
+  0% {
+    background-position: 200% 50%;
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    background-position: -100% 50%;
+    opacity: 0.45;
   }
 }
 
 .pitstop-slogan-text {
   background: linear-gradient(
     110deg,
-    rgba(161, 161, 170, 0.72) 0%,
-    rgba(244, 244, 245, 0.92) 38%,
-    rgba(255, 30, 30, 0.8) 52%,
-    rgba(161, 161, 170, 0.72) 100%
+    rgba(161, 161, 170, 0.78) 0%,
+    rgba(212, 212, 216, 0.88) 32%,
+    #ffffff 46%,
+    var(--ps-accent-2) 54%,
+    rgba(212, 212, 216, 0.88) 68%,
+    rgba(161, 161, 170, 0.78) 100%
   );
-  background-size: 220% 100%;
+  background-size: 260% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: pitstopSloganMetallic 6.4s ease-in-out infinite;
+  animation:
+    pitstopSloganMetallic 4.6s ease-in-out infinite,
+    pitstopSloganPulse 3.2s ease-in-out infinite;
+}
+
+[data-theme="solar"] .pitstop-slogan-text {
+  background: linear-gradient(
+    110deg,
+    #334155 0%,
+    #0f172a 34%,
+    #e10600 50%,
+    #0f172a 66%,
+    #334155 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.pitstop-divider-beam {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--ps-border-strong) 24%,
+    var(--ps-accent) 46%,
+    #ffffff 50%,
+    var(--ps-accent) 54%,
+    var(--ps-border-strong) 76%,
+    transparent 100%
+  );
+  background-size: 240% 100%;
+  animation: pitstopDividerBeam 3.6s ease-in-out infinite;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ps-accent) 40%, transparent);
+}
+
+.pitstop-divider-beam-right {
+  animation-direction: reverse;
 }
 
 

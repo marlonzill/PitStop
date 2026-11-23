@@ -16,6 +16,7 @@ import {
   buildMarcoArrowGeometry,
   buildMarcoGateLineString,
   computeSampleGForces,
+  extractMapSpeedBadges,
   type TrapKind,
   type VelocitySample,
   type VelocityTrap,
@@ -62,6 +63,7 @@ interface VelocityMapboxViewProps {
   onToggleHeadingUp?: () => void;
   navHeadingDeg?: number | null;
   heatmapMode?: 'none' | 'speed' | 'accel';
+  showSpeedBadges?: boolean;
   containerClassName?: string;
   placementKind?: TrapKind | null;
   selectedTrapId?: string | null;
@@ -330,7 +332,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   onToggleHeadingUp,
   navHeadingDeg = null,
   heatmapMode = 'none',
-  containerClassName = 'relative mt-2 h-80 w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[420px]',
+  showSpeedBadges = false,
+  containerClassName = 'relative mt-2 h-80 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-[420px]',
   placementKind = null,
   selectedTrapId = null,
   onMapClickPlaceTrap,
@@ -348,6 +351,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     streets: L.TileLayer;
   } | null>(null);
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
+  const speedBadgesLayerRef = useRef<L.LayerGroup | null>(null);
   const scrubberLayerRef = useRef<L.LayerGroup | null>(null);
   const gatesLayerRef = useRef<L.LayerGroup | null>(null);
   const carLayerRef = useRef<L.LayerGroup | null>(null);
@@ -421,10 +425,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     baseLayersRef.current = { satellite, labels, streets };
 
     const routeLayer = L.layerGroup().addTo(map);
+    const speedBadgesLayer = L.layerGroup().addTo(map);
     const scrubberLayer = L.layerGroup().addTo(map);
     const gatesLayer = L.layerGroup().addTo(map);
     const carLayer = L.layerGroup().addTo(map);
     routeLayerRef.current = routeLayer;
+    speedBadgesLayerRef.current = speedBadgesLayer;
     scrubberLayerRef.current = scrubberLayer;
     gatesLayerRef.current = gatesLayer;
     carLayerRef.current = carLayer;
@@ -453,6 +459,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       mapRef.current = null;
       baseLayersRef.current = null;
       routeLayerRef.current = null;
+      speedBadgesLayerRef.current = null;
       scrubberLayerRef.current = null;
       gatesLayerRef.current = null;
       carLayerRef.current = null;
@@ -614,6 +621,55 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       }
     }
   }, [editableTrace, ghostTrace, thirdTrace, offsetGhostTrace, heatmapMode]);
+
+  // Etiquetas numéricas flutuantes estilo RaceChrono (Verde = Máxima antes da freada, Vermelho = Ápice da curva)
+  useEffect(() => {
+    const badgesLayer = speedBadgesLayerRef.current;
+    if (!badgesLayer) return;
+    badgesLayer.clearLayers();
+    if (!showSpeedBadges || editableTrace.length < 6) return;
+
+    const badges = extractMapSpeedBadges(editableTrace);
+    for (const b of badges) {
+      const isPeak = b.kind === 'peak';
+      const el = document.createElement('div');
+      el.style.display = 'inline-flex';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'center';
+      el.style.padding = '1px 5px';
+      el.style.borderRadius = '5px';
+      el.style.fontFamily = 'monospace';
+      el.style.fontSize = '10px';
+      el.style.fontWeight = '900';
+      el.style.lineHeight = '1.15';
+      el.style.whiteSpace = 'nowrap';
+      el.style.pointerEvents = 'none';
+      el.style.transform = 'translate(-50%, -125%)';
+      el.style.boxShadow = '0 2px 5px rgba(0,0,0,0.85)';
+      if (isPeak) {
+        el.style.background = '#052E16';
+        el.style.border = '1.5px solid #10B981';
+        el.style.color = '#6EE7B7';
+      } else {
+        el.style.background = '#3B080A';
+        el.style.border = '1.5px solid #FF2A2A';
+        el.style.color = '#FCA5A5';
+      }
+      el.textContent = `${b.speedKmh}`;
+
+      const icon = L.divIcon({
+        html: el,
+        className: 'pitstop-speed-badge-divicon',
+        iconSize: [0, 0],
+        iconAnchor: [0, 0],
+      });
+      L.marker([b.lat, b.lon], {
+        icon,
+        interactive: false,
+        zIndexOffset: 750,
+      }).addTo(badgesLayer);
+    }
+  }, [editableTrace, showSpeedBadges]);
 
   // Scrubber estático para editor de pista (separado do routeLayer para manter 60fps no Replay)
   useEffect(() => {
@@ -984,7 +1040,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   return (
     <div
       className={
-        isFullscreen ? 'fixed inset-0 z-50 overflow-hidden bg-[#080B0D]' : containerClassName
+        isFullscreen ? 'fixed inset-0 z-50 overflow-hidden bg-[var(--ps-bg)]' : containerClassName
       }
     >
       <div
@@ -1007,12 +1063,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           }}
           className={`absolute top-2.5 left-2.5 z-[400] inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-extrabold shadow-lg backdrop-blur-xs ${
             effectiveHeadingUp
-              ? 'border-[#E10600]/80 bg-[#1A0D0E]/90 text-white'
-              : 'border-zinc-700 bg-[#080B0D]/90 text-[#C0C4C9]'
+              ? 'border-[var(--ps-accent)] bg-[var(--ps-surface)]/95 text-[var(--ps-text)]'
+              : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/90 text-[var(--ps-muted)]'
           }`}
           title="Alternar entre seguir sentido do veículo (Heading-Up) ou Norte Fixo"
         >
-          <Compass className={`h-3.5 w-3.5 ${effectiveHeadingUp ? 'text-[#E10600]' : 'text-sky-400'}`} />
+          <Compass className={`h-3.5 w-3.5 ${effectiveHeadingUp ? 'text-[var(--ps-accent)]' : 'text-sky-400'}`} />
           <span>{effectiveHeadingUp ? 'Heading-Up' : 'Norte Fixo'}</span>
         </button>
       )}
@@ -1040,10 +1096,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           <button
             type="button"
             onClick={() => fitMapToTrackOrCenter(true)}
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2 text-[11px] font-bold text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
             title="Enquadrar Pista"
           >
-            <LocateFixed className="h-3.5 w-3.5 text-[#E10600]" />
+            <LocateFixed className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
             <span>Rota</span>
           </button>
         )}
@@ -1051,27 +1107,27 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         <button
           type="button"
           onClick={centerOnGpsOrErechim}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2 text-[11px] font-bold text-[#C0C4C9] shadow-lg backdrop-blur-xs hover:text-white"
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-muted)] shadow-lg backdrop-blur-xs hover:text-[var(--ps-text)]"
           title={currentPos ? 'Centralizar no GPS' : 'Centralizar em Erechim, RS'}
         >
-          <Navigation className="h-3 w-3 text-emerald-400" />
+          <Navigation className="h-3 w-3 text-[var(--ps-emerald)]" />
           <span>{currentPos ? 'GPS' : 'Erechim'}</span>
         </button>
 
         <button
           type="button"
           onClick={cycleMapStyle}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D]/90 px-2 text-[11px] font-bold text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
           aria-label="Alternar camada do mapa"
         >
-          <Layers className="h-3.5 w-3.5 text-amber-300" />
+          <Layers className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
           <span>{currentStyle.label}</span>
         </button>
 
         <button
           type="button"
           onClick={() => setIsFullscreen((v) => !v)}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D]/90 text-white shadow-lg backdrop-blur-xs hover:border-[#E10600]"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
           aria-label={isFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
         >
           {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
@@ -1079,11 +1135,11 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       </div>
 
       {/* Controles de Zoom + / - estilo RaceChrono */}
-      <div className="absolute right-2.5 bottom-14 z-[400] flex flex-col overflow-hidden rounded-lg border border-zinc-700 bg-[#080B0D]/90 shadow-lg backdrop-blur-xs">
+      <div className="absolute right-2.5 bottom-14 z-[400] flex flex-col overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 shadow-lg backdrop-blur-xs">
         <button
           type="button"
           onClick={() => mapRef.current?.zoomIn()}
-          className="flex h-9 w-9 items-center justify-center text-white hover:bg-zinc-800 border-b border-zinc-800"
+          className="flex h-9 w-9 items-center justify-center text-[var(--ps-text)] hover:bg-[var(--ps-card)] border-b border-[var(--ps-border)]"
           aria-label="Aumentar zoom"
         >
           <Plus className="h-4 w-4" />
@@ -1091,7 +1147,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         <button
           type="button"
           onClick={() => mapRef.current?.zoomOut()}
-          className="flex h-9 w-9 items-center justify-center text-white hover:bg-zinc-800"
+          className="flex h-9 w-9 items-center justify-center text-[var(--ps-text)] hover:bg-[var(--ps-card)]"
           aria-label="Diminuir zoom"
         >
           <Minus className="h-4 w-4" />
@@ -1103,7 +1159,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         <button
           type="button"
           onClick={handlePlaceAtCrosshair}
-          className={`pitstop-btn-red absolute z-[410] inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-extrabold text-white shadow-xl active:scale-95 ${
+          className={`pitstop-btn-red absolute z-[410] inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-extrabold shadow-xl active:scale-95 ${
             isFullscreen && fullscreenOverlay ? 'top-2.5 left-2.5' : 'bottom-3 left-3'
           }`}
         >

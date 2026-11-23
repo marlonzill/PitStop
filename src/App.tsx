@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Calculator, Flag, Home, Route, Settings } from 'lucide-react';
+import { Calculator, Crown, Flag, Home, Lock, Route, Settings, X } from 'lucide-react';
 import { InitialStatusTab } from './components/InitialStatusTab';
 import { NavigationCockpit } from './components/NavigationCockpit';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -10,6 +10,12 @@ import { SettingsTab } from './components/SettingsTab';
 import { TimeCalculatorTab } from './components/TimeCalculatorModal';
 import { VelocityCockpit } from './components/VelocityCockpit';
 import type { ActiveTab, CompetitorResultFile, RallyMode } from './types/rally';
+import {
+  openProUpgradeModal,
+  type ProUpgradePromptPayload,
+  subscribeProUpgradeModal,
+  useAuthSession,
+} from './utils/authSubscription';
 import { applyAppThemeToDocument, updateNavSettings, useNavSettings } from './utils/navSettings';
 import { normalizeRoomCode, normalizeRoomPin } from './utils/pairingClient';
 import { bootstrapFirstRunPermissions } from './utils/permissionsBootstrap';
@@ -60,6 +66,7 @@ const OrganizerBackoffice = isCompetitorEnv
 
 export type SettingsSubMenu =
   | 'hub'
+  | 'account'
   | 'theme'
   | 'collector'
   | 'roadbooks'
@@ -74,6 +81,8 @@ export type SettingsSubMenu =
 
 export default function App() {
   const [navSettings] = useNavSettings();
+  const { isPro, user, refresh: refreshAuth } = useAuthSession();
+  const [proModal, setProModal] = useState<ProUpgradePromptPayload | null>(null);
   const [{ isApuracao, publicResultSlug }, setRouteState] = useState(() =>
     readUrlRoute()
   );
@@ -105,9 +114,28 @@ export default function App() {
   };
 
   const handleSelectModeFromHome = (mode: RallyMode) => {
+    if (mode === 'regularidade' && !isPro) {
+      openProUpgradeModal(
+        'Navegação de Regularidade Completa',
+        'A navegação por planilha (.NBP/.TXT), cálculos de TNAV/PMM, voz e Droid Piloto estão disponíveis no Plano PRO.'
+      );
+      return;
+    }
     updateRallyMode(mode);
     setActiveTab(mode === 'velocidade' ? 'velocidade' : 'navegacao');
   };
+
+  // Sync user account/subscription cleanly when online (falls back to offline cache)
+  useEffect(() => {
+    void refreshAuth();
+  }, [refreshAuth]);
+
+  // Listen to PRO upgrade modal prompts from any cockpit component
+  useEffect(() => {
+    return subscribeProUpgradeModal((payload) => {
+      setProModal(payload);
+    });
+  }, []);
 
   // Request Location and Storage permissions cleanly on first launch
   useEffect(() => {
@@ -270,6 +298,13 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
+                      if (!isPro) {
+                        openProUpgradeModal(
+                          'Navegação de Regularidade Completa',
+                          'Importação de planilhas .NBP/.TXT, TNAV/PMM em tempo real, alertas de voz e pareamento Droid Piloto.'
+                        );
+                        return;
+                      }
                       updateRallyMode('regularidade');
                       setActiveTab('navegacao');
                     }}
@@ -282,8 +317,15 @@ export default function App() {
                     }`}
                   >
                     <Route className="h-4 w-4 shrink-0" />
-                    <span className="truncate leading-none lg:hidden">Regul.</span>
-                    <span className="hidden lg:inline">Regularidade</span>
+                    <span className="inline-flex items-center gap-1 truncate leading-none">
+                      <span className="lg:hidden">Regul.</span>
+                      <span className="hidden lg:inline">Regularidade</span>
+                      {!isPro && (
+                        <span className="rounded bg-amber-500/20 px-1 py-0.5 font-mono text-[8px] font-black text-amber-400">
+                          PRO
+                        </span>
+                      )}
+                    </span>
                   </button>
                 ) : (
                   <button
@@ -390,6 +432,7 @@ export default function App() {
                   if (tab === 'configuracoes') openSettingsSection('hub');
                   else setActiveTab(tab);
                 }}
+                onOpenAccount={() => openSettingsSection('account')}
               />
             </div>
             {visitedTabs.has('navegacao') && (
@@ -411,6 +454,13 @@ export default function App() {
                   initialMenu={settingsMenu}
                   onMenuChange={setSettingsMenu}
                   onOpenNavigation={() => {
+                    if (!isPro) {
+                      openProUpgradeModal(
+                        'Navegação de Regularidade Completa',
+                        'Disponível para contas com Plano PRO ativo.'
+                      );
+                      return;
+                    }
                     updateRallyMode('regularidade');
                     setActiveTab('navegacao');
                   }}
@@ -429,6 +479,84 @@ export default function App() {
       </footer>
 
       <OfflineIndicator />
+
+      {/* Modal de Solicitação / Upgrade para Plano PRO */}
+      {proModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pro-modal-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-5 text-[var(--ps-text)] shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/15 text-amber-400">
+                  <Crown className="h-5 w-5" />
+                </div>
+                <div>
+                  <span className="inline-flex items-center gap-1 font-mono text-[10px] font-black tracking-widest text-amber-400 uppercase">
+                    <Lock className="h-3 w-3" />
+                    <span>Recurso Exclusivo PRO</span>
+                  </span>
+                  <h2
+                    id="pro-modal-title"
+                    className="font-['Barlow_Condensed'] text-xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase leading-tight"
+                  >
+                    {proModal.featureName}
+                  </h2>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProModal(null)}
+                aria-label="Fechar aviso PRO"
+                className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5 text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {proModal.description && (
+              <p className="text-xs leading-relaxed text-[var(--ps-muted)]">
+                {proModal.description}
+              </p>
+            )}
+
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-xs space-y-1.5">
+              <p className="font-bold text-[var(--ps-text)]">
+                {user
+                  ? `Conta atual: ${user.email} (Plano FREE)`
+                  : 'Você está usando o modo visitante (Plano FREE).'}
+              </p>
+              <p className="text-[11px] text-[var(--ps-muted)]">
+                No Plano FREE você tem Calculadora, Odômetro/Velocímetro básico, Levantamento básico e 2 Temas. Faça login ou solicite a liberação PRO na sua conta.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => {
+                  setProModal(null);
+                  openSettingsSection('account');
+                }}
+                className="pitstop-btn-red flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold tracking-wider uppercase"
+              >
+                <Crown className="h-4 w-4" />
+                <span>{user ? 'Gerenciar Assinatura PRO' : 'Entrar / Ativar PRO'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProModal(null)}
+                className="pitstop-btn-metal min-h-[44px] rounded-xl px-4 text-xs font-bold"
+              >
+                Continuar no FREE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

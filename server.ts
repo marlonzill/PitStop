@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { createServer as createViteServer } from 'vite';
 import { WebSocket, WebSocketServer } from 'ws';
 
@@ -41,11 +42,43 @@ const ROOT_DIR = process.cwd();
 const DATA_DIR = path.resolve(ROOT_DIR, 'data');
 const TXT_DIR = path.resolve(DATA_DIR, 'txts');
 const DB_FILE = path.resolve(DATA_DIR, 'pitstop_base.json');
+const USERS_SQLITE_FILE = path.resolve(DATA_DIR, 'users.sqlite');
 
 const ENV_ORGANIZER_PASSCODE = (process.env.ORGANIZER_PASSCODE || '').trim();
+const MASTER_ADMIN_EMAIL = (
+  process.env.ADMIN_MASTER_EMAIL || 'marlon@infoviasistemas.com.br'
+)
+  .trim()
+  .toLowerCase();
 const SESSION_SECRET =
   (process.env.SESSION_SECRET || '').trim() || crypto.randomBytes(32).toString('hex');
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const USER_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+type UserPlan = 'free' | 'pro';
+type UserRole = 'user' | 'admin';
+
+interface StoredUserRow {
+  id: string;
+  name: string;
+  email: string;
+  password_hash: string;
+  plan: UserPlan;
+  role: UserRole;
+  expires_at: string | null;
+  created_at: string;
+}
+
+interface PublicUserDto {
+  id: string;
+  name: string;
+  email: string;
+  plan: UserPlan;
+  effectivePlan: UserPlan;
+  role: UserRole;
+  expiresAt: string | null;
+  createdAt: string;
+}
 
 function ensureDataDirs(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -173,6 +206,198 @@ function extractBearerToken(req: Request): string | null {
   return auth.slice(7).trim() || null;
 }
 
+function computeEffectivePlan(user: {
+  plan: UserPlan;
+  role: UserRole;
+  expires_at: string | null;
+}): UserPlan {
+  if (user.role === 'admin') return 'pro';
+  if (user.plan !== 'pro') return 'free';
+  if (user.expires_at) {
+    const expMs = Date.parse(user.expires_at);
+    if (Number.isFinite(expMs) && expMs < Date.now()) {
+      return 'free';
+    }
+  }
+  return 'pro';
+}
+
+function toPublicUserDto(row: StoredUserRow): PublicUserDto {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    plan: row.plan === 'pro' ? 'pro' : 'free',
+    effectivePlan: computeEffectivePlan(row),
+    role: row.role === 'admin' ? 'admin' : 'user',
+    expiresAt: row.expires_at || null,
+    createdAt: row.created_at,
+  };
+}
+
+function signUserToken(user: StoredUserRow): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      type: 'user',
+      sub: user.id,
+      role: user.role,
+      exp: Date.now() + USER_TOKEN_TTL_MS,
+      jti: crypto.randomBytes(8).toString('hex'),
+    })
+  ).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifyUserToken(token: string | null | undefined): { sub: string; role: UserRole } | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [payload, sig] = parts;
+  if (!payload || !sig) return null;
+  try {
+    const expectedSig = crypto
+      .createHmac('sha256', SESSION_SECRET)
+      .update(payload)
+      .digest('base64url');
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expectedSig);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return null;
+    }
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as {
+      type?: string;
+      sub?: string;
+      role?: string;
+      exp?: number;
+    };
+    if (
+      decoded.type !== 'user' ||
+      typeof decoded.sub !== 'string' ||
+      !decoded.sub ||
+      typeof decoded.exp !== 'number' ||
+      decoded.exp <= Date.now()
+    ) {
+      return null;
+    }
+    return {
+      sub: decoded.sub,
+      role: decoded.role === 'admin' ? 'admin' : 'user',
+    };
+  } catch {
+    return null;
+  }
+}
+
+let usersDbInstance: SqlJsDatabase | null = null;
+let usersDbChain: Promise<void> = Promise.resolve();
+
+async function initUsersSqlite(): Promise<SqlJsDatabase> {
+  if (usersDbInstance) return usersDbInstance;
+  ensureDataDirs();
+  const SQL = await initSqlJs({
+    locateFile: (file: string) => path.resolve(ROOT_DIR, 'node_modules/sql.js/dist', file),
+  });
+  let db: SqlJsDatabase;
+  if (fs.existsSync(USERS_SQLITE_FILE)) {
+    const fileBuf = fs.readFileSync(USERS_SQLITE_FILE);
+    db = new SQL.Database(fileBuf);
+  } else {
+    db = new SQL.Database();
+  }
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      plan TEXT NOT NULL DEFAULT 'free',
+      role TEXT NOT NULL DEFAULT 'user',
+      expires_at TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  persistUsersSqliteSync(db);
+  usersDbInstance = db;
+  return db;
+}
+
+function persistUsersSqliteSync(db: SqlJsDatabase): void {
+  ensureDataDirs();
+  const data = db.export();
+  const tmpFile = `${USERS_SQLITE_FILE}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpFile, Buffer.from(data));
+  fs.renameSync(tmpFile, USERS_SQLITE_FILE);
+}
+
+function queueUsersDbOp<T>(fn: (db: SqlJsDatabase) => T): Promise<T> {
+  const run = usersDbChain.then(async () => {
+    const db = await initUsersSqlite();
+    return fn(db);
+  });
+  usersDbChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+function sqlFindUserByEmail(db: SqlJsDatabase, normalizedEmail: string): StoredUserRow | null {
+  const stmt = db.prepare(
+    'SELECT id, name, email, password_hash, plan, role, expires_at, created_at FROM users WHERE email = ? LIMIT 1'
+  );
+  try {
+    stmt.bind([normalizedEmail]);
+    if (!stmt.step()) return null;
+    const obj = stmt.getAsObject() as unknown as StoredUserRow;
+    return obj;
+  } finally {
+    stmt.free();
+  }
+}
+
+function sqlFindUserById(db: SqlJsDatabase, userId: string): StoredUserRow | null {
+  const stmt = db.prepare(
+    'SELECT id, name, email, password_hash, plan, role, expires_at, created_at FROM users WHERE id = ? LIMIT 1'
+  );
+  try {
+    stmt.bind([userId]);
+    if (!stmt.step()) return null;
+    return stmt.getAsObject() as unknown as StoredUserRow;
+  } finally {
+    stmt.free();
+  }
+}
+
+function sqlCountUsers(db: SqlJsDatabase): number {
+  const stmt = db.prepare('SELECT COUNT(*) AS cnt FROM users');
+  try {
+    if (!stmt.step()) return 0;
+    const row = stmt.getAsObject() as { cnt?: number };
+    return Number(row.cnt || 0);
+  } finally {
+    stmt.free();
+  }
+}
+
+function sqlListUsers(db: SqlJsDatabase): StoredUserRow[] {
+  const stmt = db.prepare(
+    'SELECT id, name, email, password_hash, plan, role, expires_at, created_at FROM users ORDER BY created_at DESC'
+  );
+  const rows: StoredUserRow[] = [];
+  try {
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject() as unknown as StoredUserRow);
+    }
+    return rows;
+  } finally {
+    stmt.free();
+  }
+}
+
 function isAllowedOrigin(origin: string, req: Request): boolean {
   if (!origin) return false;
   try {
@@ -250,6 +475,7 @@ function requireOrganizerAuth(req: Request, res: Response, next: NextFunction): 
 }
 
 async function startServer(): Promise<void> {
+  await initUsersSqlite();
   const app = express();
   app.set('trust proxy', 1);
 
@@ -260,7 +486,7 @@ async function startServer(): Promise<void> {
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Vary', 'Origin');
     }
-    res.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
     if (req.method === 'OPTIONS') {
       res.status(origin && !isAllowedOrigin(origin, req) ? 403 : 204).end();
@@ -329,34 +555,234 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.post('/api/auth/login', (req, res) => {
-    const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode.trim() : '';
-    if (!passcode) {
-      res.status(400).json({ ok: false, error: 'Informe a senha de apuração.' });
+  app.post('/api/auth/register', async (req, res) => {
+    const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const rawEmail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const rawPassword = typeof req.body?.password === 'string' ? req.body.password : '';
+
+    if (rawName.length < 2 || rawName.length > 80) {
+      res.status(400).json({ ok: false, error: 'Informe seu nome completo (mín. 2 caracteres).' });
       return;
     }
-    const db = readDb();
-    if (ENV_ORGANIZER_PASSCODE) {
-      if (!verifyEnvPasscode(passcode, ENV_ORGANIZER_PASSCODE)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(rawEmail) || rawEmail.length > 160) {
+      res.status(400).json({ ok: false, error: 'Informe um e-mail válido.' });
+      return;
+    }
+    if (rawPassword.length < 6 || rawPassword.length > 128) {
+      res.status(400).json({ ok: false, error: 'A senha deve ter pelo menos 6 caracteres.' });
+      return;
+    }
+
+    try {
+      const outcome = await queueUsersDbOp((db) => {
+        const existing = sqlFindUserByEmail(db, rawEmail);
+        if (existing) {
+          return { conflict: true as const };
+        }
+        const totalUsers = sqlCountUsers(db);
+        const isAdminMaster = totalUsers === 0 || rawEmail === MASTER_ADMIN_EMAIL;
+        const role: UserRole = isAdminMaster ? 'admin' : 'user';
+        const plan: UserPlan = isAdminMaster ? 'pro' : 'free';
+        const nowIso = new Date().toISOString();
+        const userRow: StoredUserRow = {
+          id: `usr_${crypto.randomUUID()}`,
+          name: rawName,
+          email: rawEmail,
+          password_hash: hashPasscodeScrypt(rawPassword),
+          plan,
+          role,
+          expires_at: null,
+          created_at: nowIso,
+        };
+        const stmt = db.prepare(
+          'INSERT INTO users (id, name, email, password_hash, plan, role, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        try {
+          stmt.run([
+            userRow.id,
+            userRow.name,
+            userRow.email,
+            userRow.password_hash,
+            userRow.plan,
+            userRow.role,
+            userRow.expires_at,
+            userRow.created_at,
+          ]);
+        } finally {
+          stmt.free();
+        }
+        persistUsersSqliteSync(db);
+        return { conflict: false as const, userRow };
+      });
+
+      if (outcome.conflict) {
+        res.status(409).json({ ok: false, error: 'Este e-mail já está cadastrado.' });
+        return;
+      }
+
+      const token = signUserToken(outcome.userRow);
+      res.status(201).json({
+        ok: true,
+        token,
+        user: toPublicUserDto(outcome.userRow),
+      });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Falha ao cadastrar conta no servidor.' });
+    }
+  });
+
+  app.post('/api/auth/login', async (req, res) => {
+    // 1. Preserve Organizer Backoffice passcode login
+    if (typeof req.body?.passcode === 'string') {
+      const passcode = req.body.passcode.trim();
+      if (!passcode) {
+        res.status(400).json({ ok: false, error: 'Informe a senha de apuração.' });
+        return;
+      }
+      const db = readDb();
+      if (ENV_ORGANIZER_PASSCODE) {
+        if (!verifyEnvPasscode(passcode, ENV_ORGANIZER_PASSCODE)) {
+          res.status(401).json({ ok: false, error: 'Senha de apuração incorreta.' });
+          return;
+        }
+        res.json({ ok: true, token: signOrganizerToken() });
+        return;
+      }
+      if (!db.organizerPassHash) {
+        res.status(409).json({
+          ok: false,
+          needsClaim: true,
+          error: 'Nenhuma senha cadastrada ainda. Crie a senha inicial.',
+        });
+        return;
+      }
+      if (!verifyPasscodeScrypt(passcode, db.organizerPassHash)) {
         res.status(401).json({ ok: false, error: 'Senha de apuração incorreta.' });
         return;
       }
       res.json({ ok: true, token: signOrganizerToken() });
       return;
     }
-    if (!db.organizerPassHash) {
-      res.status(409).json({
-        ok: false,
-        needsClaim: true,
-        error: 'Nenhuma senha cadastrada ainda. Crie a senha inicial.',
+
+    // 2. Competitor / Admin email + password login
+    const rawEmail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const rawPassword = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!rawEmail || !rawPassword) {
+      res.status(400).json({ ok: false, error: 'Informe e-mail e senha para entrar.' });
+      return;
+    }
+
+    try {
+      const userRow = await queueUsersDbOp((db) => sqlFindUserByEmail(db, rawEmail));
+      if (!userRow || !verifyPasscodeScrypt(rawPassword, userRow.password_hash)) {
+        res.status(401).json({ ok: false, error: 'E-mail ou senha incorretos.' });
+        return;
+      }
+      const token = signUserToken(userRow);
+      res.json({
+        ok: true,
+        token,
+        user: toPublicUserDto(userRow),
       });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Erro ao autenticar conta.' });
+    }
+  });
+
+  app.get('/api/auth/me', async (req, res) => {
+    const tokenPayload = verifyUserToken(extractBearerToken(req));
+    if (!tokenPayload) {
+      res.status(401).json({ ok: false, error: 'Sessão inválida ou expirada.' });
       return;
     }
-    if (!verifyPasscodeScrypt(passcode, db.organizerPassHash)) {
-      res.status(401).json({ ok: false, error: 'Senha de apuração incorreta.' });
+    try {
+      const userRow = await queueUsersDbOp((db) => sqlFindUserById(db, tokenPayload.sub));
+      if (!userRow) {
+        res.status(401).json({ ok: false, error: 'Conta não encontrada.' });
+        return;
+      }
+      res.json({ ok: true, user: toPublicUserDto(userRow) });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Falha ao consultar conta.' });
+    }
+  });
+
+  async function requireAdminAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+    const tokenPayload = verifyUserToken(extractBearerToken(req));
+    if (!tokenPayload) {
+      res.status(401).json({ ok: false, error: 'Autenticação necessária.' });
       return;
     }
-    res.json({ ok: true, token: signOrganizerToken() });
+    try {
+      const userRow = await queueUsersDbOp((db) => sqlFindUserById(db, tokenPayload.sub));
+      if (!userRow || userRow.role !== 'admin') {
+        res.status(403).json({ ok: false, error: 'Acesso restrito ao administrador.' });
+        return;
+      }
+      next();
+    } catch {
+      res.status(500).json({ ok: false, error: 'Erro ao validar permissões.' });
+    }
+  }
+
+  app.get('/api/admin/users', requireAdminAuth, async (_req, res) => {
+    try {
+      const rows = await queueUsersDbOp((db) => sqlListUsers(db));
+      res.json({
+        ok: true,
+        users: rows.map(toPublicUserDto),
+      });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Erro ao listar contas.' });
+    }
+  });
+
+  app.patch('/api/admin/users/:id', requireAdminAuth, async (req, res) => {
+    const targetId = String(req.params.id || '').trim();
+    const rawPlan = req.body?.plan;
+    const rawExpiresAt = req.body?.expiresAt;
+    if (!targetId) {
+      res.status(400).json({ ok: false, error: 'ID de usuário inválido.' });
+      return;
+    }
+    if (rawPlan !== 'free' && rawPlan !== 'pro') {
+      res.status(400).json({ ok: false, error: 'Plano inválido. Use "free" ou "pro".' });
+      return;
+    }
+    let normalizedExpiresAt: string | null = null;
+    if (rawExpiresAt !== null && rawExpiresAt !== undefined && rawExpiresAt !== '') {
+      const parsedMs = Date.parse(String(rawExpiresAt));
+      if (!Number.isFinite(parsedMs)) {
+        res.status(400).json({ ok: false, error: 'Data de validade inválida.' });
+        return;
+      }
+      normalizedExpiresAt = new Date(parsedMs).toISOString();
+    }
+
+    try {
+      const updated = await queueUsersDbOp((db) => {
+        const existing = sqlFindUserById(db, targetId);
+        if (!existing) return null;
+        const nextPlan: UserPlan = existing.role === 'admin' ? 'pro' : rawPlan;
+        const nextExpires = nextPlan === 'free' ? null : normalizedExpiresAt;
+        const stmt = db.prepare('UPDATE users SET plan = ?, expires_at = ? WHERE id = ?');
+        try {
+          stmt.run([nextPlan, nextExpires, targetId]);
+        } finally {
+          stmt.free();
+        }
+        persistUsersSqliteSync(db);
+        return sqlFindUserById(db, targetId);
+      });
+
+      if (!updated) {
+        res.status(404).json({ ok: false, error: 'Usuário não encontrado.' });
+        return;
+      }
+      res.json({ ok: true, user: toPublicUserDto(updated) });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Falha ao atualizar assinatura.' });
+    }
   });
 
   app.get('/api/results', requireOrganizerAuth, (_req, res) => {

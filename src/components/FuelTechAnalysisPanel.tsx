@@ -1,19 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Crosshair, RotateCcw, ZoomIn } from 'lucide-react';
+import { Award, Crosshair, RotateCcw, Trash2, ZoomIn } from 'lucide-react';
 import {
+  analyzeTrackCornersAndBraking,
+  buildTrackSectors,
   computeBrakePointOffsetNearDist,
+  computeFrictionCircleMetrics,
   computeLapDeltaSeries,
   computeLapTelemetrySummary,
   computeMultiLapSectorComparison,
+  computeRunSectorMetrics,
   detectTelemetryCriticalPoints,
   ensureTraceGForces,
   formatStageDuration,
+  getOrderedTrackTraps,
   interpolateSampleAtDist,
   type OptimalStageSummary,
   type VelocityRun,
   type VelocitySample,
   type VelocityTrack,
 } from '../utils/velocityEngine';
+import { VelocityMapboxView } from './VelocityMapboxView';
+export { VideoHudOverlayPanel } from './VideoHudOverlayPanel';
 
 interface FuelTechAnalysisPanelProps {
   sessionTrack: VelocityTrack | null;
@@ -264,18 +271,125 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     return list;
   }, [lap1, lap2, lap3, showLap2, showLap3, deltaSeries2, deltaSeries3]);
 
-  // Max absolute partial delta for scaling the horizontal bar chart
-  const maxPartialDeltaAbsSec = useMemo(() => {
-    let peak = 0.25;
-    sectorComparison.rows.forEach((row) => {
-      row.entries.forEach((e) => {
-        if (e.timeDeltaSec !== null) {
-          peak = Math.max(peak, Math.abs(e.timeDeltaSec));
+  // Matriz completa de voltas & parciais (Melhor Volta como referência única)
+  const raceChronoMatrix = useMemo(() => {
+    const orderedRuns = [...sessionRuns].sort((a, b) => a.runNumber - b.runNumber);
+    const sectors = buildTrackSectors(sessionTrack, orderedRuns);
+    const bestRun =
+      orderedRuns.length > 0
+        ? [...orderedRuns].sort((a, b) => a.totalMs - b.totalMs)[0]
+        : null;
+
+    const perRunMetrics = orderedRuns.map((run) => ({
+      run,
+      metrics: computeRunSectorMetrics(run, sectors),
+    }));
+
+    const bestRunMetrics =
+      bestRun
+        ? perRunMetrics.find((item) => item.run.id === bestRun.id)?.metrics ?? []
+        : [];
+
+    const bestSectorMsList: Array<number | null> = sectors.map((_, secIdx) => {
+      let best: number | null = null;
+      for (const item of perRunMetrics) {
+        const d = item.metrics[secIdx]?.durationMs;
+        if (typeof d === 'number' && d > 0 && (best === null || d < best)) {
+          best = d;
         }
-      });
+      }
+      return best;
     });
-    return Number((Math.ceil(peak * 4) / 4).toFixed(2));
-  }, [sectorComparison.rows]);
+
+    return {
+      sectors,
+      orderedRuns: perRunMetrics,
+      bestRun,
+      bestRunMetrics,
+      bestSectorMsList,
+    };
+  }, [sessionRuns, sessionTrack]);
+
+  // Círculo de Atrito / Diagrama G-G (V1, V2, V3)
+  const ggAnalysis = useMemo(() => {
+    const downsampleGG = (raw: VelocitySample[], maxPts = 220) => {
+      const normalized = ensureTraceGForces(raw);
+      if (normalized.length <= maxPts) {
+        return normalized.map((s) => ({
+          latG: s.accelLatG ?? 0,
+          longG: s.accelLongG ?? 0,
+        }));
+      }
+      const step = normalized.length / maxPts;
+      const out: Array<{ latG: number; longG: number }> = [];
+      for (let i = 0; i < maxPts; i += 1) {
+        const idx = Math.min(normalized.length - 1, Math.floor(i * step));
+        const s = normalized[idx];
+        out.push({
+          latG: s.accelLatG ?? 0,
+          longG: s.accelLongG ?? 0,
+        });
+      }
+      return out;
+    };
+
+    const laps: Array<{
+      slot: 1 | 2 | 3;
+      runNumber: number;
+      points: Array<{ latG: number; longG: number }>;
+      metrics: ReturnType<typeof computeFrictionCircleMetrics>;
+    }> = [];
+
+    if (lap1 && lap1Samples.length > 1) {
+      laps.push({
+        slot: 1,
+        runNumber: lap1.runNumber,
+        points: downsampleGG(lap1Samples),
+        metrics: computeFrictionCircleMetrics(lap1Samples),
+      });
+    }
+    if (showLap2 && lap2 && lap2Samples.length > 1) {
+      laps.push({
+        slot: 2,
+        runNumber: lap2.runNumber,
+        points: downsampleGG(lap2Samples),
+        metrics: computeFrictionCircleMetrics(lap2Samples),
+      });
+    }
+    if (showLap3 && lap3 && lap3Samples.length > 1) {
+      laps.push({
+        slot: 3,
+        runNumber: lap3.runNumber,
+        points: downsampleGG(lap3Samples),
+        metrics: computeFrictionCircleMetrics(lap3Samples),
+      });
+    }
+
+    let peakAxis = 1.0;
+    for (const l of laps) {
+      for (const p of l.points) {
+        peakAxis = Math.max(peakAxis, Math.abs(p.latG), Math.abs(p.longG));
+      }
+    }
+    const maxScaleG = peakAxis > 1.25 ? 1.5 : 1.2;
+    return { laps, maxScaleG };
+  }, [lap1, lap2, lap3, lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
+
+  // Análise Automática de Curvas e Freadas (Entrada / Ápice / Saída)
+  const cornerAnalysis = useMemo(() => {
+    const laps: Array<{ slot: 1 | 2 | 3; runNumber: number; samples: VelocitySample[] }> = [];
+    if (lap1 && lap1Samples.length > 5) {
+      laps.push({ slot: 1, runNumber: lap1.runNumber, samples: lap1Samples });
+    }
+    if (showLap2 && lap2 && lap2Samples.length > 5) {
+      laps.push({ slot: 2, runNumber: lap2.runNumber, samples: lap2Samples });
+    }
+    if (showLap3 && lap3 && lap3Samples.length > 5) {
+      laps.push({ slot: 3, runNumber: lap3.runNumber, samples: lap3Samples });
+    }
+    if (laps.length === 0) return [];
+    return analyzeTrackCornersAndBraking(laps);
+  }, [lap1, lap2, lap3, lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
 
   // Resample traces cleanly across the active zoom window [viewStartM, viewEndM]
   const winSamples1 = useMemo(
@@ -553,6 +667,15 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     const latG2 = s2 && typeof s2.accelLatG === 'number' ? s2.accelLatG : 0;
     const latG3 = s3 && typeof s3.accelLatG === 'number' ? s3.accelLatG : 0;
 
+    const timeDelta2vs1Sec =
+      s2 && s1
+        ? Number(((s2.stageElapsedMs - s1.stageElapsedMs) / 1000).toFixed(2))
+        : null;
+    const timeDelta3vs1Sec =
+      s3 && s1
+        ? Number(((s3.stageElapsedMs - s1.stageElapsedMs) / 1000).toFixed(2))
+        : null;
+
     const brakeOffset2 = showLap2
       ? computeBrakePointOffsetNearDist(lap1Samples, lap2Samples, scrubDistM)
       : null;
@@ -562,11 +685,17 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
     return {
       distM: Math.round(scrubDistM),
+      distKmStr: (scrubDistM / 1000).toFixed(3),
+      s1,
+      s2,
+      s3,
       speed1,
       speed2,
       speed3,
       speedDelta2vs1,
       speedDelta3vs1,
+      timeDelta2vs1Sec,
+      timeDelta3vs1Sec,
       longG1,
       longG2,
       longG3,
@@ -605,7 +734,172 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* 1. CARDS DE RESUMO COMPARATIVO (V1, V2, V3 + Volta Ideal) */}
+      {/* 0. DESTAQUE MELHOR VOLTA & MATRIZ GERAL DE VOLTAS/PARCIAIS */}
+      <div className="space-y-2.5">
+        {/* Card Único de Destaque: Melhor Volta (Best Lap) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#10B981]/50 bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] shadow-sm">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-full border-2 border-[#10B981] bg-[#10B981]/15 font-mono">
+              <Award className="h-4 w-4 text-[var(--ps-emerald)]" />
+              <span className="text-[9px] font-black text-[var(--ps-emerald)]">
+                {raceChronoMatrix.bestRun ? `#${raceChronoMatrix.bestRun.runNumber}` : '--'}
+              </span>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-extrabold tracking-wider text-[var(--ps-emerald)] uppercase">
+                Melhor Volta · Referência da Sessão
+              </p>
+              <p className="font-mono text-2xl font-black leading-tight text-[var(--ps-text)] tabular-nums sm:text-3xl truncate">
+                {formatStageDuration(raceChronoMatrix.bestRun?.totalMs ?? null)}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 font-mono text-xs tabular-nums">
+            <div>
+              <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máx</p>
+              <p className="font-extrabold text-[var(--ps-text)]">
+                {raceChronoMatrix.bestRun ? `${raceChronoMatrix.bestRun.maxSpeedKmh} km/h` : '--'}
+              </p>
+            </div>
+            <div>
+              <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Distância</p>
+              <p className="font-extrabold text-[var(--ps-text)]">
+                {raceChronoMatrix.bestRun ? `${raceChronoMatrix.bestRun.distanceKm.toFixed(2)} km` : '--'}
+              </p>
+            </div>
+            <div>
+              <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Voltas</p>
+              <p className="font-extrabold text-[var(--ps-emerald)]">
+                {raceChronoMatrix.orderedRuns.length}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabela Geral Detalhada de Todas as Voltas & Parciais (Estilo Matriz RaceChrono) */}
+        <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
+                Matriz Geral de Voltas &amp; Parciais
+              </h3>
+              <p className="font-mono text-[10px] text-[var(--ps-muted)]">
+                Referência: Melhor Volta · Verde = Recorde da parcial · Vermelho = Acima da Melhor Volta
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onDeleteSession}
+              className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-red-500/35 bg-red-500/10 px-2.5 text-[11px] font-bold text-red-500 hover:bg-red-500/20"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Excluir Sessão</span>
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums">
+              <thead>
+                <tr className="border-b border-[var(--ps-border-strong)] text-[10px] text-[var(--ps-muted)] uppercase">
+                  <th className="py-2 pr-2 whitespace-nowrap">Volta</th>
+                  <th className="px-2 py-2 whitespace-nowrap">Total</th>
+                  <th className="px-2 py-2 text-right whitespace-nowrap">Delta</th>
+                  {raceChronoMatrix.sectors.map((sec) => (
+                    <th key={`hdr_p_${sec.index}`} className="px-2 py-2 text-right whitespace-nowrap">
+                      P{sec.index}
+                    </th>
+                  ))}
+                  <th className="py-2 pl-2 text-right whitespace-nowrap">Dist.</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--ps-border)]">
+                {/* Linhas Reais #1, #2, #3... */}
+                {raceChronoMatrix.orderedRuns.map(({ run, metrics }) => {
+                  const isBestLap = raceChronoMatrix.bestRun?.id === run.id;
+                  const deltaVsBestSec =
+                    raceChronoMatrix.bestRun && run.totalMs > 0
+                      ? Number(((run.totalMs - raceChronoMatrix.bestRun.totalMs) / 1000).toFixed(2))
+                      : null;
+
+                  return (
+                    <tr
+                      key={`mtx_${run.id}`}
+                      className={isBestLap ? 'bg-emerald-500/10' : 'hover:bg-[var(--ps-card)]'}
+                    >
+                      <td className="py-2 pr-2 whitespace-nowrap font-extrabold text-[var(--ps-text)]">
+                        #{run.runNumber}
+                        {isBestLap && (
+                          <span className="ml-1 rounded bg-emerald-500/20 px-1 py-0.5 text-[9px] text-[var(--ps-emerald)]">
+                            BEST
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 whitespace-nowrap font-black text-[var(--ps-text)]">
+                        {formatStageDuration(run.totalMs)}
+                      </td>
+                      <td
+                        className={`px-2 py-2 text-right whitespace-nowrap font-extrabold ${
+                          deltaVsBestSec === null
+                            ? 'text-[var(--ps-muted)]'
+                            : deltaVsBestSec <= 0
+                              ? 'text-[var(--ps-emerald)]'
+                              : 'text-[#FF2A2A]'
+                        }`}
+                      >
+                        {deltaVsBestSec === null
+                          ? '--'
+                          : isBestLap
+                            ? '0.00s'
+                            : formatSignedSec(deltaVsBestSec)}
+                      </td>
+                      {metrics.map((m, idx) => {
+                        const secBest = raceChronoMatrix.bestSectorMsList[idx];
+                        const bestLapSecMs =
+                          raceChronoMatrix.bestRunMetrics[idx]?.durationMs ?? secBest;
+                        const isSecRecord =
+                          m.durationMs !== null &&
+                          secBest !== null &&
+                          Math.abs(m.durationMs - secBest) <= 15;
+                        const isFasterThanBestLap =
+                          m.durationMs !== null &&
+                          bestLapSecMs !== null &&
+                          m.durationMs - bestLapSecMs < -15;
+                        const isSlower =
+                          m.durationMs !== null &&
+                          bestLapSecMs !== null &&
+                          m.durationMs - bestLapSecMs > 15;
+
+                        return (
+                          <td
+                            key={`mtx_${run.id}_p_${idx}`}
+                            className={`px-2 py-2 text-right whitespace-nowrap font-bold ${
+                              isSecRecord
+                                ? 'bg-emerald-500/15 text-[var(--ps-emerald)] font-black'
+                                : isFasterThanBestLap
+                                  ? 'text-[var(--ps-emerald)]'
+                                  : isSlower
+                                    ? 'text-[#FF2A2A]'
+                                    : 'text-[var(--ps-text)]'
+                            }`}
+                          >
+                            {formatSectorSec(m.durationMs)}
+                          </td>
+                        );
+                      })}
+                      <td className="py-2 pl-2 text-right whitespace-nowrap text-[var(--ps-muted)]">
+                        {run.distanceKm.toFixed(2)}km
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* 1. CARDS DE RESUMO COMPARATIVO (V1, V2, V3) */}
       <div className="space-y-2">
         <div
           className={`grid grid-cols-1 gap-2 ${
@@ -700,118 +994,351 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
             );
           })}
         </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-xs tabular-nums">
-          <span className="font-bold text-[var(--ps-amber)] uppercase">
-            Volta Ideal Teórica (Melhores Parciais)
-          </span>
-          <span className="text-sm font-black text-[var(--ps-amber)]">
-            {formatStageDuration(sessionOptimal.optimalTotalMs)}
-          </span>
-        </div>
       </div>
 
-      {/* 2. GRÁFICO DE BARRAS HORIZONTAIS DE GANHO / PERDA POR PARCIAL (P1, P2, P3...) */}
-      {(showLap2 || showLap3) && sectorComparison.rows.length > 0 && (
+      {/* 2. FERRAMENTAS REAIS DE DATALOGGER (AiM / MoTeC / TrackAddict) */}
+      {/* 2A. CÍRCULO DE ATRITO / DIAGRAMA G-G (FRICTION CIRCLE) */}
+      {ggAnalysis.laps.length > 0 && (() => {
+        const size = 280;
+        const cx = size / 2;
+        const cy = size / 2;
+        const maxR = 112;
+        const scale = ggAnalysis.maxScaleG;
+        const r05 = (0.5 / scale) * maxR;
+        const r10 = (1.0 / scale) * maxR;
+        const pxX = (latG: number) => cx + (Math.max(-scale, Math.min(scale, latG)) / scale) * maxR;
+        const pxY = (longG: number) => cy - (Math.max(-scale, Math.min(scale, longG)) / scale) * maxR;
+
+        return (
+          <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
+                  Círculo de Atrito · Diagrama G-G
+                </h3>
+                <p className="font-mono text-[10px] text-[var(--ps-muted)]">
+                  Força G Lateral (X) × Longitudinal (Y) · Eficiência de frenagem, curva e trail braking
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] font-bold">
+                {ggAnalysis.laps.map((l) => (
+                  <span key={`gg_leg_${l.slot}`} className={SLOT_COLORS[l.slot].text}>
+                    ● V{l.slot} #{l.runNumber}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-[260px_1fr] items-center">
+              {/* Plot Circular G-G */}
+              <div className="mx-auto w-full max-w-[260px] rounded-xl border border-[var(--ps-border)] bg-[#06070B] p-2">
+                <svg viewBox={`0 0 ${size} ${size}`} className="w-full h-auto">
+                  {/* Anel externo máximo */}
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={maxR}
+                    fill="rgba(255,255,255,0.02)"
+                    stroke="#262A36"
+                    strokeWidth="1.2"
+                  />
+                  {/* Anel de 1.0G */}
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={r10}
+                    fill="none"
+                    stroke="#475569"
+                    strokeWidth="1.2"
+                  />
+                  {/* Anel de 0.5G */}
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={r05}
+                    fill="none"
+                    stroke="#334155"
+                    strokeDasharray="3 3"
+                    strokeWidth="1"
+                  />
+                  {/* Eixos X/Y */}
+                  <line x1={cx - maxR} y1={cy} x2={cx + maxR} y2={cy} stroke="#334155" strokeWidth="1" />
+                  <line x1={cx} y1={cy - maxR} x2={cx} y2={cy + maxR} stroke="#334155" strokeWidth="1" />
+
+                  {/* Rótulos dos Anéis e Eixos */}
+                  <text x={cx + 3} y={cy - r05 + 9} fill="#94A3B8" fontSize="8" fontFamily="monospace">
+                    0.5G
+                  </text>
+                  <text x={cx + 3} y={cy - r10 + 9} fill="#CBD5E1" fontSize="8.5" fontWeight="bold" fontFamily="monospace">
+                    1.0G
+                  </text>
+                  <text x={cx} y={13} textAnchor="middle" fill="#10B981" fontSize="8.5" fontWeight="bold" fontFamily="monospace">
+                    +ACEL
+                  </text>
+                  <text x={cx} y={size - 6} textAnchor="middle" fill="#FF2A2A" fontSize="8.5" fontWeight="bold" fontFamily="monospace">
+                    -FREIO
+                  </text>
+                  <text x={6} y={cy + 3} textAnchor="start" fill="#94A3B8" fontSize="8" fontWeight="bold" fontFamily="monospace">
+                    ESQ
+                  </text>
+                  <text x={size - 6} y={cy + 3} textAnchor="end" fill="#94A3B8" fontSize="8" fontWeight="bold" fontFamily="monospace">
+                    DIR
+                  </text>
+
+                  {/* Nuvem de pontos G-G por volta */}
+                  {ggAnalysis.laps.map((lap) => {
+                    const color = SLOT_COLORS[lap.slot].hex;
+                    const polyPts = lap.points
+                      .map((p) => `${pxX(p.latG).toFixed(1)},${pxY(p.longG).toFixed(1)}`)
+                      .join(' ');
+                    return (
+                      <g key={`gg_pts_${lap.slot}`}>
+                        <polyline
+                          fill="none"
+                          stroke={color}
+                          strokeOpacity="0.22"
+                          strokeWidth="1"
+                          points={polyPts}
+                        />
+                        {lap.points.map((p, idx) => (
+                          <circle
+                            key={`gg_${lap.slot}_${idx}`}
+                            cx={pxX(p.latG)}
+                            cy={pxY(p.longG)}
+                            r={lap.slot === 1 ? 2.1 : 1.8}
+                            fill={color}
+                            fillOpacity={lap.slot === 1 ? 0.72 : 0.65}
+                          />
+                        ))}
+                      </g>
+                    );
+                  })}
+
+                  {/* Marcadores vivos sincronizados com o cursor do Datalogger */}
+                  <circle
+                    cx={pxX(scrubPoint.latG1)}
+                    cy={pxY(scrubPoint.longG1)}
+                    r="5"
+                    fill="#10B981"
+                    stroke="#FFFFFF"
+                    strokeWidth="1.6"
+                  />
+                  {showLap2 && (
+                    <circle
+                      cx={pxX(scrubPoint.latG2)}
+                      cy={pxY(scrubPoint.longG2)}
+                      r="4.5"
+                      fill="#FF2A2A"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.4"
+                    />
+                  )}
+                  {showLap3 && (
+                    <circle
+                      cx={pxX(scrubPoint.latG3)}
+                      cy={pxY(scrubPoint.longG3)}
+                      r="4.2"
+                      fill="#38BDF8"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.4"
+                    />
+                  )}
+                </svg>
+              </div>
+
+              {/* Métricas de Eficiência G-G por Volta */}
+              <div className="space-y-2">
+                {ggAnalysis.laps.map((lap) => {
+                  const style = SLOT_COLORS[lap.slot];
+                  return (
+                    <div
+                      key={`gg_card_${lap.slot}`}
+                      className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 font-mono text-[11px] tabular-nums"
+                    >
+                      <div className="flex items-center justify-between border-b border-[var(--ps-border)] pb-1 mb-1.5">
+                        <span className={`font-black uppercase ${style.text}`}>
+                          V{lap.slot} #{lap.runNumber}
+                        </span>
+                        <span className="text-[10px] font-bold text-[var(--ps-amber)]">
+                          G Comb. Máx: {lap.metrics.peakCombinedG.toFixed(2)}G
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 text-center">
+                        <div>
+                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Freio Máx</p>
+                          <p className="font-extrabold text-[#FF2A2A]">
+                            {lap.metrics.peakBrakeG.toFixed(2)}G
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Acel Máx</p>
+                          <p className="font-extrabold text-[var(--ps-emerald)]">
+                            +{lap.metrics.peakAccelG.toFixed(2)}G
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Curva Máx</p>
+                          <p className="font-extrabold text-[var(--ps-text)]">
+                            {lap.metrics.peakLatG.toFixed(2)}G
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Trail Brk</p>
+                          <p className="font-extrabold text-[#38BDF8]">
+                            {lap.metrics.trailBrakingPct}%
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 2B. ANÁLISE AUTOMÁTICA DE CURVAS E FREADAS (ENTRADA / ÁPICE / SAÍDA) */}
+      {cornerAnalysis.length > 0 && (
         <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-                Ganho &amp; Perda por Parcial (P1, P2, P3...)
+                Análise Automática de Curvas &amp; Freadas
               </h3>
               <p className="font-mono text-[10px] text-[var(--ps-muted)]">
-                Esquerda = Tempo Ganho (-s) · Direita = Tempo Perdido (+s) vs V1 · Toque para ampliar
+                Início da Frenagem, Ápice (Mínima) e Saída · toque na curva para posicionar no Datalogger
               </p>
             </div>
-            <div className="flex items-center gap-3 font-mono text-[10px] font-bold">
-              <span className="text-[var(--ps-emerald)]">← Ganho (-s)</span>
-              <span className="text-[#FF2A2A]">Perda (+s) →</span>
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] font-bold">
+              <span className="text-[var(--ps-emerald)]">V1 #{lap1?.runNumber ?? '-'} (Ref)</span>
+              {showLap2 && <span className="text-[#FF2A2A]">V2 #{lap2?.runNumber ?? '-'}</span>}
+              {showLap3 && <span className="text-[#38BDF8]">V3 #{lap3?.runNumber ?? '-'}</span>}
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            {sectorComparison.rows.map((row) => {
-              const pCode = `P${row.index}`;
-              const compEntries = row.entries.filter((e) => e.slot !== 1);
-              const isZoomed = zoomSectorIdx === row.index;
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums">
+              <thead>
+                <tr className="border-b border-[var(--ps-border-strong)] text-[10px] text-[var(--ps-muted)] uppercase">
+                  <th className="py-2 pr-2 whitespace-nowrap">Curva</th>
+                  <th className="px-1.5 py-2 whitespace-nowrap">Volta</th>
+                  <th className="px-1.5 py-2 text-right whitespace-nowrap">Início Freio</th>
+                  <th className="px-1.5 py-2 text-right whitespace-nowrap">Ápice (Mín)</th>
+                  <th className="px-1.5 py-2 text-right whitespace-nowrap">Saída</th>
+                  <th className="py-2 pl-1.5 text-right whitespace-nowrap">Ponto Freio</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--ps-border)]">
+                {cornerAnalysis.map((corner) =>
+                  corner.entries.map((entry, eIdx) => {
+                    const slotStyle = SLOT_COLORS[entry.slot];
+                    const isFirst = eIdx === 0;
+                    const isLast = eIdx === corner.entries.length - 1;
+                    const isNearCursor = Math.abs(scrubDistM - corner.refApexDistM) <= 35;
 
-              return (
-                <button
-                  key={`bar_split_${row.index}`}
-                  type="button"
-                  onClick={() => setZoomSectorIdx(isZoomed ? null : row.index)}
-                  className={`w-full rounded-xl border px-2.5 py-2 text-left transition-colors ${
-                    isZoomed
-                      ? 'border-[var(--ps-amber)] bg-amber-500/10'
-                      : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    {/* Identificação da Parcial */}
-                    <div className="w-20 shrink-0 font-mono">
-                      <p className="text-xs font-black text-[var(--ps-text)]">{pCode}</p>
-                      <p className="text-[9px] text-[var(--ps-muted)] tabular-nums">
-                        {row.fromDistM}–{row.toDistM}m
-                      </p>
-                    </div>
-
-                    {/* Barras saindo do centro: Esquerda Verde (-s) / Direita Vermelho (+s) */}
-                    <div className="flex-1 space-y-1">
-                      {compEntries.map((entry) => {
-                        const d = entry.timeDeltaSec;
-                        const isGain = d !== null && d <= 0;
-                        const pct =
-                          d === null
-                            ? 0
-                            : Math.min(100, Math.max(6, (Math.abs(d) / maxPartialDeltaAbsSec) * 100));
-
-                        return (
-                          <div
-                            key={`bar_${row.index}_${entry.slot}`}
-                            className="flex items-center gap-2 font-mono text-[10px] tabular-nums"
+                    return (
+                      <tr
+                        key={`crn_${corner.cornerIndex}_${entry.slot}`}
+                        onClick={() => setScrubDistM(corner.refApexDistM)}
+                        className={`cursor-pointer transition-colors hover:bg-[var(--ps-card)] ${
+                          isLast ? 'border-b border-[var(--ps-border-strong)]' : ''
+                        } ${isNearCursor ? 'bg-[var(--ps-card)]' : ''}`}
+                      >
+                        {isFirst && (
+                          <td
+                            rowSpan={corner.entries.length}
+                            className="py-2 pr-2 align-top whitespace-nowrap border-r border-[var(--ps-border)]"
                           >
-                            <span
-                              className={`w-6 shrink-0 font-extrabold ${SLOT_COLORS[entry.slot].text}`}
-                            >
-                              V{entry.slot}
+                            <span className="font-sans text-xs font-extrabold text-[var(--ps-text)]">
+                              {corner.label}
                             </span>
+                            <span className="block text-[10px] text-[var(--ps-muted)]">
+                              Ápice {corner.refApexDistM}m
+                            </span>
+                          </td>
+                        )}
 
-                            <div className="relative flex h-4 flex-1 items-center rounded bg-[var(--ps-surface)] border border-[var(--ps-border)] overflow-hidden">
-                              {/* Linha Central Neutra */}
-                              <div className="absolute inset-y-0 left-1/2 z-10 w-[1.5px] -translate-x-1/2 bg-[var(--ps-muted)]/70" />
-                              {d !== null && Math.abs(d) >= 0.005 && isGain && (
-                                <div
-                                  className="absolute inset-y-0.5 right-1/2 rounded-l bg-[#10B981]"
-                                  style={{ width: `${pct / 2}%` }}
-                                />
-                              )}
-                              {d !== null && Math.abs(d) >= 0.005 && !isGain && (
-                                <div
-                                  className="absolute inset-y-0.5 left-1/2 rounded-r bg-[#FF2A2A]"
-                                  style={{ width: `${pct / 2}%` }}
-                                />
-                              )}
-                            </div>
+                        <td className="px-1.5 py-1.5 whitespace-nowrap">
+                          <span className={`font-extrabold ${slotStyle.text}`}>
+                            V{entry.slot} #{entry.runNumber}
+                          </span>
+                        </td>
 
+                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
+                          <span className="font-bold text-[var(--ps-text)]">
+                            {entry.entrySpeedKmh} km/h
+                          </span>
+                          {entry.deltaEntryKmh !== null && (
                             <span
-                              className={`w-14 shrink-0 text-right font-extrabold ${
-                                d === null
-                                  ? 'text-[var(--ps-muted)]'
-                                  : isGain
-                                    ? 'text-[var(--ps-emerald)]'
-                                    : 'text-[#FF2A2A]'
+                              className={`block text-[10px] font-bold ${
+                                entry.deltaEntryKmh >= 0
+                                  ? 'text-[var(--ps-emerald)]'
+                                  : 'text-[#FF2A2A]'
                               }`}
                             >
-                              {formatSignedSec(d)}
+                              {formatSignedKmh(entry.deltaEntryKmh)}
                             </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
+                          )}
+                        </td>
+
+                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
+                          <span className="font-bold text-[var(--ps-text)]">
+                            {entry.apexSpeedKmh} km/h
+                          </span>
+                          {entry.deltaApexKmh !== null && (
+                            <span
+                              className={`block text-[10px] font-bold ${
+                                entry.deltaApexKmh >= 0
+                                  ? 'text-[var(--ps-emerald)]'
+                                  : 'text-[#FF2A2A]'
+                              }`}
+                            >
+                              {formatSignedKmh(entry.deltaApexKmh)}
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
+                          <span className="font-bold text-[var(--ps-text)]">
+                            {entry.exitSpeedKmh} km/h
+                          </span>
+                          {entry.deltaExitKmh !== null && (
+                            <span
+                              className={`block text-[10px] font-bold ${
+                                entry.deltaExitKmh >= 0
+                                  ? 'text-[var(--ps-emerald)]'
+                                  : 'text-[#FF2A2A]'
+                              }`}
+                            >
+                              {formatSignedKmh(entry.deltaExitKmh)}
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-1.5 pl-1.5 text-right whitespace-nowrap">
+                          {entry.brakeShiftM === null ? (
+                            <span className="text-[var(--ps-muted)]">
+                              {entry.brakeStartDistM}m
+                            </span>
+                          ) : entry.brakeShiftM > 2 ? (
+                            <span className="font-bold text-[var(--ps-emerald)]">
+                              +{entry.brakeShiftM}m tarde
+                            </span>
+                          ) : entry.brakeShiftM < -2 ? (
+                            <span className="font-bold text-[#FF2A2A]">
+                              {entry.brakeShiftM}m antes
+                            </span>
+                          ) : (
+                            <span className="font-bold text-[var(--ps-amber)]">Igual (0m)</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -883,13 +1410,90 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           </div>
         )}
 
+        {/* Mapa Satélite Sincronizado com Badges de Velocidade + Cursor em Tempo Real */}
+        {lap1Samples.length > 1 && (
+          <div className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] px-2.5 py-1.5 font-mono text-[10px] tabular-nums">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                <span className="font-bold text-[var(--ps-text)]">
+                  Dist:{' '}
+                  <strong className="text-[var(--ps-amber)]">{scrubPoint.distKmStr} km</strong> (
+                  {scrubPoint.distM}m)
+                </span>
+                <span className="font-bold">
+                  <span className="text-[var(--ps-emerald)]">V1: {scrubPoint.speed1 ?? '--'}</span>
+                  {showLap2 && (
+                    <>
+                      <span className="text-[var(--ps-muted)]"> vs </span>
+                      <span className="text-[#FF2A2A]">V2: {scrubPoint.speed2 ?? '--'}</span>
+                    </>
+                  )}
+                  <span className="text-[var(--ps-muted)]"> km/h</span>
+                </span>
+                {showLap2 && scrubPoint.timeDelta2vs1Sec !== null && (
+                  <span
+                    className={`font-black ${
+                      scrubPoint.timeDelta2vs1Sec <= 0
+                        ? 'text-[var(--ps-emerald)]'
+                        : 'text-[#FF2A2A]'
+                    }`}
+                  >
+                    Δ Tempo V2: {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-[9px] font-bold">
+                <span className="text-[#10B981]">■ Picos Máx</span>
+                <span className="text-[#FF2A2A]">■ Ápices Curva</span>
+              </div>
+            </div>
+            <VelocityMapboxView
+              trackId={`${sessionTrack?.id || 'session'}_synced`}
+              editableTrace={lap1Samples}
+              ghostTrace={showLap2 ? lap2Samples : undefined}
+              thirdTrace={showLap3 ? lap3Samples : undefined}
+              offsetGhostTrace={showLap2 || showLap3}
+              orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+              postEditIdx={0}
+              vehicleStyle="lap1"
+              currentPos={
+                scrubPoint.s1
+                  ? { lat: scrubPoint.s1.lat, lon: scrubPoint.s1.lon }
+                  : null
+              }
+              navHeadingDeg={scrubPoint.s1?.headingDeg ?? null}
+              ghostCar={
+                showLap2 && scrubPoint.s2
+                  ? {
+                      lat: scrubPoint.s2.lat,
+                      lon: scrubPoint.s2.lon,
+                      headingDeg: scrubPoint.s2.headingDeg,
+                    }
+                  : null
+              }
+              thirdCar={
+                showLap3 && scrubPoint.s3
+                  ? {
+                      lat: scrubPoint.s3.lat,
+                      lon: scrubPoint.s3.lon,
+                      headingDeg: scrubPoint.s3.headingDeg,
+                    }
+                  : null
+              }
+              heatmapMode="speed"
+              showSpeedBadges={true}
+              containerClassName="relative h-56 w-full overflow-hidden bg-[#000000] sm:h-72"
+            />
+          </div>
+        )}
+
         {/* Resumo Prático Fixo ao Tocar no Gráfico */}
         {lap1Samples.length > 1 && (
           <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 font-mono text-[10px] tabular-nums sm:grid-cols-3 sm:text-[11px]">
             {/* 1. Vel V1 vs V2 (Δ km/h) */}
             <div>
               <span className="text-[var(--ps-muted)] uppercase">
-                Vel V1 vs V2 @ {scrubPoint.distM}m
+                Vel V1 vs V2 @ {scrubPoint.distKmStr} km
               </span>
               <p className="mt-0.5 font-extrabold">
                 <span className="text-[var(--ps-emerald)]">{scrubPoint.speed1 ?? '--'}</span>
@@ -1156,14 +1760,14 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   </text>
                 ))}
 
-                {/* Crosshair sincronizado */}
+                {/* Crosshair sincronizado vermelho */}
                 <line
                   x1={scrubX}
                   y1={p1Top}
                   x2={scrubX}
                   y2={p1Bottom}
-                  stroke="#FACC15"
-                  strokeWidth="1.5"
+                  stroke="#FF2A2A"
+                  strokeWidth="1.8"
                 />
                 {scrubPoint.speed1 !== null && (
                   <circle
@@ -1321,8 +1925,8 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   y1={p2Top}
                   x2={scrubX}
                   y2={p2Bottom}
-                  stroke="#FACC15"
-                  strokeWidth="1.3"
+                  stroke="#FF2A2A"
+                  strokeWidth="1.6"
                 />
                 <circle
                   cx={scrubX}
@@ -1467,8 +2071,8 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   y1={p3Top}
                   x2={scrubX}
                   y2={p3Bottom}
-                  stroke="#FACC15"
-                  strokeWidth="1.5"
+                  stroke="#FF2A2A"
+                  strokeWidth="1.6"
                 />
                 <circle
                   cx={scrubX}
@@ -1729,56 +2333,6 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           </div>
         </div>
       )}
-
-      {/* 6. VOLTAS DA SESSÃO */}
-      <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 text-[var(--ps-text)]">
-        <div className="flex items-center justify-between">
-          <h3 className="font-['Barlow_Condensed'] text-lg font-bold uppercase">
-            Voltas da Sessão ({sessionRuns.length})
-          </h3>
-          <button
-            type="button"
-            onClick={onDeleteSession}
-            className="min-h-[36px] px-2 text-xs font-semibold text-red-500 hover:text-red-400"
-          >
-            Excluir Sessão
-          </button>
-        </div>
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
-            <thead>
-              <tr className="border-b border-[var(--ps-border)] text-[var(--ps-muted)]">
-                <th className="py-2 pr-2">Volta</th>
-                <th className="px-2 py-2">Tempo</th>
-                <th className="px-2 py-2 text-right">Dist.</th>
-                <th className="py-2 pl-2 text-right">Máx</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--ps-border)]">
-              {sessionRuns.map((run) => {
-                const isBest = run.id === sessionOptimal.bestRunId;
-                return (
-                  <tr key={run.id} className={isBest ? 'bg-emerald-500/10' : ''}>
-                    <td className="py-2 pr-2 font-sans font-bold text-[var(--ps-text)]">
-                      #{run.runNumber}{' '}
-                      {isBest && <span className="text-[var(--ps-emerald)]">(Melhor)</span>}
-                    </td>
-                    <td className="px-2 py-2 font-extrabold text-[var(--ps-text)]">
-                      {formatStageDuration(run.totalMs)}
-                    </td>
-                    <td className="px-2 py-2 text-right text-[var(--ps-muted)]">
-                      {run.distanceKm.toFixed(2)} km
-                    </td>
-                    <td className="py-2 pl-2 text-right text-[var(--ps-amber)]">
-                      {run.maxSpeedKmh} km/h
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 };

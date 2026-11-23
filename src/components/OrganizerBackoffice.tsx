@@ -372,9 +372,9 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
 
   if (authLoading) {
     return (
-      <div className="mx-auto max-w-md rounded-2xl border border-zinc-800 bg-[#111214] p-8 text-center text-[#C0C4C9] shadow-xl">
-        <Lock className="mx-auto h-8 w-8 animate-pulse text-[#E10600]" />
-        <p className="mt-3 text-sm font-semibold text-white">
+      <div className="mx-auto max-w-md rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-8 text-center text-[var(--ps-muted)] shadow-xl">
+        <Lock className="mx-auto h-8 w-8 animate-pulse text-[var(--ps-accent)]" />
+        <p className="mt-3 text-sm font-semibold text-[var(--ps-text)]">
           Verificando acesso à Secretaria de Prova...
         </p>
       </div>
@@ -383,18 +383,18 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
 
   if (!authOfflineMode && authStatus && !authStatus.authenticated) {
     return (
-      <div className="mx-auto max-w-md overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl">
+      <div className="mx-auto max-w-md overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
         <div aria-hidden="true" className="pitstop-racing-line h-[8px] w-full" />
         <form onSubmit={handleSubmitOrganizerAuth} className="space-y-4 p-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#E10600]/40 bg-[#E10600]/15 text-[#E10600]">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--ps-accent)]/40 bg-[var(--ps-accent-soft)] text-[var(--ps-accent)]">
               <KeyRound className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-[10px] font-bold tracking-[0.18em] text-[#E10600] uppercase">
+              <p className="text-[10px] font-bold tracking-[0.18em] text-[var(--ps-accent)] uppercase">
                 Secretaria de Prova · Acesso Protegido
               </p>
-              <h2 className="font-['Barlow_Condensed'] text-2xl font-extrabold text-white">
+              <h2 className="font-['Barlow_Condensed'] text-2xl font-extrabold text-[var(--ps-text)]">
                 {authStatus.needsClaim
                   ? 'Definir Senha de Apuração'
                   : 'Entrar na Apuração Oficial'}
@@ -402,7 +402,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
             </div>
           </div>
 
-          <p className="text-xs text-[#B5B5B5]">
+          <p className="text-xs text-[var(--ps-muted)]">
             {authStatus.needsClaim
               ? 'Primeiro acesso detectado. Crie uma senha de administrador (mínimo 6 caracteres) para proteger os registros e a publicação de resultados.'
               : 'Informe a senha de organização para consultar os arquivos recebidos, apagar registros ou publicar classificações.'}
@@ -412,7 +412,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
             <div>
               <label
                 htmlFor="org-passcode"
-                className="block text-[11px] font-semibold text-[#C0C4C9]"
+                className="block text-[11px] font-semibold text-[var(--ps-muted)]"
               >
                 Senha da Organização
               </label>
@@ -423,7 +423,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 value={passcodeInput}
                 onChange={(e) => setPasscodeInput(e.target.value)}
                 placeholder="Mínimo 6 caracteres"
-                className="mt-1 w-full min-h-[42px] rounded-xl border border-zinc-700 bg-[#080B0D] px-3 text-sm text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                className="mt-1 w-full min-h-[42px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-sm text-[var(--ps-text)] placeholder:text-[var(--ps-muted)] focus:border-[var(--ps-accent)] focus:outline-none"
               />
             </div>
 
@@ -431,7 +431,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
               <div>
                 <label
                   htmlFor="org-passcode-confirm"
-                  className="block text-[11px] font-semibold text-[#C0C4C9]"
+                  className="block text-[11px] font-semibold text-[var(--ps-muted)]"
                 >
                   Confirmar Senha
                 </label>
@@ -442,14 +442,14 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   value={passcodeConfirm}
                   onChange={(e) => setPasscodeConfirm(e.target.value)}
                   placeholder="Repita a senha"
-                  className="mt-1 w-full min-h-[42px] rounded-xl border border-zinc-700 bg-[#080B0D] px-3 text-sm text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                  className="mt-1 w-full min-h-[42px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-sm text-[var(--ps-text)] placeholder:text-[var(--ps-muted)] focus:border-[var(--ps-accent)] focus:outline-none"
                 />
               </div>
             )}
           </div>
 
           {authError && (
-            <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+            <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/15 px-3 py-2 text-xs text-red-400">
               <ShieldAlert className="h-4 w-4 shrink-0 text-[#FF2A2A]" />
               <span>{authError}</span>
             </div>
@@ -458,7 +458,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
           <button
             type="submit"
             disabled={submittingAuth}
-            className="pitstop-btn-red flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl text-sm font-extrabold text-white uppercase"
+            className="pitstop-btn-red flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl text-sm font-extrabold uppercase"
           >
             <Lock className="h-4 w-4" />
             <span>
@@ -477,7 +477,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Import & Scoring Rule Bar */}
-      <section className="relative overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-lg">
+      <section className="relative overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-lg">
         <div aria-hidden="true" className="pitstop-racing-line h-[10px] w-full sm:h-[12px]" />
         <div
           aria-hidden="true"
@@ -487,14 +487,14 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
         <div className="relative p-5 sm:p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-[11px] font-bold tracking-[0.18em] text-[#E10600] uppercase">
+              <p className="text-[11px] font-bold tracking-[0.18em] text-[var(--ps-accent)] uppercase">
                 PitStop Sports · Secretaria de Prova Web
               </p>
-              <h2 className="mt-0.5 font-['Barlow_Condensed'] text-2xl font-bold tracking-wide text-white sm:text-3xl">
+              <h2 className="mt-0.5 font-['Barlow_Condensed'] text-2xl font-bold tracking-wide text-[var(--ps-text)] sm:text-3xl">
                 Apuração Oficial — Geral e Individual
               </h2>
-              <p className="mt-1 text-sm text-[#B5B5B5]">
-                Receba os registros diretamente do coletor ou importe arquivos <span className="font-mono text-xs text-zinc-200">.txt</span>. Menor pontuação vence.
+              <p className="mt-1 text-sm text-[var(--ps-muted)]">
+                Receba os registros diretamente do coletor ou importe arquivos <span className="font-mono text-xs text-[var(--ps-text)]">.txt</span>. Menor pontuação vence.
               </p>
             </div>
 
@@ -504,15 +504,15 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   type="button"
                   onClick={handleSyncBase}
                   disabled={syncingBase}
-                  className="pitstop-btn-red inline-flex min-h-[44px] items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-white transition-all whitespace-nowrap shrink-0"
+                  className="pitstop-btn-red inline-flex min-h-[44px] items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all whitespace-nowrap shrink-0"
                 >
                   <RefreshCw className={`h-4 w-4 ${syncingBase ? 'animate-spin' : ''}`} />
                   <span>{syncingBase ? 'Sincronizando...' : 'Atualizar da Base'}</span>
                 </button>
               )}
 
-              <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-zinc-700 bg-[#1E1E22] px-4 py-2.5 text-sm font-bold text-white transition-all hover:bg-zinc-800 whitespace-nowrap shrink-0">
-                <FolderUp className="h-4 w-4 text-[#C0C4C9]" />
+              <label className="pitstop-btn-metal inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all whitespace-nowrap shrink-0">
+                <FolderUp className="h-4 w-4 text-[var(--ps-muted)]" />
                 <span>Importar (.txt)</span>
                 <input
                   type="file"
@@ -527,9 +527,9 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 type="button"
                 onClick={handleLoadDemoFiles}
                 disabled={loadingDemo}
-                className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-zinc-700 bg-[#1E1E22] px-4 py-2.5 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 whitespace-nowrap shrink-0"
+                className="pitstop-btn-metal inline-flex min-h-[44px] items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold whitespace-nowrap shrink-0"
               >
-                <FileText className="h-4 w-4 text-[#C0C4C9]" />
+                <FileText className="h-4 w-4 text-[var(--ps-muted)]" />
                 <span>{loadingDemo ? 'Gerando...' : 'Simular 3 Carros'}</span>
               </button>
 
@@ -538,35 +538,35 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   type="button"
                   onClick={handleLockBackoffice}
                   title="Bloquear sessão da apuração"
-                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-[#080B0D] px-3 py-2.5 text-xs font-semibold text-[#C0C4C9] hover:text-white whitespace-nowrap shrink-0"
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-2.5 text-xs font-semibold text-[var(--ps-muted)] hover:text-[var(--ps-text)] whitespace-nowrap shrink-0"
                 >
-                  <LogOut className="h-4 w-4 text-[#E10600]" />
+                  <LogOut className="h-4 w-4 text-[var(--ps-accent)]" />
                   <span>Bloquear</span>
                 </button>
               )}
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#080B0D] px-3.5 py-2.5 text-xs">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 text-xs">
             <div className="min-w-0 flex-1">
-              <span className="font-semibold text-[#B5B5B5] mr-2">Link do Portal de Apuração:</span>
-              <span className="font-mono text-zinc-200 break-all">{portalUrl}</span>
+              <span className="font-semibold text-[var(--ps-muted)] mr-2">Link do Portal de Apuração:</span>
+              <span className="font-mono text-[var(--ps-text)] break-all">{portalUrl}</span>
             </div>
             <button
               type="button"
               onClick={handleCopyPortalUrl}
-              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 font-semibold text-white hover:bg-zinc-800 whitespace-nowrap shrink-0"
+              className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 font-semibold whitespace-nowrap shrink-0"
             >
-              {copiedPortalUrl ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-[#C0C4C9]" />}
+              {copiedPortalUrl ? <Check className="h-3.5 w-3.5 text-[var(--ps-emerald)]" /> : <Copy className="h-3.5 w-3.5 text-[var(--ps-muted)]" />}
               <span>{copiedPortalUrl ? 'Copiado' : 'Copiar Portal'}</span>
             </button>
           </div>
 
-          <div className="mt-4 flex flex-col gap-4 border-t border-zinc-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-4 flex flex-col gap-4 border-t border-[var(--ps-border)] pt-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap items-center gap-3">
               {availableEvents.length > 0 && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-[#B5B5B5]">Prova:</span>
+                  <span className="text-xs font-semibold text-[var(--ps-muted)]">Prova:</span>
                   <select
                     aria-label="Filtrar competição"
                     value={eventFilter}
@@ -574,7 +574,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                       setEventFilter(e.target.value);
                       setPublishedUrl(null);
                     }}
-                    className="min-h-[38px] max-w-[240px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-semibold text-white focus:border-[#E10600] focus:outline-none"
+                    className="min-h-[38px] max-w-[240px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                   >
                     <option value="ALL">Todas ({results.length} envios)</option>
                     {availableEvents.map((ev) => (
@@ -587,10 +587,10 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-semibold text-[#B5B5B5]">
+                <span className="text-xs font-semibold text-[var(--ps-muted)]">
                   Penalidade PC &ldquo;V&rdquo; NC:
                 </span>
-                <div className="inline-flex items-center gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+                <div className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
                   {[0, 300, 600, 900].map((val) => (
                     <button
                       key={val}
@@ -598,8 +598,8 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                       onClick={() => setMissedPenaltyPts(val)}
                       className={`min-h-[32px] rounded-md px-2.5 font-mono text-xs font-semibold transition-all whitespace-nowrap ${
                         missedPenaltyPts === val
-                          ? 'pitstop-btn-red text-white'
-                          : 'text-zinc-400 hover:text-white'
+                          ? 'pitstop-btn-red'
+                          : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                       }`}
                     >
                       {val} pts
@@ -615,7 +615,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   type="button"
                   disabled={publishingLink}
                   onClick={handlePublishPublicLink}
-                  className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold text-white whitespace-nowrap shrink-0"
+                  className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold whitespace-nowrap shrink-0"
                 >
                   <Share2 className="h-3.5 w-3.5" />
                   <span>{publishingLink ? 'Gerando Link...' : 'Gerar Link Público'}</span>
@@ -630,9 +630,9 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                       'text/plain;charset=utf-8'
                     )
                   }
-                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800 whitespace-nowrap shrink-0"
+                  className="pitstop-btn-metal inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold whitespace-nowrap shrink-0"
                 >
-                  <Download className="h-3.5 w-3.5 text-[#C0C4C9]" />
+                  <Download className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
                   <span>Ranking (.txt)</span>
                 </button>
 
@@ -645,9 +645,9 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                       'text/csv;charset=utf-8'
                     )
                   }
-                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800 whitespace-nowrap shrink-0"
+                  className="pitstop-btn-metal inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold whitespace-nowrap shrink-0"
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400" />
+                  <FileSpreadsheet className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
                   <span>Excel (.csv)</span>
                 </button>
 
@@ -659,7 +659,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                     setSelectedId(null);
                     setPublishedUrl(null);
                   }}
-                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-red-500/35 bg-red-950/30 px-3 py-2 text-xs font-medium text-red-400 hover:bg-red-950/60 whitespace-nowrap shrink-0"
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-400 hover:bg-red-500/20 whitespace-nowrap shrink-0"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   <span>Limpar Tudo</span>
@@ -669,14 +669,14 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
           </div>
 
           {publishedUrl && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#E10600]/45 bg-[#E10600]/10 px-4 py-2.5 text-xs">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-accent)]/45 bg-[var(--ps-accent-soft)] px-4 py-2.5 text-xs">
               <div className="min-w-0 flex-1">
-                <span className="font-bold text-[#FF4A43] uppercase mr-2">Resultado Público:</span>
+                <span className="font-bold text-[var(--ps-accent)] uppercase mr-2">Resultado Público:</span>
                 <a
                   href={publishedUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 font-mono text-white underline break-all"
+                  className="inline-flex items-center gap-1 font-mono text-[var(--ps-text)] underline break-all"
                 >
                   <span>{publishedUrl}</span>
                   <ExternalLink className="h-3 w-3 shrink-0" />
@@ -685,7 +685,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
               <button
                 type="button"
                 onClick={handleCopyPublishedUrl}
-                className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1 rounded-lg px-3 font-bold text-white whitespace-nowrap shrink-0"
+                className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1 rounded-lg px-3 font-bold whitespace-nowrap shrink-0"
               >
                 {copiedLink ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 <span>{copiedLink ? 'Copiado!' : 'Copiar Link'}</span>
@@ -694,7 +694,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
           )}
 
           {uploadErrors.length > 0 && (
-            <div className="mt-4 space-y-1 rounded-xl border border-red-500/40 bg-red-950/50 p-3 text-xs text-red-300">
+            <div className="mt-4 space-y-1 rounded-xl border border-red-500/40 bg-red-500/15 p-3 text-xs text-red-400">
               {uploadErrors.map((err, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />
@@ -708,18 +708,18 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
 
       {/* Empty State */}
       {rankedSummaries.length === 0 ? (
-        <section className="relative overflow-hidden rounded-2xl border border-dashed border-zinc-700 bg-[#111214] px-6 py-14 text-center">
+        <section className="relative overflow-hidden rounded-2xl border border-dashed border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-6 py-14 text-center">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 bg-rally-checkered opacity-15"
           />
           <div className="relative">
-            <Trophy className="mx-auto h-10 w-10 text-[#E10600]" />
-            <h3 className="mt-3 font-['Barlow_Condensed'] text-2xl font-bold text-white">
+            <Trophy className="mx-auto h-10 w-10 text-[var(--ps-accent)]" />
+            <h3 className="mt-3 font-['Barlow_Condensed'] text-2xl font-bold text-[var(--ps-text)]">
               Nenhum resultado recebido ainda
             </h3>
-            <p className="mx-auto mt-1.5 max-w-md text-sm text-[#B5B5B5]">
-              Os envios realizados pelo Coletor aparecem automaticamente aqui ao clicar em &ldquo;Atualizar da Base&rdquo;. Você também pode importar arquivos <span className="font-mono text-xs text-zinc-200">.txt</span> ou simular 3 carros.
+            <p className="mx-auto mt-1.5 max-w-md text-sm text-[var(--ps-muted)]">
+              Os envios realizados pelo Coletor aparecem automaticamente aqui ao clicar em &ldquo;Atualizar da Base&rdquo;. Você também pode importar arquivos <span className="font-mono text-xs text-[var(--ps-text)]">.txt</span> ou simular 3 carros.
             </p>
           </div>
         </section>
@@ -729,10 +729,10 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
           {leader && (
             <section className="space-y-2.5">
               <div className="flex items-center justify-between px-1">
-                <h3 className="text-[11px] font-bold tracking-[0.2em] text-zinc-400 uppercase">
+                <h3 className="text-[11px] font-bold tracking-[0.2em] text-[var(--ps-muted)] uppercase">
                   Destaques - Pódio
                 </h3>
-                <span className="font-mono text-xs text-zinc-500">
+                <span className="font-mono text-xs text-[var(--ps-muted)]">
                   Menor pontuação vence
                 </span>
               </div>
@@ -742,34 +742,34 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectedId(leader.result.id)}
-                  className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-[#E10600]/45 bg-[#111214] p-4 text-left text-white shadow-lg transition-transform hover:scale-[1.01]"
+                  className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-[var(--ps-accent)]/50 bg-[var(--ps-surface)] p-4 text-left text-[var(--ps-text)] shadow-lg transition-transform hover:scale-[1.01]"
                 >
                   <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-y-0 right-0 w-28 bg-rally-checkered opacity-25 [mask-image:linear-gradient(to_left,black,transparent)]"
                   />
                   <div className="relative flex items-center gap-3.5 min-w-0">
-                    <div className="pitstop-btn-red flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
+                    <div className="pitstop-btn-red flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic">
                       1º
                     </div>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-amber-400 uppercase">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-[var(--ps-amber)] uppercase">
                         <Trophy className="h-3.5 w-3.5 shrink-0" />
                         <span>Líder · {leader.recordedV}/{leader.totalV} PCs</span>
                       </div>
-                      <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-white">
+                      <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-[var(--ps-text)]">
                         Carro #{leader.result.carNumber}
                       </div>
-                      <div className="truncate text-xs text-zinc-400">
+                      <div className="truncate text-xs text-[var(--ps-muted)]">
                         {leader.result.crewName}
                       </div>
                     </div>
                   </div>
                   <div className="relative shrink-0 text-right">
-                    <div className="font-mono text-2xl font-bold text-white tabular-nums">
+                    <div className="font-mono text-2xl font-bold text-[var(--ps-text)] tabular-nums">
                       {leader.finalTotalPoints}
                     </div>
-                    <div className="text-[10px] font-semibold tracking-wide text-amber-400 uppercase">
+                    <div className="text-[10px] font-semibold tracking-wide text-[var(--ps-amber)] uppercase">
                       pts perdidos
                     </div>
                   </div>
@@ -780,34 +780,34 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedId(second.result.id)}
-                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-zinc-700/80 bg-[#111214] p-4 text-left text-white shadow-lg transition-colors hover:border-[#E10600]/50"
+                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-4 text-left text-[var(--ps-text)] shadow-lg transition-colors hover:border-[var(--ps-accent)]/50"
                   >
                     <div
                       aria-hidden="true"
                       className="pointer-events-none absolute inset-y-0 right-0 w-24 bg-rally-checkered opacity-20 [mask-image:linear-gradient(to_left,black,transparent)]"
                     />
                     <div className="relative flex items-center gap-3.5 min-w-0">
-                      <div className="pitstop-btn-metal flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
+                      <div className="pitstop-btn-metal flex h-12 w-12 shrink-0 items-center justify-center rounded-xl font-['Barlow_Condensed'] text-2xl font-extrabold italic">
                         2º
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-[#C0C4C9] uppercase">
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                           <Award className="h-3.5 w-3.5 shrink-0" />
                           <span>{second.recordedV}/{second.totalV} PCs V</span>
                         </div>
-                        <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-white">
+                        <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-[var(--ps-text)]">
                           Carro #{second.result.carNumber}
                         </div>
-                        <div className="truncate text-xs text-zinc-400">
+                        <div className="truncate text-xs text-[var(--ps-muted)]">
                           {second.result.crewName}
                         </div>
                       </div>
                     </div>
                     <div className="relative shrink-0 text-right">
-                      <div className="font-mono text-2xl font-bold text-zinc-100 tabular-nums">
+                      <div className="font-mono text-2xl font-bold text-[var(--ps-text)] tabular-nums">
                         {second.finalTotalPoints}
                       </div>
-                      <div className="font-mono text-[11px] font-semibold text-[#C0C4C9] tabular-nums">
+                      <div className="font-mono text-[11px] font-semibold text-[var(--ps-muted)] tabular-nums">
                         +{second.finalTotalPoints - leader.finalTotalPoints} pts
                       </div>
                     </div>
@@ -819,7 +819,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedId(third.result.id)}
-                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-zinc-700/80 bg-[#111214] p-4 text-left text-white shadow-lg transition-colors hover:border-amber-500/50"
+                    className="relative flex items-center justify-between gap-4 overflow-hidden rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-4 text-left text-[var(--ps-text)] shadow-lg transition-colors hover:border-amber-500/50"
                   >
                     <div
                       aria-hidden="true"
@@ -830,23 +830,23 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                         3º
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-amber-400 uppercase">
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-[var(--ps-amber)] uppercase">
                           <Award className="h-3.5 w-3.5 shrink-0" />
                           <span>{third.recordedV}/{third.totalV} PCs V</span>
                         </div>
-                        <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-white">
+                        <div className="font-['Barlow_Condensed'] text-2xl font-extrabold italic leading-tight text-[var(--ps-text)]">
                           Carro #{third.result.carNumber}
                         </div>
-                        <div className="truncate text-xs text-zinc-400">
+                        <div className="truncate text-xs text-[var(--ps-muted)]">
                           {third.result.crewName}
                         </div>
                       </div>
                     </div>
                     <div className="relative shrink-0 text-right">
-                      <div className="font-mono text-2xl font-bold text-zinc-100 tabular-nums">
+                      <div className="font-mono text-2xl font-bold text-[var(--ps-text)] tabular-nums">
                         {third.finalTotalPoints}
                       </div>
-                      <div className="font-mono text-[11px] font-semibold text-amber-400 tabular-nums">
+                      <div className="font-mono text-[11px] font-semibold text-[var(--ps-amber)] tabular-nums">
                         +{third.finalTotalPoints - leader.finalTotalPoints} pts
                       </div>
                     </div>
@@ -857,25 +857,25 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
           )}
 
           {/* Full-width General Leaderboard */}
-          <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] text-zinc-100 shadow-lg">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+          <section className="overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ps-border)] px-5 py-4">
               <div>
-                <h3 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white">
+                <h3 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)]">
                   Classificação Geral por Pontos ({rankedSummaries.length} competidores)
                 </h3>
-                <p className="text-xs text-zinc-400">
+                <p className="text-xs text-[var(--ps-muted)]">
                   Ordenado do menor para o maior perdedor de pontos · Clique em um carro para ver o boletim individual completo
                 </p>
               </div>
 
               <div className="relative w-full sm:w-60">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--ps-muted)]" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Filtrar carro ou dupla..."
-                  className="w-full min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] pl-9 pr-3 text-xs text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                  className="w-full min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] pl-9 pr-3 text-xs text-[var(--ps-text)] placeholder:text-[var(--ps-muted)] focus:border-[var(--ps-accent)] focus:outline-none"
                 />
               </div>
             </div>
@@ -883,7 +883,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-left text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-800 bg-[#080B0D] text-xs font-semibold text-zinc-400">
+                  <tr className="border-b border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-xs font-semibold text-[var(--ps-muted)]">
                     <th className="py-3 pl-5 pr-3">Posição</th>
                     <th className="px-3 py-3">Carro / Dupla</th>
                     <th className="px-3 py-3 text-right">PCs V</th>
@@ -895,7 +895,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                     <th className="py-3 pl-3 pr-5 text-right">Ações</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800/80">
+                <tbody className="divide-y divide-[var(--ps-border)]">
                   {filteredSummaries.map((s) => {
                     const rank = rankedSummaries.indexOf(s) + 1;
                     const isSelected = activeSummary?.result.id === s.result.id;
@@ -904,37 +904,37 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                         key={s.result.id}
                         onClick={() => setSelectedId(s.result.id)}
                         className={`cursor-pointer transition-colors ${
-                          isSelected ? 'bg-[#E10600]/15' : 'hover:bg-zinc-800/45'
+                          isSelected ? 'bg-[var(--ps-accent-soft)]' : 'hover:bg-[var(--ps-card)]'
                         }`}
                       >
-                        <td className="py-3.5 pl-5 pr-3 font-mono text-sm font-bold text-white tabular-nums">
-                          <span className={rank === 1 ? 'text-amber-400' : 'text-zinc-200'}>
+                        <td className="py-3.5 pl-5 pr-3 font-mono text-sm font-bold text-[var(--ps-text)] tabular-nums">
+                          <span className={rank === 1 ? 'text-[var(--ps-amber)]' : 'text-[var(--ps-text)]'}>
                             {rank}º{rank === 1 ? ' (Vencedor)' : ''}
                           </span>
                         </td>
                         <td className="px-3 py-3.5">
-                          <div className="font-mono text-sm font-bold text-white">
+                          <div className="font-mono text-sm font-bold text-[var(--ps-text)]">
                             #{s.result.carNumber}
                           </div>
-                          <div className="text-xs text-zinc-400 truncate max-w-[200px]">
+                          <div className="text-xs text-[var(--ps-muted)] truncate max-w-[200px]">
                             {s.result.crewName}
                           </div>
                           {eventFilter === 'ALL' && s.result.eventName && (
-                            <div className="text-[11px] text-zinc-500 truncate max-w-[200px]">
+                            <div className="text-[11px] text-[var(--ps-muted)] opacity-75 truncate max-w-[200px]">
                               {s.result.eventName}
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-xs text-zinc-300 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-xs text-[var(--ps-muted)] tabular-nums">
                           {s.recordedV}/{s.totalV}
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-xs text-amber-400 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-xs text-[var(--ps-amber)] tabular-nums">
                           -{s.earlySecondsTotal.toFixed(1)}s
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-xs text-zinc-300 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-xs text-[var(--ps-muted)] tabular-nums">
                           +{s.lateSecondsTotal.toFixed(1)}s
                         </td>
-                        <td className="px-3 py-3.5 text-right font-mono text-xs text-zinc-200 tabular-nums">
+                        <td className="px-3 py-3.5 text-right font-mono text-xs text-[var(--ps-text)] tabular-nums">
                           {s.pointsFromV}
                         </td>
                         <td className="px-3 py-3.5 text-right font-mono text-xs text-red-400 tabular-nums">
@@ -960,7 +960,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                 );
                               }}
                               title="Baixar boletim individual (.txt)"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--ps-muted)] hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)]"
                             >
                               <Download className="h-3.5 w-3.5" />
                             </button>
@@ -972,7 +972,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                 onRemoveResult(s.result.id);
                               }}
                               aria-label={`Remover carro ${s.result.carNumber}`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-red-950/60 hover:text-red-400"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--ps-muted)] hover:bg-red-500/15 hover:text-red-400"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
@@ -988,20 +988,20 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
 
           {/* Detailed Individual Breakdown */}
           {activeSummary && (
-            <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] text-zinc-100 shadow-lg">
+            <section className="overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-lg">
               <div aria-hidden="true" className="pitstop-racing-line h-[4px] w-full" />
-              <div className="border-b border-zinc-800 px-5 py-4 sm:px-6">
+              <div className="border-b border-[var(--ps-border)] px-5 py-4 sm:px-6">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="flex flex-wrap items-baseline gap-2.5">
-                      <h3 className="font-['Barlow_Condensed'] text-2xl font-bold text-white">
+                      <h3 className="font-['Barlow_Condensed'] text-2xl font-bold text-[var(--ps-text)]">
                         Boletim Individual Detalhado — Carro #{activeSummary.result.carNumber}
                       </h3>
                       <span className="font-mono text-xs font-bold text-[#FF2A2A]">
                         {activeRank}º Lugar · {activeSummary.finalTotalPoints} pts totais
                       </span>
                     </div>
-                    <p className="mt-0.5 text-xs text-zinc-400">
+                    <p className="mt-0.5 text-xs text-[var(--ps-muted)]">
                       Dupla: {activeSummary.result.crewName} · Largada{' '}
                       {activeSummary.result.startTimeStr} · Raio{' '}
                       {activeSummary.result.detectionRadiusM}m · D e N zerados (0 pts)
@@ -1013,7 +1013,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                       aria-label="Selecionar competidor"
                       value={activeSummary.result.id}
                       onChange={(e) => setSelectedId(e.target.value)}
-                      className="min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-semibold text-zinc-100 focus:border-[#E10600] focus:outline-none"
+                      className="min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                     >
                       {rankedSummaries.map((s, idx) => (
                         <option key={s.result.id} value={s.result.id}>
@@ -1035,7 +1035,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                           'text/plain;charset=utf-8'
                         )
                       }
-                      className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold text-white whitespace-nowrap shrink-0"
+                      className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold whitespace-nowrap shrink-0"
                     >
                       <Download className="h-3.5 w-3.5" />
                       <span>Exportar Boletim Individual (.txt)</span>
@@ -1044,43 +1044,43 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 divide-y divide-zinc-800 lg:grid-cols-12 lg:divide-x lg:divide-y-0">
+              <div className="grid grid-cols-1 divide-y divide-[var(--ps-border)] lg:grid-cols-12 lg:divide-x lg:divide-y-0">
                 {/* Left 4 columns: Section Subtotals */}
                 <div className="p-5 lg:col-span-4">
-                  <h4 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">
+                  <h4 className="text-xs font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                     Resumo por Seção da Planilha
                   </h4>
                   <div className="mt-3 overflow-x-auto">
                     <table className="w-full border-collapse text-left text-xs font-mono tabular-nums">
                       <thead>
-                        <tr className="border-b border-zinc-800 text-zinc-400">
+                        <tr className="border-b border-[var(--ps-border)] text-[var(--ps-muted)]">
                           <th className="py-2 pr-2">Seção</th>
                           <th className="px-2 py-2">Tip</th>
                           <th className="px-2 py-2 text-right">PCs</th>
                           <th className="py-2 pl-2 text-right">Pontos</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-zinc-800/70">
+                      <tbody className="divide-y divide-[var(--ps-border)]">
                         {activeSections.map((sec, idx) => {
                           const isExempt = sec.type !== 'V';
                           return (
                             <tr key={`${sec.section ?? 'none'}-${sec.type}-${idx}`}>
-                              <td className="py-2 pr-2 font-semibold text-white">
+                              <td className="py-2 pr-2 font-semibold text-[var(--ps-text)]">
                                 {sec.section ?? '-'}
                               </td>
-                              <td className="px-2 py-2 text-zinc-300">
+                              <td className="px-2 py-2 text-[var(--ps-muted)]">
                                 {sec.type || '-'}
                               </td>
-                              <td className="px-2 py-2 text-right text-zinc-400">
+                              <td className="px-2 py-2 text-right text-[var(--ps-muted)]">
                                 {sec.recordedCount}/{sec.totalTulipas}
                               </td>
                               <td
                                 className={`py-2 pl-2 text-right font-semibold ${
                                   isExempt
-                                    ? 'text-zinc-500'
+                                    ? 'text-[var(--ps-muted)]'
                                     : sec.points > 0
                                       ? 'text-[#FF2A2A]'
-                                      : 'text-emerald-400'
+                                      : 'text-[var(--ps-emerald)]'
                                 }`}
                               >
                                 {isExempt ? '0 (Isento)' : sec.points}
@@ -1096,11 +1096,11 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                 {/* Right 8 columns: Tulipa-by-Tulipa Passage Log */}
                 <div className="p-5 lg:col-span-8">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <h4 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">
+                    <h4 className="text-xs font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                       Passagens Tulipa a Tulipa ({filteredPassages.length} registros)
                     </h4>
 
-                    <div className="flex flex-wrap gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+                    <div className="flex flex-wrap gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
                       {(
                         [
                           ['V', 'Trechos V'],
@@ -1116,8 +1116,8 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                           onClick={() => setDetailFilter(key)}
                           className={`min-h-[30px] rounded-md px-2.5 text-xs font-semibold transition-all whitespace-nowrap ${
                             detailFilter === key
-                              ? 'pitstop-btn-red text-white'
-                              : 'text-zinc-400 hover:text-white'
+                              ? 'pitstop-btn-red'
+                              : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                           }`}
                         >
                           {label}
@@ -1126,10 +1126,10 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                     </div>
                   </div>
 
-                  <div className="mt-3 max-h-[480px] overflow-auto rounded-xl border border-zinc-800 bg-[#080B0D]">
+                  <div className="mt-3 max-h-[480px] overflow-auto rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
                     <table className="w-full border-collapse text-left text-xs">
-                      <thead className="sticky top-0 bg-[#111214] text-zinc-400">
-                        <tr className="border-b border-zinc-800">
+                      <thead className="sticky top-0 bg-[var(--ps-surface)] text-[var(--ps-muted)]">
+                        <tr className="border-b border-[var(--ps-border)]">
                           <th className="py-2.5 pl-3 pr-2">Tul</th>
                           <th className="px-2 py-2.5">Sec</th>
                           <th className="px-2 py-2.5">Tip</th>
@@ -1140,12 +1140,12 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                           <th className="py-2.5 pl-2 pr-3 text-right">Pts</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-zinc-800/70 font-mono tabular-nums">
+                      <tbody className="divide-y divide-[var(--ps-border)] font-mono tabular-nums">
                         {filteredPassages.length === 0 ? (
                           <tr>
                             <td
                               colSpan={8}
-                              className="px-4 py-8 text-center font-sans text-xs text-zinc-500"
+                              className="px-4 py-8 text-center font-sans text-xs text-[var(--ps-muted)]"
                             >
                               Nenhuma tulipa encontrada neste filtro.
                             </td>
@@ -1157,32 +1157,32 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                             return (
                               <tr
                                 key={p.tulipa}
-                                className={isMissedV ? 'bg-red-950/35' : 'hover:bg-zinc-800/35'}
+                                className={isMissedV ? 'bg-red-500/15' : 'hover:bg-[var(--ps-card)]'}
                               >
-                                <td className="py-2 pl-3 pr-2 font-semibold text-white">
+                                <td className="py-2 pl-3 pr-2 font-semibold text-[var(--ps-text)]">
                                   {p.tulipa}
                                 </td>
-                                <td className="px-2 py-2 text-zinc-400">
+                                <td className="px-2 py-2 text-[var(--ps-muted)]">
                                   {p.section ?? '-'}
                                 </td>
-                                <td className="px-2 py-2 font-semibold text-zinc-300">
+                                <td className="px-2 py-2 font-semibold text-[var(--ps-text)]">
                                   {p.type || '-'}
                                 </td>
-                                <td className="px-2 py-2 text-zinc-400">
+                                <td className="px-2 py-2 text-[var(--ps-muted)]">
                                   {p.idealHoraStr || '--'}
                                 </td>
-                                <td className="px-2 py-2 text-zinc-200">
+                                <td className="px-2 py-2 text-[var(--ps-text)]">
                                   {p.realHoraStr || '--'}
                                 </td>
                                 <td
                                   className={`px-2 py-2 text-right ${
                                     isExempt
-                                      ? 'text-zinc-500'
+                                      ? 'text-[var(--ps-muted)]'
                                       : isMissedV
                                         ? 'font-semibold text-red-400'
                                         : p.diffSec !== null && p.diffSec < 0
-                                          ? 'text-amber-400'
-                                          : 'text-zinc-200'
+                                          ? 'text-[var(--ps-amber)]'
+                                          : 'text-[var(--ps-text)]'
                                   }`}
                                 >
                                   {isMissedV
@@ -1191,7 +1191,7 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                       ? `${p.diffSec >= 0 ? '+' : ''}${p.diffSec.toFixed(1)}s`
                                       : '--'}
                                 </td>
-                                <td className="px-2 py-2 text-right text-zinc-400">
+                                <td className="px-2 py-2 text-right text-[var(--ps-muted)]">
                                   {p.minDistanceM !== null
                                     ? `${p.minDistanceM.toFixed(0)}m`
                                     : '--'}
@@ -1199,10 +1199,10 @@ export const OrganizerBackoffice: React.FC<OrganizerBackofficeProps> = ({
                                 <td
                                   className={`py-2 pl-2 pr-3 text-right font-semibold ${
                                     isExempt
-                                      ? 'text-zinc-500'
+                                      ? 'text-[var(--ps-muted)]'
                                       : p.points > 0
                                         ? 'text-[#FF2A2A]'
-                                        : 'text-emerald-400'
+                                        : 'text-[var(--ps-emerald)]'
                                   }`}
                                 >
                                   {isExempt ? '0 (Isento)' : p.points}

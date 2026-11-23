@@ -16,10 +16,10 @@ import {
   Camera,
   Check,
   CheckCircle2,
-  ChevronRight,
   Clock,
   Compass,
   Copy,
+  Crown,
   Database,
   Download,
   ExternalLink,
@@ -31,7 +31,6 @@ import {
   Link2,
   Lock,
   Navigation,
-  Palette,
   Radio,
   RefreshCw,
   RotateCcw,
@@ -48,6 +47,7 @@ import {
   Volume2,
   Wifi,
 } from 'lucide-react';
+import { VelocityCockpitLayoutEditor } from './VelocityCockpitLayoutEditor';
 import type { SettingsSubMenu } from '../App';
 import type { ParsedRoadbook } from '../types/rally';
 import {
@@ -107,8 +107,15 @@ import {
   persistVelocityTracks,
 } from '../utils/velocityStorage';
 import type { VelocityTrack } from '../utils/velocityEngine';
+import {
+  isThemeUnlockedForPlan,
+  openProUpgradeModal,
+  useAuthSession,
+} from '../utils/authSubscription';
+import { AccountSubscriptionPanel } from './AccountSubscriptionPanel';
 import { CompetitorCollector } from './CompetitorCollector';
 import { GoProBlePanel } from './GoProBlePanel';
+import { SettingsWireframeArt } from './SettingsWireframeArt';
 
 interface SettingsTabProps {
   initialMenu?: SettingsSubMenu;
@@ -148,15 +155,16 @@ const APP_THEME_OPTIONS: {
   muted: string;
   border: string;
   fontClass: string;
+  darkAccentText?: boolean;
 }[] = [
   {
     id: 'pitstop',
     name: 'PitStop Original',
-    tag: 'Padrão',
-    description: 'Preto carbono, superfícies foscas e Vermelho Racing de alta definição.',
+    tag: 'FREE · Original',
+    description: 'Preto carbono (#090A0D), superfícies foscas e Vermelho Racing (#E10600).',
     bg: '#090A0D',
-    surface: '#12141A',
-    card: '#1A1D26',
+    surface: '#111318',
+    card: '#181B22',
     accent: '#E10600',
     accent2: '#FF2A2A',
     text: '#F4F4F5',
@@ -165,40 +173,10 @@ const APP_THEME_OPTIONS: {
     fontClass: 'font-mono',
   },
   {
-    id: 'fueltech',
-    name: 'FuelTech Pro (OLED)',
-    tag: 'Datalogger',
-    description: 'Preto puro #000000 OLED, azul elétrico + âmbar e dígitos condensados FT600.',
-    bg: '#000000',
-    surface: '#07090E',
-    card: '#0D121B',
-    accent: '#0EA5E9',
-    accent2: '#F59E0B',
-    text: '#F8FAFC',
-    muted: '#94A3B8',
-    border: 'rgba(14,165,233,0.3)',
-    fontClass: "font-['Barlow_Condensed']",
-  },
-  {
-    id: 'night',
-    name: 'Rally Noturno',
-    tag: 'Night Vision',
-    description: 'Grafite escuro com iluminação âmbar/vermelha suave para zero ofuscamento à noite.',
-    bg: '#100C0D',
-    surface: '#181214',
-    card: '#21181A',
-    accent: '#DC2626',
-    accent2: '#F97316',
-    text: '#FCEBE3',
-    muted: '#C29D90',
-    border: 'rgba(249,115,22,0.28)',
-    fontClass: 'font-mono',
-  },
-  {
     id: 'solar',
     name: 'Solar Dia',
-    tag: 'Alto Contraste',
-    description: 'Fundo claro anti-reflexo, cards brancos e texto preto absoluto para sol forte.',
+    tag: 'FREE · Alto Contraste',
+    description: 'Fundo claro (#F1F5F9), cards brancos (#FFFFFF) e texto preto para sol forte.',
     bg: '#F1F5F9',
     surface: '#FFFFFF',
     card: '#F8FAFC',
@@ -211,9 +189,9 @@ const APP_THEME_OPTIONS: {
   },
   {
     id: 'gt',
-    name: 'GT Telemetry',
-    tag: 'Neon',
-    description: 'Cinza titânio profundo com verde-lima vibrante e tipografia geométrica moderna.',
+    name: 'GT Neon (Lime)',
+    tag: 'PRO · Lime',
+    description: 'Grafite profundo com Verde Limão ácido (#84CC16) e tipografia geométrica.',
     bg: '#0F172A',
     surface: '#172136',
     card: '#1E293B',
@@ -223,6 +201,114 @@ const APP_THEME_OPTIONS: {
     muted: '#94A3B8',
     border: 'rgba(132,204,22,0.32)',
     fontClass: "font-['Outfit']",
+    darkAccentText: true,
+  },
+  {
+    id: 'fueltech',
+    name: 'FuelTech Pro (OLED)',
+    tag: 'PRO · OLED',
+    description: 'Preto puro #000000 OLED com Azul Elétrico (#0EA5E9) e Laranja Âmbar (#F59E0B).',
+    bg: '#000000',
+    surface: '#070B12',
+    card: '#0F1724',
+    accent: '#0EA5E9',
+    accent2: '#F59E0B',
+    text: '#F8FAFC',
+    muted: '#94A3B8',
+    border: 'rgba(14,165,233,0.32)',
+    fontClass: "font-['Barlow_Condensed']",
+  },
+  {
+    id: 'subaru',
+    name: 'Subaru WRX Rally',
+    tag: 'PRO · WRC',
+    description: 'World Rally Blue (#1D4ED8) combinado com Amarelo Ouro (#FACC15) de especial.',
+    bg: '#071430',
+    surface: '#0C214D',
+    card: '#132F68',
+    accent: '#1D4ED8',
+    accent2: '#FACC15',
+    text: '#F8FAFC',
+    muted: '#93C5FD',
+    border: 'rgba(250,204,21,0.32)',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'gulf',
+    name: 'Gulf Racing',
+    tag: 'PRO · Heritage',
+    description: 'Azul Claro (#38BDF8) combinado com Laranja Gulf (#F97316) clássico de pista.',
+    bg: '#081929',
+    surface: '#0E2942',
+    card: '#163959',
+    accent: '#38BDF8',
+    accent2: '#F97316',
+    text: '#F0F9FF',
+    muted: '#7DD3FC',
+    border: 'rgba(56,189,248,0.3)',
+    fontClass: 'font-mono',
+    darkAccentText: true,
+  },
+  {
+    id: 'martini',
+    name: 'Martini Racing',
+    tag: 'PRO · Group B',
+    description: 'Azul Marinho grafite com listras em Vermelho (#E11D48) e Azul Claro (#38BDF8).',
+    bg: '#0A1324',
+    surface: '#111F38',
+    card: '#192C4D',
+    accent: '#E11D48',
+    accent2: '#38BDF8',
+    text: '#F8FAFC',
+    muted: '#93C5FD',
+    border: 'rgba(56,189,248,0.3)',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'cyberpunk',
+    name: 'Cyberpunk Magenta',
+    tag: 'PRO · Synth',
+    description: 'Roxo-preto noturno (#0B0514) com Rosa Neon (#EC4899) e Ciano (#06B6D4).',
+    bg: '#0B0514',
+    surface: '#150A24',
+    card: '#211038',
+    accent: '#EC4899',
+    accent2: '#06B6D4',
+    text: '#FDF4FF',
+    muted: '#C4B5FD',
+    border: 'rgba(236,72,153,0.32)',
+    fontClass: "font-['Outfit']",
+  },
+  {
+    id: 'castrol',
+    name: "Castrol Tom's",
+    tag: 'PRO · Endurance',
+    description: 'Verde Esmeralda escuro (#051610) com acentos Verde (#10B981) e Vermelho (#EF4444).',
+    bg: '#051610',
+    surface: '#09241B',
+    card: '#0F3527',
+    accent: '#10B981',
+    accent2: '#EF4444',
+    text: '#ECFDF5',
+    muted: '#6EE7B7',
+    border: 'rgba(16,185,129,0.32)',
+    fontClass: 'font-mono',
+    darkAccentText: true,
+  },
+  {
+    id: 'night',
+    name: 'Rally Noturno (Night Vision)',
+    tag: 'PRO · Noturno',
+    description: 'Preto fosco (#050506) com vermelho rubi e âmbar suaves anti-ofuscamento.',
+    bg: '#050506',
+    surface: '#0B0B0E',
+    card: '#121216',
+    accent: '#DC2626',
+    accent2: '#D97706',
+    text: '#E5D4CE',
+    muted: '#9C7E76',
+    border: 'rgba(220,38,38,0.3)',
+    fontClass: 'font-mono',
   },
 ];
 
@@ -339,6 +425,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   onOpenApuracao,
 }) => {
   const [settings, updateSettings] = useNavSettings();
+  const { user, isPro, isAdmin } = useAuthSession();
   const [activeMenu, setActiveMenu] = useState<SettingsSubMenu>(initialMenu);
 
   useEffect(() => {
@@ -1197,6 +1284,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     APP_THEME_OPTIONS.find((t) => t.id === settings.appTheme) ?? APP_THEME_OPTIONS[0];
 
   const menuTitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
+    account: 'Conta & Assinatura (FREE / PRO)',
     theme: 'Temas & Visual do Painel',
     collector: 'Coletor & Envio para Admin',
     roadbooks: 'Planilhas & Livros de Bordo',
@@ -1229,8 +1317,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             <p className="font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--ps-accent)] uppercase">
               Configurações
             </p>
-            <h1 className="truncate font-['Barlow_Condensed'] text-xl font-extrabold italic tracking-wide text-[var(--ps-text)] uppercase sm:text-2xl">
-              {activeMenu === 'hub' ? 'Central de Ajustes' : menuTitleMap[activeMenu]}
+            <h1 className="text-base font-extrabold tracking-widest text-[var(--ps-text)] uppercase">
+              {activeMenu === 'hub' ? 'CENTRAL DE AJUSTES' : menuTitleMap[activeMenu]}
             </h1>
           </div>
         </div>
@@ -1239,143 +1327,179 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </span>
       </div>
 
-      {/* MENU HUB */}
+      {/* MENU HUB (Estilo FuelTech FT700: 2 colunas compactas, wireframe vibrante à esquerda, título à direita + LED inferior) */}
       {activeMenu === 'hub' && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-2 gap-2">
           {[
             {
+              id: 'account' as const,
+              accentColor: '#38BDF8',
+              title: 'CONTA & PRO',
+              subtitle: isAdmin
+                ? 'Admin / PRO'
+                : isPro
+                  ? 'PRO Ativo'
+                  : user
+                    ? 'Plano FREE'
+                    : 'Entrar / Plano',
+              badge: isAdmin ? 'ADMIN' : isPro ? 'PRO' : 'FREE',
+            },
+            {
               id: 'theme' as const,
-              icon: Palette,
-              title: 'Temas & Visual do Painel',
-              subtitle: `Ativo: ${activeThemeMeta.name} (${activeThemeMeta.tag}) · 5 perfis visuais`,
-              swatches: [activeThemeMeta.bg, activeThemeMeta.surface, activeThemeMeta.accent, activeThemeMeta.accent2],
+              accentColor: '#00E5FF',
+              title: 'TEMAS',
+              subtitle: '10 Visuais',
+              swatches: [
+                activeThemeMeta.bg,
+                activeThemeMeta.surface,
+                activeThemeMeta.accent,
+                activeThemeMeta.accent2,
+              ],
             },
             {
               id: 'roadbooks' as const,
-              icon: Database,
-              title: 'Planilhas & Livros de Bordo',
-              subtitle: activeRoadbookItem
-                ? `Ativa: ${activeRoadbookItem.eventName} (${savedRoadbooks.length} salvas)`
-                : `${savedRoadbooks.length} planilha(s) offline · Importar .NBP / .TXT`,
+              accentColor: '#10B981',
+              title: 'PLANILHAS',
+              subtitle:
+                savedRoadbooks.length > 0
+                  ? `${savedRoadbooks.length} Livros de Bordo`
+                  : 'Livros de Bordo',
             },
             {
               id: 'collector' as const,
-              icon: Compass,
-              title: 'Coletor & Envio para Admin',
+              accentColor: '#F97316',
+              title: 'COLETOR GPS',
               subtitle:
                 pendingQueue.length > 0
-                  ? `${pendingQueue.length} coleta(s) na fila offline aguardando envio`
-                  : 'Coleta GPS silenciosa da prova e envio à Base / Admin',
+                  ? `${pendingQueue.length} na fila`
+                  : 'Envio Admin',
             },
             {
               id: 'clock' as const,
-              icon: Clock,
-              title: 'Ajuste de Hora (Manual / GPS)',
-              subtitle:
-                settings.clockOffsetMs === 0
-                  ? `Automática (${formatClockOnly(nowMs)}) · Sinc. GPS`
-                  : `Manual (${settings.clockOffsetMs >= 0 ? '+' : ''}${(settings.clockOffsetMs / 1000).toFixed(1)}s) · ${formatClockOnly(nowMs + settings.clockOffsetMs)}`,
+              accentColor: '#FBBF24',
+              title: 'HORA & GPS',
+              subtitle: 'Sinc. Oficial',
             },
             {
               id: 'pairing' as const,
-              icon: Link2,
-              title: 'Pareamento Navegador ↔ Piloto',
+              accentColor: '#0EA5E9',
+              title: 'PAREAMENTO',
               subtitle: settings.pairing.enabled
-                ? `Ativo (${settings.pairing.role === 'navigator' ? 'Mestre' : 'Escravo'}) · Sala ${settings.pairing.roomCode}`
-                : 'Desligado · Bluetooth BLE / Tethering & Wi-Fi Hotspot',
+                ? `Sala ${settings.pairing.roomCode}`
+                : 'Piloto / Nav',
             },
             {
               id: 'pilot' as const,
-              icon: Eye,
-              title: 'Tela do Piloto (Personalização)',
-              subtitle: `${pilotActiveCount}/11 indicadores visíveis · Barra de cores e presets`,
+              accentColor: '#A3E635',
+              title: 'TELA PILOTO',
+              subtitle: 'HUD & Layout',
             },
             {
               id: 'calibration' as const,
-              icon: Ruler,
-              title: 'Aferição Hodômetro & W Fino',
-              subtitle:
-                settings.sensorMode === 'blue'
-                  ? `Sensor Blue · W ${activeW} · Passagens 1/2/3`
-                  : `GPS CAL ${settings.calibrationPct.toFixed(2)}% · Passagens 1/2/3`,
+              accentColor: '#E10600',
+              title: 'CALIBRAÇÃO',
+              subtitle: 'Odômetro / Sensores',
             },
             {
               id: 'alerts' as const,
-              icon: Volume2,
-              title: 'Alertas, Road Book & Atalhos',
-              subtitle: `Alerta: ${settings.alertStyle === 'voice' ? 'Voz pt-BR' : settings.alertStyle} · Linha ${settings.activeRowLine} · Bluetooth`,
+              accentColor: '#F59E0B',
+              title: 'ALERTAS',
+              subtitle: 'Bips & Limites',
             },
             {
               id: 'gopro' as const,
-              icon: Camera,
-              title: 'Câmeras GoPro (Bluetooth BLE)',
-              subtitle: `Multi-câmera até 7 GoPro · Auto-REC ${settings.goproAutoRecOnStart ? 'Ligado' : 'Desligado'}`,
+              accentColor: '#FF2A2A',
+              title: 'GOPRO BLE',
+              subtitle: 'Câmeras',
             },
             {
               id: 'backup' as const,
-              icon: HardDrive,
-              title: 'Backup & Dados Offline',
-              subtitle: `${savedRoadbooks.length} planilhas · ${velocityStats.tracksCount} pistas · Exportar / Restaurar`,
+              accentColor: '#22C55E',
+              title: 'BACKUP',
+              subtitle: 'Exportar Dados',
             },
             {
               id: 'system' as const,
-              icon: Satellite,
-              title: 'Sistema, Tela, GPS & Permissões',
-              subtitle: `Tela: ${settings.screenOrientation === 'auto' ? 'Auto' : settings.screenOrientation === 'portrait' ? 'Retrato' : 'Paisagem'} · ${gps.status === 'active' ? `GPS ±${gps.accuracyM ?? '--'}m` : 'GPS aguardando'} · Bateria ${battery.levelPct ?? '--'}%`,
+              accentColor: '#A855F7',
+              title: 'SISTEMA',
+              subtitle: 'Versão & Reset',
             },
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => navigateMenu(item.id)}
-                className="flex min-h-[78px] items-center justify-between gap-3 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-left transition-colors hover:border-[var(--ps-accent)] active:scale-[0.99]"
-              >
-                <div className="flex min-w-0 items-center gap-3.5">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-accent)]">
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase sm:text-xl">
-                        {item.title}
-                      </span>
-                      {'swatches' in item && item.swatches && (
-                        <span className="hidden xs:inline-flex items-center gap-1 shrink-0">
-                          {item.swatches.map((hex, i) => (
-                            <span
-                              key={i}
-                              className="h-2.5 w-2.5 rounded-full border border-white/25"
-                              style={{ backgroundColor: hex }}
-                            />
-                          ))}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 truncate text-xs text-[var(--ps-muted)]">
-                      {item.subtitle}
-                    </div>
-                  </div>
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => navigateMenu(item.id)}
+              className="group relative flex h-[76px] items-center justify-end overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-[#181B24] to-[#0E1015] px-3 py-2 text-right transition-all hover:border-white/30 active:scale-[0.98]"
+            >
+              <SettingsWireframeArt menuId={item.id} color={item.accentColor} />
+
+              <div className="relative z-10 flex min-w-0 max-w-[78%] flex-col items-end justify-center text-right">
+                <div className="flex items-center justify-end gap-1.5">
+                  {'badge' in item && item.badge && (
+                    <span
+                      className={`rounded px-1 py-0.5 font-mono text-[8px] font-black leading-none uppercase ${
+                        item.badge === 'ADMIN'
+                          ? 'bg-cyan-500/25 text-cyan-300'
+                          : item.badge === 'PRO'
+                            ? 'bg-emerald-500/25 text-emerald-300'
+                            : 'bg-amber-500/25 text-amber-300'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                  <span className="whitespace-nowrap text-[11px] font-black tracking-wider text-white uppercase leading-tight sm:text-xs">
+                    {item.title}
+                  </span>
                 </div>
-                <ChevronRight className="h-5 w-5 shrink-0 text-[var(--ps-muted)]" />
-              </button>
-            );
-          })}
+
+                <div className="mt-0.5 max-w-full truncate text-[10px] font-medium text-slate-400 leading-tight">
+                  {item.subtitle}
+                </div>
+
+                {'swatches' in item && item.swatches && (
+                  <div className="mt-1 flex items-center justify-end gap-1">
+                    {item.swatches.map((hex, i) => (
+                      <span
+                        key={i}
+                        className="h-2 w-2 rounded-full border border-white/30"
+                        style={{ backgroundColor: hex }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Barra de LED fina iluminada na base inferior */}
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px]"
+                style={{
+                  backgroundColor: item.accentColor,
+                  boxShadow: `0 0 8px ${item.accentColor}`,
+                }}
+              />
+            </button>
+          ))}
         </div>
       )}
 
-      {/* SUBMENU 0: TEMAS & VISUAL DO PAINEL */}
+      {/* SUBMENU 00: CONTA & ASSINATURA + ADMIN */}
+      {activeMenu === 'account' && <AccountSubscriptionPanel />}
+
+      {/* SUBMENU 0: TEMAS & VISUAL DO PAINEL (10 TEMAS) */}
       {activeMenu === 'theme' && (
         <div className="space-y-3">
           <section className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
                 <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                  Escolha o Tema do Cockpit
+                  Escolha o Tema do Cockpit (10 Modelos)
                 </h2>
                 <p className="text-xs text-[var(--ps-muted)]">
-                  Altera instantaneamente fundo, superfícies, destaques e tipografia dos instrumentos em todo o aplicativo.
+                  {isPro
+                    ? 'Plano PRO ativo: todos os 10 temas visuais desbloqueados offline e online.'
+                    : 'Plano FREE: PitStop Original e Solar Dia liberados. Os demais 8 temas requerem Plano PRO.'}
                 </p>
               </div>
               <span className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-1.5 font-mono text-[11px] font-bold text-[var(--ps-accent)]">
@@ -1386,15 +1510,27 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {APP_THEME_OPTIONS.map((themeOpt) => {
                 const isActive = settings.appTheme === themeOpt.id;
+                const unlocked = isThemeUnlockedForPlan(themeOpt.id, isPro);
                 return (
                   <button
                     key={themeOpt.id}
                     type="button"
-                    onClick={() => updateSettings({ appTheme: themeOpt.id })}
+                    onClick={() => {
+                      if (!unlocked) {
+                        openProUpgradeModal(
+                          `Tema ${themeOpt.name}`,
+                          'No Plano FREE estão disponíveis os temas PitStop Original e Solar Dia. Ative o Plano PRO para usar todos os 10 temas visuais.'
+                        );
+                        return;
+                      }
+                      updateSettings({ appTheme: themeOpt.id });
+                    }}
                     className={`group flex flex-col justify-between gap-3 rounded-2xl border p-3.5 text-left transition-all active:scale-[0.99] ${
                       isActive
                         ? 'border-[var(--ps-accent)] ring-2 ring-[var(--ps-accent)]/30 bg-[var(--ps-card)]'
-                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
+                        : unlocked
+                          ? 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
+                          : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] opacity-80 hover:border-amber-500/50'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -1407,7 +1543,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                             className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase"
                             style={{
                               backgroundColor: themeOpt.accent,
-                              color: themeOpt.id === 'gt' ? '#090D16' : '#FFFFFF',
+                              color: themeOpt.darkAccentText ? '#090D16' : '#FFFFFF',
                             }}
                           >
                             {themeOpt.tag}
@@ -1417,11 +1553,16 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                           {themeOpt.description}
                         </p>
                       </div>
-                      {isActive && (
+                      {isActive ? (
                         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--ps-accent)] text-[var(--ps-accent-text)]">
                           <Check className="h-3.5 w-3.5" />
                         </span>
-                      )}
+                      ) : !unlocked ? (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-500/45 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-black text-amber-400 uppercase">
+                          <Crown className="h-3 w-3" />
+                          <span>PRO</span>
+                        </span>
+                      ) : null}
                     </div>
 
                     {/* Mini Live Telemetry Preview Card */}
@@ -2048,111 +2189,127 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </div>
       )}
 
-      {/* SUBMENU 3: TELA DO PILOTO (PERSONALIZAÇÃO) */}
+      {/* SUBMENU 3: TELA DO PILOTO (PERSONALIZAÇÃO REGULARIDADE + COCKPIT VELOCIDADE) */}
       {activeMenu === 'pilot' && (
-        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                Campos Visíveis na Tela do Piloto
-              </h2>
-              <p className="text-xs text-[var(--ps-muted)]">
-                Escolha exatamente o que aparece para o piloto na aba Regularidade &gt; Piloto.
-              </p>
+        <div className="space-y-4">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                  Cockpit Ao Vivo · Aba Velocidade (10 Modelos + Customizado)
+                </h2>
+                <p className="text-xs text-[var(--ps-muted)]">
+                  Escolha um dos 10 layouts prontos ou monte o seu painel com ordem, tamanho P/M/G e widgets ativos.
+                </p>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                type="button"
-                onClick={() => updateSettings({ pilotDisplay: getDefaultPilotDisplay() })}
-                className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-              >
-                Completo
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  updateSettings({
-                    pilotDisplay: {
-                      showDistance: true,
-                      showOdometer: false,
-                      showSpeed: true,
-                      showTargetSpeed: true,
-                      showTnav: true,
-                      showColorBar: true,
-                      showDeltaMeters: false,
-                      showClock: false,
-                      showDesenho: true,
-                      showCap: false,
-                      showObs: true,
-                    },
-                  })
-                }
-                className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-              >
-                Essencial Piloto
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  updateSettings({
-                    pilotDisplay: {
-                      showDistance: false,
-                      showOdometer: false,
-                      showSpeed: true,
-                      showTargetSpeed: true,
-                      showTnav: true,
-                      showColorBar: true,
-                      showDeltaMeters: false,
-                      showClock: false,
-                      showDesenho: false,
-                      showCap: false,
-                      showObs: false,
-                    },
-                  })
-                }
-                className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-              >
-                Minimalista (Vel/Média/TNAV)
-              </button>
-            </div>
-          </div>
+            <VelocityCockpitLayoutEditor />
+          </section>
 
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3">
-            {([
-              { key: 'showSpeed', label: 'Velocidade Atual (km/h)' },
-              { key: 'showTargetSpeed', label: 'Média Ideal (PMM)' },
-              { key: 'showTnav', label: 'TNAV (Adiantado / Atrasado)' },
-              { key: 'showColorBar', label: 'Barra de Cores (Verde/Cinza/Verm.)' },
-              { key: 'showDistance', label: 'Distância Regressiva (m/km)' },
-              { key: 'showOdometer', label: 'Hodômetro Total' },
-              { key: 'showDeltaMeters', label: 'Diferença em Metros (+/- m)' },
-              { key: 'showClock', label: 'Hora Oficial' },
-              { key: 'showDesenho', label: 'Desenho da Tulipa (Quadrado)' },
-              { key: 'showCap', label: 'CAP° / Número do Trecho' },
-              { key: 'showObs', label: 'Observação (Retângulo + Texto)' },
-            ] as const).map((item) => (
-              <label
-                key={item.key}
-                className="flex min-h-[46px] cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-[var(--ps-border-strong)]"
-              >
-                <input
-                  type="checkbox"
-                  checked={settings.pilotDisplay[item.key]}
-                  onChange={(e) =>
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                  Campos Visíveis na Tela do Piloto (Regularidade)
+                </h2>
+                <p className="text-xs text-[var(--ps-muted)]">
+                  Escolha exatamente o que aparece para o piloto na aba Regularidade &gt; Piloto.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => updateSettings({ pilotDisplay: getDefaultPilotDisplay() })}
+                  className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+                >
+                  Completo
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
                     updateSettings({
                       pilotDisplay: {
-                        ...settings.pilotDisplay,
-                        [item.key]: e.target.checked,
+                        showDistance: true,
+                        showOdometer: false,
+                        showSpeed: true,
+                        showTargetSpeed: true,
+                        showTnav: true,
+                        showColorBar: true,
+                        showDeltaMeters: false,
+                        showClock: false,
+                        showDesenho: true,
+                        showCap: false,
+                        showObs: true,
                       },
                     })
                   }
-                  className="h-4 w-4 accent-[var(--ps-accent)]"
-                />
-                <span>{item.label}</span>
-              </label>
-            ))}
-          </div>
-        </section>
+                  className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+                >
+                  Essencial Piloto
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateSettings({
+                      pilotDisplay: {
+                        showDistance: false,
+                        showOdometer: false,
+                        showSpeed: true,
+                        showTargetSpeed: true,
+                        showTnav: true,
+                        showColorBar: true,
+                        showDeltaMeters: false,
+                        showClock: false,
+                        showDesenho: false,
+                        showCap: false,
+                        showObs: false,
+                      },
+                    })
+                  }
+                  className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+                >
+                  Minimalista (Vel/Média/TNAV)
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3">
+              {([
+                { key: 'showSpeed', label: 'Velocidade Atual (km/h)' },
+                { key: 'showTargetSpeed', label: 'Média Ideal (PMM)' },
+                { key: 'showTnav', label: 'TNAV (Adiantado / Atrasado)' },
+                { key: 'showColorBar', label: 'Barra de Cores (Verde/Cinza/Verm.)' },
+                { key: 'showDistance', label: 'Distância Regressiva (m/km)' },
+                { key: 'showOdometer', label: 'Hodômetro Total' },
+                { key: 'showDeltaMeters', label: 'Diferença em Metros (+/- m)' },
+                { key: 'showClock', label: 'Hora Oficial' },
+                { key: 'showDesenho', label: 'Desenho da Tulipa (Quadrado)' },
+                { key: 'showCap', label: 'CAP° / Número do Trecho' },
+                { key: 'showObs', label: 'Observação (Retângulo + Texto)' },
+              ] as const).map((item) => (
+                <label
+                  key={item.key}
+                  className="flex min-h-[46px] cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-[var(--ps-border-strong)]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={settings.pilotDisplay[item.key]}
+                    onChange={(e) =>
+                      updateSettings({
+                        pilotDisplay: {
+                          ...settings.pilotDisplay,
+                          [item.key]: e.target.checked,
+                        },
+                      })
+                    }
+                    className="h-4 w-4 accent-[var(--ps-accent)]"
+                  />
+                  <span>{item.label}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+        </div>
       )}
 
       {/* SUBMENU 4: AFERIÇÃO DO HODÔMETRO & W FINO */}

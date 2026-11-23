@@ -17,6 +17,7 @@ import {
   Flame,
   FolderOpen,
   History,
+  LayoutGrid,
   Map as MapIcon,
   Pause,
   Pencil,
@@ -39,9 +40,19 @@ import {
 import { FuelTechAnalysisPanel } from './FuelTechAnalysisPanel';
 import { SatcronLivePanel } from './SatcronLivePanel';
 import { SurveyCockpit } from './SurveyCockpit';
-import { VelocityMapboxView } from './VelocityMapboxView';
-import { useNavSettings } from '../utils/navSettings';
 import {
+  VelocityCockpitLayoutEditor,
+  VelocityCockpitLayoutModal,
+} from './VelocityCockpitLayoutEditor';
+import { VelocityLivePresetScreen } from './VelocityLiveLayouts';
+import { VelocityMapboxView } from './VelocityMapboxView';
+import { VideoHudOverlayPanel } from './VideoHudOverlayPanel';
+import { openProUpgradeModal, useAuthSession } from '../utils/authSubscription';
+import { useNavSettings } from '../utils/navSettings';
+import { useVelocityCockpitLayout } from '../utils/velocityCockpitLayout';
+import {
+  autoStartGoProRecording,
+  autoStopGoProRecording,
   clearGoProFleetError,
   getGoProDisplayName,
   renameGoProInFleet,
@@ -227,13 +238,71 @@ interface VelocityLiveStagePanelProps {
   speedKmh: number;
   displayedTripKm: number;
   totalDistKm: number;
-  longG: number;
-  latG: number;
   bestRun: VelocityRun | null;
+  fallbackRuns: VelocityRun[];
   optimalSummary: OptimalStageSummary;
   lapNumber: number;
   liveSamples: VelocitySample[];
   onEditTripDistanceKm: (nextDisplayedKm: number) => void;
+}
+
+function resolveTrapElapsedMsInRun(run: VelocityRun, trap: VelocityTrap): number | null {
+  const recorded = run.splitTimesMs?.[trap.id];
+  if (typeof recorded === 'number' && Number.isFinite(recorded) && recorded >= 0) {
+    return recorded;
+  }
+  if ((trap.kind === 'finish' || trap.kind === 'start_finish') && Number.isFinite(run.totalMs) && run.totalMs > 0) {
+    return run.totalMs;
+  }
+  const samples = run.samples;
+  if (!samples || samples.length < 2) return null;
+
+  const baseStartMs = run.startedAtMs || samples[0].timestampMs;
+  for (let i = 1; i < samples.length; i += 1) {
+    const prev = samples[i - 1];
+    const curr = samples[i];
+    const hit = detectTrapCrossing(
+      { lat: prev.lat, lon: prev.lon, timestampMs: prev.timestampMs },
+      { lat: curr.lat, lon: curr.lon, timestampMs: curr.timestampMs },
+      trap,
+      { hdopAccuracyM: 45, autoSnap: true }
+    );
+    if (hit && hit.crossTimestampMs >= baseStartMs) {
+      if (
+        Number.isFinite(prev.stageElapsedMs) &&
+        Number.isFinite(curr.stageElapsedMs) &&
+        curr.stageElapsedMs >= prev.stageElapsedMs &&
+        curr.stageElapsedMs > 0
+      ) {
+        return Math.round(prev.stageElapsedMs + hit.t * (curr.stageElapsedMs - prev.stageElapsedMs));
+      }
+      return Math.max(0, hit.crossTimestampMs - baseStartMs);
+    }
+  }
+
+  let bestDistM = Infinity;
+  let bestElapsedMs: number | null = null;
+  const startIndex = trap.kind === 'start' ? 0 : Math.min(1, samples.length - 1);
+  for (let i = startIndex; i < samples.length; i += 1) {
+    const s = samples[i];
+    const dM = haversineMetersVel(s.lat, s.lon, trap.lat, trap.lon);
+    if (dM < bestDistM) {
+      bestDistM = dM;
+      bestElapsedMs =
+        Number.isFinite(s.stageElapsedMs) && s.stageElapsedMs > 0
+          ? s.stageElapsedMs
+          : Math.max(0, s.timestampMs - baseStartMs);
+    }
+  }
+  return bestDistM <= 250 && bestElapsedMs !== null ? bestElapsedMs : null;
+}
+
+function formatSplitCompactTime(ms: number): string {
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const mins = Math.floor(sec / 60);
+  const remSec = sec - mins * 60;
+  return `${mins}:${remSec < 10 ? '0' : ''}${remSec.toFixed(1)}`;
 }
 
 const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
@@ -248,9 +317,8 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
   speedKmh,
   displayedTripKm,
   totalDistKm,
-  longG,
-  latG,
   bestRun,
+  fallbackRuns,
   optimalSummary,
   lapNumber,
   liveSamples,
@@ -309,12 +377,50 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
   const splitTrapItems = useMemo(() => {
     const checkpoints = orderedTraps.filter((t) => t.kind !== 'start');
     if (checkpoints.length === 0) return [];
+
+    // Lista ordenada de voltas completas válidas para referência: bestRun primeiro, depois última volta válida
+    const candidateRuns: VelocityRun[] = [];
+    if (bestRun && bestRun.totalMs > 0) candidateRuns.push(bestRun);
+    for (let i = fallbackRuns.length - 1; i >= 0; i -= 1) {
+      const r = fallbackRuns[i];
+      if (r.totalMs > 0 && r.id !== bestRun?.id) {
+        candidateRuns.push(r);
+      }
+    }
+
     let foundActive = false;
     return checkpoints.map((trap, idx) => {
       const currMs = currentSplitTimesMs[trap.id] ?? null;
-      const bestMs = bestRun?.splitTimesMs[trap.id] ?? null;
-      const diffSec =
-        currMs !== null && bestMs !== null ? (currMs - bestMs) / 1000 : null;
+      const prevCurrMs =
+        idx === 0 ? 0 : currentSplitTimesMs[checkpoints[idx - 1].id] ?? null;
+      const hasSectorCurr = currMs !== null && prevCurrMs !== null && currMs >= prevCurrMs;
+      const displayMs = hasSectorCurr ? currMs - prevCurrMs : currMs;
+
+      // Resolve referência em bestRun; se faltar alguma parcial nela, usa a última volta completa válida
+      let refSectorMs: number | null = null;
+      let refCumulMs: number | null = null;
+      for (const refRun of candidateRuns) {
+        const cMs = resolveTrapElapsedMsInRun(refRun, trap);
+        const pMs = idx === 0 ? 0 : resolveTrapElapsedMsInRun(refRun, checkpoints[idx - 1]);
+        if (cMs !== null && refCumulMs === null) {
+          refCumulMs = cMs;
+        }
+        if (cMs !== null && pMs !== null && cMs >= pMs) {
+          refSectorMs = cMs - pMs;
+          refCumulMs = cMs;
+          break;
+        }
+      }
+
+      let diffSec: number | null = null;
+      if (currMs !== null) {
+        if (hasSectorCurr && refSectorMs !== null) {
+          diffSec = (currMs - prevCurrMs - refSectorMs) / 1000;
+        } else if (refCumulMs !== null) {
+          diffSec = (currMs - refCumulMs) / 1000;
+        }
+      }
+
       const crossed = currMs !== null;
       let isActive = false;
       if (!crossed && !foundActive && stageState === 'running') {
@@ -327,10 +433,34 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
         name: trap.name,
         crossed,
         isActive,
+        sectorMs: displayMs,
         diffSec,
       };
     });
-  }, [orderedTraps, currentSplitTimesMs, bestRun, stageState]);
+  }, [orderedTraps, currentSplitTimesMs, bestRun, fallbackRuns, stageState]);
+
+  const visibleSplitItems = useMemo(() => {
+    const total = splitTrapItems.length;
+    if (total <= 4) return splitTrapItems;
+
+    const activeIdx = splitTrapItems.findIndex((s) => s.isActive);
+    let startIdx = 0;
+    if (activeIdx >= 0) {
+      startIdx = Math.max(0, Math.min(total - 4, activeIdx - 2));
+    } else {
+      let lastCrossedIdx = -1;
+      for (let i = total - 1; i >= 0; i -= 1) {
+        if (splitTrapItems[i].crossed) {
+          lastCrossedIdx = i;
+          break;
+        }
+      }
+      if (lastCrossedIdx >= 0) {
+        startIdx = Math.max(0, Math.min(total - 4, lastCrossedIdx - 1));
+      }
+    }
+    return splitTrapItems.slice(startIdx, startIdx + 4);
+  }, [splitTrapItems]);
 
   const deltaClampedPct =
     predictiveDeltaSec === null
@@ -359,29 +489,29 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
     setEditingTrip(false);
   };
 
-  const formattedGiantDelta =
+  const formattedCompactDelta =
     predictiveDeltaSec === null
       ? '--.--s'
       : `${predictiveDeltaSec > 0 ? '+' : ''}${predictiveDeltaSec.toFixed(2)}s`;
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 rounded-xl border border-zinc-800 bg-[#000000] p-2 text-white shadow-xl sm:p-3">
+    <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-[var(--ps-text)] shadow-xl sm:p-3">
       {/* 1. BARRA SUPERIOR DE DELTA EM TEMPO REAL */}
       <div className="shrink-0">
         <div className="flex items-center justify-between font-mono text-[10px] sm:text-xs tabular-nums">
-          <span className="font-bold text-emerald-400">RÁPIDO (-s)</span>
+          <span className="font-bold text-[var(--ps-emerald)]">RÁPIDO (-s)</span>
           <span
             className={`inline-flex items-center gap-1 text-xs font-black sm:text-sm ${
               isFaster
-                ? 'text-emerald-400'
+                ? 'text-[var(--ps-emerald)]'
                 : isSlower
                   ? 'text-[#FF2A2A]'
-                  : 'text-[#C0C4C9]'
+                  : 'text-[var(--ps-muted)]'
             }`}
           >
             <span>DELTA {formatDeltaSeconds(predictiveDeltaSec)}</span>
             {deltaTrend === 'improving' && (
-              <span className="text-emerald-400" aria-label="Ritmo melhorando">
+              <span className="text-[var(--ps-emerald)]" aria-label="Ritmo melhorando">
                 ▲
               </span>
             )}
@@ -394,11 +524,11 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
           <span className="font-bold text-[#FF2A2A]">LENTO (+s)</span>
         </div>
 
-        <div className="relative mt-1 h-2 w-full overflow-hidden rounded-lg border border-zinc-800 bg-[#111214]">
-          <div className="absolute inset-y-0 left-1/2 z-10 w-[2px] -translate-x-1/2 bg-zinc-400/80" />
+        <div className="relative mt-1 h-2 w-full overflow-hidden rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
+          <div className="absolute inset-y-0 left-1/2 z-10 w-[2px] -translate-x-1/2 bg-[var(--ps-muted)]/70" />
           {isFaster && (
             <div
-              className="absolute inset-y-0 right-1/2 bg-emerald-500 transition-all duration-150"
+              className="absolute inset-y-0 right-1/2 bg-[#10B981] transition-all duration-150"
               style={{ width: `${deltaClampedPct}%` }}
             />
           )}
@@ -411,38 +541,118 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
         </div>
       </div>
 
-      {/* 2. GRID FOCAL VELOCIDADE: VELOCIDADE NO TOPO + (METROS | DELTA) + CRONÔMETRO + (CH | MELHOR | ÚLTIMA) */}
+      {/* 2. CORPO PRINCIPAL: DELTA LARGURA TOTAL -> JANELA 4 COLUNAS PARCIAIS -> VELOCIDADE/ODÔMETRO -> CRONÔMETRO */}
       <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5">
-        {/* Bloco 1: VELOCIDADE ATUAL (Destaque Superior) */}
-        <div className="flex flex-1 min-h-0 flex-col items-center justify-center rounded-xl border border-zinc-800 bg-[#050608] px-3 py-1.5 text-center">
-          <div className="flex w-full items-center justify-between font-mono text-[10px] font-bold tracking-wider text-zinc-400 uppercase">
-            <span>Velocidade</span>
-            <span className="tabular-nums">
-              G:{' '}
-              <strong className={longG < -0.1 ? 'text-[#FF2A2A]' : 'text-[#10B981]'}>
-                {longG >= 0 ? `+${longG.toFixed(2)}` : longG.toFixed(2)}
-              </strong>{' '}
-              · Lat {latG.toFixed(2)}
-            </span>
+        {/* Bloco 1: DELTA TIME em largura total */}
+        <div
+          className={`flex flex-1 min-h-[84px] flex-col items-center justify-center rounded-xl border-2 px-3 py-2 text-center transition-colors ${
+            isFaster
+              ? 'border-[#10B981] bg-emerald-600/25 text-[var(--ps-emerald)]'
+              : isSlower
+                ? 'border-[#FF2A2A] bg-red-600/25 text-[#FF2A2A]'
+                : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-text)]'
+          }`}
+        >
+          <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-black leading-tight tracking-wider uppercase sm:text-xs">
+            <span>{isFaster ? '▲' : isSlower ? '▼' : '●'}</span>
+            <span>{isFaster ? 'MAIS RÁPIDO' : isSlower ? 'MAIS LENTO' : 'DELTA TIME'}</span>
           </div>
-          <div className="mt-0.5 flex items-baseline justify-center gap-1.5 font-mono tabular-nums">
-            <span className="text-5xl font-black leading-none tracking-tight text-white sm:text-6xl">
-              {Math.round(speedKmh)}
-            </span>
-            <span className="text-xs font-extrabold text-[#E10600] sm:text-sm">km/h</span>
+          <div className="mt-0.5 font-mono text-3xl font-black leading-none tracking-tight tabular-nums sm:text-5xl">
+            {formattedCompactDelta}
           </div>
+          <p className="mt-1 max-w-full truncate font-mono text-[10px] font-bold leading-tight opacity-85 uppercase">
+            {bestRun ? `vs Volta #${bestRun.runNumber}` : 'Sem referência'}
+          </p>
         </div>
 
-        {/* Grid 2 Colunas Iguais: Metros Percorridos (Esquerda) + Delta MAIS RÁPIDO / MAIS LENTO (Direita) */}
+        {/* Linha 2: JANELA DESLIZANTE DE 4 COLUNAS PARA PARCIAIS (Até 4 fixas, +4 acompanha progressão) */}
+        {visibleSplitItems.length > 0 && (
+          <div className="grid shrink-0 grid-cols-4 gap-2">
+            {visibleSplitItems.map((sp) => {
+              const isBetter = sp.diffSec !== null && sp.diffSec <= 0;
+              const isWorse = sp.diffSec !== null && sp.diffSec > 0;
+              return (
+                <div
+                  key={sp.id}
+                  title={sp.name}
+                  className={`flex min-h-[60px] min-w-0 flex-col items-center justify-center rounded-xl border px-1.5 py-2 text-center font-mono tabular-nums transition-colors ${
+                    sp.isActive
+                      ? 'animate-pulse border-amber-400 bg-amber-500/15 text-[var(--ps-amber)]'
+                      : sp.crossed
+                        ? isBetter
+                          ? 'border-emerald-400/75 bg-emerald-600/20 text-[var(--ps-text)]'
+                          : isWorse
+                            ? 'border-red-500/75 bg-red-600/20 text-[var(--ps-text)]'
+                            : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)]'
+                        : 'border-[var(--ps-border)]/70 bg-[var(--ps-card-deep)]/65 text-[var(--ps-muted)]'
+                  }`}
+                >
+                  <span
+                    className={`text-[11px] font-black leading-none tracking-wider uppercase ${
+                      sp.isActive ? 'text-[var(--ps-amber)]' : 'text-[var(--ps-muted)]'
+                    }`}
+                  >
+                    {sp.code}
+                  </span>
+
+                  {sp.crossed ? (
+                    sp.diffSec !== null ? (
+                      <>
+                        <span
+                          className={`mt-1 text-sm font-black leading-none sm:text-base ${
+                            isBetter ? 'text-[var(--ps-emerald)]' : 'text-[#FF453A]'
+                          }`}
+                        >
+                          {sp.diffSec > 0 ? '+' : ''}
+                          {sp.diffSec.toFixed(1)}s
+                        </span>
+                        <span className="mt-1 text-[11px] font-bold leading-none text-[var(--ps-muted)]">
+                          {sp.sectorMs !== null ? formatSplitCompactTime(sp.sectorMs) : '--'}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="mt-1.5 text-sm font-black leading-none text-white sm:text-base">
+                        {sp.sectorMs !== null ? formatSplitCompactTime(sp.sectorMs) : '--'}
+                      </span>
+                    )
+                  ) : sp.isActive ? (
+                    <span className="mt-1.5 text-xs font-black leading-none text-[var(--ps-amber)] uppercase sm:text-sm">
+                      ATUAL
+                    </span>
+                  ) : (
+                    <span className="mt-1.5 text-sm font-bold leading-none opacity-60">--</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Grid 2 Colunas Iguais: VELOCIDADE (Esquerda) + METROS PERCORRIDOS / ODÔMETRO (Direita) */}
         <div className="grid shrink-0 grid-cols-2 gap-1.5">
-          {/* Coluna Esquerda: METROS PERCORRIDOS / ODÔMETRO (Toque para editar) */}
-          <div className="flex flex-col items-center justify-center rounded-xl border border-zinc-800 bg-[#050608] px-2 py-1.5 text-center">
-            <span className="text-[10px] font-bold tracking-wider text-zinc-400 uppercase">
+          {/* Coluna Esquerda: VELOCIDADE (km/h) limpa e centralizada */}
+          <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-2 text-center">
+            <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+              Velocidade
+            </span>
+            <div className="mt-1 flex items-baseline justify-center gap-1 font-mono tabular-nums">
+              <span className="text-3xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-4xl">
+                {Math.round(speedKmh)}
+              </span>
+              <span className="text-xs font-extrabold text-[var(--ps-accent)] sm:text-sm">
+                km/h
+              </span>
+            </div>
+          </div>
+
+          {/* Coluna Direita: METROS PERCORRIDOS / ODÔMETRO (Toque para editar) */}
+          <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center">
+            <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
               Metros (Odômetro)
             </span>
             {editingTrip ? (
               <div className="mt-1 w-full max-w-[150px] space-y-1">
-                <div className="flex items-center gap-1 rounded-lg border border-[#E10600] bg-[#14161A] px-1.5 py-1">
+                <div className="flex items-center gap-1 rounded-lg border border-[var(--ps-accent)] bg-[var(--ps-card)] px-1.5 py-1">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -455,7 +665,7 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
                       if (e.key === 'Escape') setEditingTrip(false);
                     }}
                     aria-label="Editar odômetro Trip"
-                    className="min-w-0 flex-1 bg-transparent text-center font-mono text-sm font-black text-amber-300 focus:outline-none"
+                    className="min-w-0 flex-1 bg-transparent text-center font-mono text-sm font-black text-[var(--ps-amber)] focus:outline-none"
                   />
                   <button
                     type="button"
@@ -468,7 +678,7 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
                           : displayedTripKm.toFixed(2)
                       );
                     }}
-                    className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white uppercase"
+                    className="rounded bg-[var(--ps-surface)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-text)] uppercase"
                   >
                     {tripUnit}
                   </button>
@@ -476,7 +686,7 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
                 <button
                   type="button"
                   onClick={commitTripEdit}
-                  className="pitstop-btn-red w-full rounded py-1 text-[10px] font-extrabold text-white uppercase"
+                  className="pitstop-btn-red w-full rounded py-1 text-[10px] font-extrabold uppercase"
                 >
                   Confirmar
                 </button>
@@ -493,56 +703,34 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
                   setEditingTrip(true);
                 }}
                 title="Toque para digitar metragem do odômetro"
-                className="group mt-0.5 flex flex-col items-center justify-center rounded-lg px-1.5 py-0.5 hover:bg-[#0D0F12]"
+                className="group mt-0.5 flex flex-col items-center justify-center rounded-lg px-1.5 py-0.5 hover:bg-[var(--ps-card)]"
               >
-                <span className="font-mono text-3xl font-black leading-none tracking-tight text-amber-300 tabular-nums sm:text-4xl">
+                <span className="font-mono text-3xl font-black leading-none tracking-tight text-[var(--ps-amber)] tabular-nums sm:text-4xl">
                   {Math.round(displayedTripKm * 1000)}
-                  <span className="ml-0.5 text-sm font-extrabold text-amber-400">m</span>
+                  <span className="ml-0.5 text-sm font-extrabold text-[var(--ps-amber)]">m</span>
                 </span>
-                <span className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] text-zinc-400 tabular-nums">
+                <span className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] text-[var(--ps-muted)] tabular-nums">
                   <span>{displayedTripKm.toFixed(2)} km</span>
-                  <Pencil className="h-2.5 w-2.5 text-zinc-500 group-hover:text-[#E10600]" />
+                  <Pencil className="h-2.5 w-2.5 text-[var(--ps-muted)] group-hover:text-[var(--ps-accent)]" />
                 </span>
               </button>
             )}
           </div>
-
-          {/* Coluna Direita: DELTA COMPACTO (MAIS RÁPIDO / MAIS LENTO) */}
-          <div
-            className={`flex flex-col items-center justify-center rounded-xl border-2 px-2 py-1.5 text-center transition-colors ${
-              isFaster
-                ? 'border-[#10B981] bg-[#10B981]/20 text-[#10B981]'
-                : isSlower
-                  ? 'border-[#FF2A2A] bg-[#FF2A2A]/20 text-[#FF2A2A]'
-                  : 'border-zinc-800 bg-[#090B0E] text-zinc-400'
-            }`}
-          >
-            <div className="flex items-center justify-center gap-1 font-mono text-[10px] font-black tracking-wider uppercase sm:text-xs">
-              <span>{isFaster ? '▲' : isSlower ? '▼' : '●'}</span>
-              <span>{isFaster ? 'MAIS RÁPIDO' : isSlower ? 'MAIS LENTO' : 'DELTA TIME'}</span>
-            </div>
-            <div className="mt-0.5 font-mono text-3xl font-black leading-none tracking-tight tabular-nums sm:text-4xl">
-              {formattedGiantDelta}
-            </div>
-            <p className="mt-1 font-mono text-[9px] font-semibold opacity-85 uppercase truncate max-w-full">
-              {bestRun ? `vs Volta #${bestRun.runNumber}` : 'Sem referência'}
-            </p>
-          </div>
         </div>
 
         {/* Bloco 3: TEMPO DA ESPECIAL (Cronômetro Principal) + Grid 3 Colunas CH / MELHOR / ÚLTIMA */}
-        <div className="shrink-0 space-y-1.5 rounded-xl border border-zinc-800 bg-[#050608] px-2.5 py-2 sm:px-3">
+        <div className="shrink-0 space-y-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 sm:px-3">
           <div className="flex flex-col items-center text-center">
-            <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-bold uppercase text-zinc-400">
-              <span className="truncate max-w-[180px] text-white">{activeTrackName}</span>
+            <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-bold uppercase text-[var(--ps-muted)]">
+              <span className="truncate max-w-[180px] text-[var(--ps-text)]">{activeTrackName}</span>
               <span aria-hidden="true">·</span>
               <span
                 className={
                   stageState === 'running'
-                    ? 'text-emerald-400'
+                    ? 'text-[var(--ps-emerald)]'
                     : stageState === 'armed'
-                      ? 'text-amber-300'
-                      : 'text-[#C0C4C9]'
+                      ? 'text-[var(--ps-amber)]'
+                      : 'text-[var(--ps-muted)]'
                 }
               >
                 {statusHeadline}
@@ -551,10 +739,10 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
             <div
               className={`mt-0.5 font-mono text-4xl font-black leading-none tracking-tight tabular-nums sm:text-5xl ${
                 stageState === 'running'
-                  ? 'text-white'
+                  ? 'text-[var(--ps-text)]'
                   : stageState === 'finished'
-                    ? 'text-emerald-400'
-                    : 'text-[#C0C4C9]'
+                    ? 'text-[var(--ps-emerald)]'
+                    : 'text-[var(--ps-muted)]'
               }`}
             >
               {formatStageDuration(currentStageElapsedMs)}
@@ -562,67 +750,32 @@ const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
           </div>
 
           <div className="grid grid-cols-3 gap-1.5">
-            <div className="rounded-lg border border-zinc-800/90 bg-[#0B0D10] px-2 py-1.5 text-center">
-              <p className="font-mono text-[9px] font-bold tracking-wider text-zinc-400 uppercase sm:text-[10px]">
+            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 text-center">
+              <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-[10px]">
                 CH
               </p>
-              <p className="font-mono text-base font-extrabold leading-tight text-white tabular-nums sm:text-xl">
+              <p className="font-mono text-base font-extrabold leading-tight text-[var(--ps-text)] tabular-nums sm:text-xl">
                 {formatClockTime(clockAdjustedNow)}
               </p>
             </div>
-            <div className="rounded-lg border border-zinc-800/90 bg-[#0B0D10] px-2 py-1.5 text-center">
-              <p className="font-mono text-[9px] font-bold tracking-wider text-emerald-400 uppercase sm:text-[10px]">
+            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 text-center">
+              <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-emerald)] uppercase sm:text-[10px]">
                 MELHOR
               </p>
-              <p className="font-mono text-base font-extrabold leading-tight text-emerald-400 tabular-nums sm:text-xl">
+              <p className="font-mono text-base font-extrabold leading-tight text-[var(--ps-emerald)] tabular-nums sm:text-xl">
                 {formatStageDuration(optimalSummary.bestRunTotalMs)}
               </p>
             </div>
-            <div className="rounded-lg border border-zinc-800/90 bg-[#0B0D10] px-2 py-1.5 text-center">
-              <p className="font-mono text-[9px] font-bold tracking-wider text-zinc-400 uppercase sm:text-[10px]">
+            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 text-center">
+              <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-[10px]">
                 ÚLTIMA
               </p>
-              <p className="font-mono text-base font-extrabold leading-tight text-zinc-200 tabular-nums sm:text-xl">
+              <p className="font-mono text-base font-extrabold leading-tight text-[var(--ps-text)] tabular-nums sm:text-xl">
                 {formatStageDuration(optimalSummary.lastRunTotalMs)}
               </p>
             </div>
           </div>
         </div>
-
-        {/* 3. FAIXA DISCRETA DE PARCIAIS (P1, P2, P3...) BASEADA NOS MARCOS CADASTRADOS */}
-        {splitTrapItems.length > 0 && (
-          <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto rounded-lg border border-zinc-800/80 bg-[#050608] px-2 py-1 font-mono text-[10px] tabular-nums">
-            <span className="shrink-0 font-bold text-zinc-500 uppercase">Parciais</span>
-            {splitTrapItems.map((sp) => (
-              <span
-                key={sp.id}
-                title={sp.name}
-                className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-extrabold ${
-                  sp.isActive
-                    ? 'border border-amber-400/70 bg-amber-950/35 text-amber-300'
-                    : sp.crossed
-                      ? sp.diffSec !== null
-                        ? sp.diffSec <= 0
-                          ? 'bg-emerald-950/40 text-emerald-300'
-                          : 'bg-red-950/40 text-red-300'
-                        : 'bg-zinc-900 text-zinc-200'
-                      : 'text-zinc-500'
-                }`}
-              >
-                <span>{sp.code}</span>
-                {sp.crossed ? (
-                  <span>
-                    {sp.diffSec !== null ? formatDeltaSeconds(sp.diffSec) : 'OK'}
-                  </span>
-                ) : sp.isActive ? (
-                  <span className="text-amber-300">●</span>
-                ) : (
-                  <span>--</span>
-                )}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -670,26 +823,26 @@ const VelocityGaugeClockCards: React.FC<{
   return (
     <>
       {showOfficialClock && (
-        <div className="rounded-xl border border-zinc-800 bg-[#000000] p-3.5 text-center">
-          <p className="text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+        <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5 text-center">
+          <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
             Horário Oficial (CH)
           </p>
-          <p className="mt-1.5 font-mono text-2xl font-extrabold text-emerald-400 tabular-nums sm:text-4xl">
+          <p className="mt-1.5 font-mono text-2xl font-extrabold text-[var(--ps-emerald)] tabular-nums sm:text-4xl">
             {formatClockTime(nowMs + clockOffsetMs)}
           </p>
-          <p className="mt-1 font-mono text-[10px] text-zinc-400">GPS SYNC</p>
+          <p className="mt-1 font-mono text-[10px] text-[var(--ps-muted)]">GPS SYNC</p>
         </div>
       )}
 
       {showStageTime && (
-        <div className="rounded-xl border border-zinc-800 bg-[#000000] p-3.5 text-center">
-          <p className="text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+        <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5 text-center">
+          <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
             Tempo Especial
           </p>
-          <p className="mt-1.5 font-mono text-2xl font-extrabold text-white tabular-nums sm:text-4xl">
+          <p className="mt-1.5 font-mono text-2xl font-extrabold text-[var(--ps-text)] tabular-nums sm:text-4xl">
             {formatStageDuration(elapsed)}
           </p>
-          <p className="mt-1 font-mono text-[10px] text-zinc-400">
+          <p className="mt-1 font-mono text-[10px] text-[var(--ps-muted)]">
             Delta {formatDeltaSeconds(delta)}
           </p>
         </div>
@@ -704,6 +857,7 @@ interface VelocityCockpitProps {
 
 export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = true }) => {
   const [navSettings, updateNavSettings] = useNavSettings();
+  const { isPro } = useAuthSession();
   const [screen, setScreen] = useState<VelocityScreen>('home');
   const [liveMode, setLiveMode] = useState<LivePanelMode>('timer');
   const [source, setSource] = useState<VelDriveSource>('gps');
@@ -743,7 +897,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [gaugeTripUnit, setGaugeTripUnit] = useState<'m' | 'km'>('m');
   const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(null);
   const [liveLongG, setLiveLongG] = useState(0);
-  const [liveLatG, setLiveLatG] = useState(0);
 
   // Simulator & Track Map Editor state
   const [simPlaying, setSimPlaying] = useState(false);
@@ -760,6 +913,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [showGaugeConfig, setShowGaugeConfig] = useState(false);
   const [gaugeVisibility, setGaugeVisibility] = useState<GaugeVisibility>(() => loadGaugePrefs());
   const [statusFeedback, setStatusFeedback] = useState<string | null>(null);
+  const [liveNotice, setLiveNotice] = useState<string | null>(null);
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [editingTrackName, setEditingTrackName] = useState('');
@@ -777,12 +931,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [replayElapsedMs, setReplayElapsedMs] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 4>(1);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [videoOffsetMs, setVideoOffsetMs] = useState(0);
-  const [videoHudSampleIdx, setVideoHudSampleIdx] = useState(0);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const goproFleet = useGoProFleet();
+  const cockpitLayout = useVelocityCockpitLayout();
+  const [showLayoutModal, setShowLayoutModal] = useState(false);
   const [goproDrawerOpen, setGoproDrawerOpen] = useState(false);
   const [editingGoProId, setEditingGoProId] = useState<string | null>(null);
   const [editingGoProName, setEditingGoProName] = useState('');
@@ -795,6 +947,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const calFactorRef = useRef(navSettings.calibrationPct / 100);
   calFactorRef.current = navSettings.calibrationPct / 100;
   const autoRecGoProRef = useRef(navSettings.goproAutoRecOnStart);
+  useEffect(() => {
+    autoRecGoProRef.current = navSettings.goproAutoRecOnStart;
+  }, [navSettings.goproAutoRecOnStart]);
   autoRecGoProRef.current = navSettings.goproAutoRecOnStart;
   const velPrefsRef = useRef(velPrefs);
   velPrefsRef.current = velPrefs;
@@ -828,12 +983,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       // Ignore storage error
     }
   }, [velPrefs]);
-
-  useEffect(() => {
-    return () => {
-      if (videoUrl) URL.revokeObjectURL(videoUrl);
-    };
-  }, [videoUrl]);
 
   useEffect(() => {
     let alive = true;
@@ -1072,7 +1221,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       }
 
       if (!continueNextLap && autoRecGoProRef.current) {
-        void shutterAllGoPro(false);
+        void autoStopGoProRecording();
       }
 
       setLastFinishedMs(elapsedTotal);
@@ -1221,7 +1370,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           ? imu.latG
           : kinG.accelLatG;
       setLiveLongG(accelLongG);
-      setLiveLatG(accelLatG);
 
       const nextTotalDist = totalDistRef.current + deltaDistKm;
       if (isRecording || stageStateRef.current === 'running') {
@@ -1277,7 +1425,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             setMaxSpeedKmh(Math.round(resolvedSpeedKmh));
             setCurrentSplitTimesMs({});
             if (autoRecGoProRef.current) {
-              void shutterAllGoPro(true);
+              void autoStartGoProRecording();
             }
             window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
             showToast(`Largada automática (${trap.name})`);
@@ -1301,7 +1449,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             const splitMs = Math.max(0, hit.crossTimestampMs - activeStartMs);
             updatedSplits[trap.id] = splitMs;
             setCurrentSplitTimesMs({ ...updatedSplits });
-            showToast(`${trap.name}: ${formatStageDuration(splitMs)}`);
           } else if (
             trap.kind === 'finish' &&
             nextStageState === 'running' &&
@@ -1335,7 +1482,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             setMaxSpeedKmh(Math.round(resolvedSpeedKmh));
             setCurrentSplitTimesMs({});
             if (autoRecGoProRef.current) {
-              void shutterAllGoPro(true);
+              void autoStartGoProRecording();
             }
             window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
             showToast(`Largada por proximidade (${startGate.name})`);
@@ -1583,13 +1730,20 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       setSimPlaying(true);
     }
     if (autoRecGoProRef.current) {
-      void shutterAllGoPro(true);
+      void autoStartGoProRecording();
     }
     window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
     showToast('Largada manual acionada! Cronômetro rodando.');
   };
 
   const handleStartOrArmStage = () => {
+    if (!isPro) {
+      openProUpgradeModal(
+        'Especial / Circuito com Parciais e Delta Time',
+        'A cronometragem de especiais com traps GPS, parciais e Delta Time em tempo real faz parte do Plano PRO. No Plano FREE use o Velocímetro / Hodômetro Básico e Levantamento.'
+      );
+      return;
+    }
     if (stageState === 'running') {
       finalizeRun(Date.now(), undefined, false, false);
       return;
@@ -1620,7 +1774,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       setStageStartMs(Date.now());
       setStageState('running');
       if (autoRecGoProRef.current) {
-        void shutterAllGoPro(true);
+        void autoStartGoProRecording();
       }
       window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
       showToast('Cronômetro iniciado!');
@@ -2136,6 +2290,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   };
 
   const handleOpenQuickAnalysis = () => {
+    if (!isPro) {
+      openProUpgradeModal(
+        'Datalogger & Telemetria de 3 Voltas',
+        'Comparativo de 3 voltas, forças G, mapa de calor e Vídeo Overlay HUD estão disponíveis no Plano PRO.'
+      );
+      return;
+    }
     if (groupedSessions.length > 0) {
       const targetId =
         activeTrack && groupedSessions.some((g) => g.trackId === activeTrack.id)
@@ -2274,15 +2435,18 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     if (!hasAnyGoPro && !forceShowInLive) return null;
 
     if (forceShowInLive) {
+      const liveCamCount = goproFleet.cameras.length + savedMissingGoPros.length;
+      const gridColsClass = liveCamCount >= 3 ? 'grid-cols-3' : 'grid-cols-2';
+
       return (
-        <div className="rounded-xl border border-zinc-800 bg-[#0E1014] px-2 py-1 text-white space-y-1 shrink-0 overflow-hidden">
+        <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 text-[var(--ps-text)] space-y-1 shrink-0 overflow-hidden">
           {goproFleet.errorMsg && (
-            <div className="flex items-center justify-between gap-2 rounded border border-red-700/60 bg-red-950/40 px-2 py-0.5 text-[10px] text-red-200">
+            <div className="flex items-center justify-between gap-2 rounded border border-red-500/50 bg-red-500/15 px-2 py-0.5 text-[10px] text-red-400">
               <span className="truncate">{goproFleet.errorMsg}</span>
               <button
                 type="button"
                 onClick={clearGoProFleetError}
-                className="shrink-0 text-red-300 hover:text-white"
+                className="shrink-0 hover:opacity-75"
                 aria-label="Fechar erro GoPro"
               >
                 <X className="h-3 w-3" />
@@ -2290,173 +2454,188 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </div>
           )}
 
-          {/* Barra das GoPros em 1 Única Linha Compacta (Sem Rolagem Lateral) */}
-          <div className="flex items-center justify-between gap-1.5">
-            {/* À esquerda: Botão mestre REC ALL + ícone Auto-REC */}
-            <div className="flex items-center gap-1 shrink-0">
-              {hasAnyGoPro ? (
-                activeGoProsReady.length > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void shutterAllGoPro(recordingGoProCount === 0);
-                    }}
-                    title={recordingGoProCount > 0 ? 'Parar todas as câmeras' : 'Gravar todas as câmeras'}
-                    className={`inline-flex min-h-[34px] items-center gap-1 rounded-lg px-2 font-mono text-[10px] font-black uppercase whitespace-nowrap ${
-                      recordingGoProCount > 0
-                        ? 'border border-zinc-600 bg-zinc-800 text-white'
-                        : 'pitstop-btn-red text-white'
-                    }`}
-                  >
-                    {recordingGoProCount > 0 ? (
-                      <span className="h-2.5 w-2.5 rounded-[2px] bg-[#FF2A2A] animate-pulse" />
-                    ) : (
-                      <span className="h-2.5 w-2.5 rounded-full bg-white" />
-                    )}
-                    <span>REC ALL</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void wakeAllGoPro();
-                    }}
-                    className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-950/40 px-2 font-mono text-[10px] font-black text-emerald-300 uppercase whitespace-nowrap"
-                  >
-                    <Power className="h-3 w-3" />
-                    <span>ON ALL</span>
-                  </button>
-                )
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setScreen('settings')}
-                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#14171D] px-2 font-mono text-[10px] font-bold text-zinc-300 uppercase whitespace-nowrap"
-                >
-                  <Camera className="h-3.5 w-3.5 text-[#E10600]" />
-                  <span>GoPro</span>
-                </button>
-              )}
-
+          {/* Linha 1: Comando Mestre (flex-1) + Auto Largada */}
+          <div className="flex items-center gap-1.5">
+            {hasAnyGoPro ? (
               <button
                 type="button"
-                onClick={() =>
-                  updateNavSettings({ goproAutoRecOnStart: !navSettings.goproAutoRecOnStart })
-                }
-                title={
-                  navSettings.goproAutoRecOnStart
-                    ? 'Auto-REC na Largada: ATIVO'
-                    : 'Auto-REC na Largada: DESATIVADO'
-                }
-                aria-label="Alternar Auto-REC na largada"
-                className={`inline-flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border transition-colors ${
-                  navSettings.goproAutoRecOnStart
-                    ? 'border-emerald-500/70 bg-emerald-950/40 text-emerald-300'
-                    : 'border-zinc-800 bg-[#080B0D] text-zinc-500 hover:text-zinc-300'
+                onClick={() => {
+                  if (!isPro) {
+                    openProUpgradeModal(
+                      'Automação de Câmeras GoPro BLE',
+                      'O disparo multi-câmera e Auto-REC na largada/chegada são recursos exclusivos do Plano PRO.'
+                    );
+                    return;
+                  }
+                  if (recordingGoProCount > 0) {
+                    void autoStopGoProRecording();
+                  } else {
+                    void autoStartGoProRecording();
+                  }
+                }}
+                className={`inline-flex h-[36px] flex-1 items-center justify-center gap-2 rounded-lg px-3 font-mono text-xs font-black uppercase tracking-wide whitespace-nowrap transition-colors ${
+                  recordingGoProCount > 0
+                    ? 'border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)]'
+                    : 'bg-[#E10600] text-white shadow-sm hover:brightness-110'
                 }`}
               >
-                <Zap className="h-3.5 w-3.5" />
+                {recordingGoProCount > 0 ? (
+                  <>
+                    <span className="h-2.5 w-2.5 rounded-[2px] bg-[#FF2A2A] animate-pulse" />
+                    <span>PARAR TODAS</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="h-2.5 w-2.5 rounded-full bg-white" />
+                    <span>GRAVAR TODAS {!isPro ? '(PRO)' : ''}</span>
+                  </>
+                )}
               </button>
-            </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isPro) {
+                    openProUpgradeModal(
+                      'Automação de Câmeras GoPro BLE',
+                      'O controle e pareamento de múltiplas câmeras GoPro via Bluetooth faz parte do Plano PRO.'
+                    );
+                    return;
+                  }
+                  setScreen('settings');
+                }}
+                className="inline-flex h-[36px] flex-1 items-center justify-center gap-2 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 font-mono text-[11px] font-bold text-[var(--ps-muted)] uppercase hover:text-[var(--ps-text)]"
+              >
+                <Camera className="h-3.5 w-3.5 text-[#E10600]" />
+                <span>Parear GoPro {!isPro ? '(PRO)' : ''}</span>
+              </button>
+            )}
 
-            {/* À direita: Câmeras lado a lado na mesma linha sem scroll horizontal */}
-            <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
-              {!hasAnyGoPro && (
-                <span className="truncate font-mono text-[10px] text-zinc-500">
-                  Parear em Config.
-                </span>
-              )}
+            <button
+              type="button"
+              onClick={() => {
+                if (!isPro) {
+                  openProUpgradeModal(
+                    'Auto-REC GoPro na Largada',
+                    'A gravação automática sincronizada com largada e chegada requer Plano PRO.'
+                  );
+                  return;
+                }
+                const next = !navSettings.goproAutoRecOnStart;
+                autoRecGoProRef.current = next;
+                updateNavSettings({ goproAutoRecOnStart: next });
+              }}
+              title="Auto-REC na Largada e Stop na Chegada"
+              className={`inline-flex h-[36px] shrink-0 items-center gap-1 rounded-lg border px-2 font-mono text-[10px] font-extrabold uppercase whitespace-nowrap transition-colors ${
+                navSettings.goproAutoRecOnStart && isPro
+                  ? 'border-[var(--ps-emerald)] bg-emerald-500/15 text-[var(--ps-emerald)]'
+                  : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+              }`}
+            >
+              <Zap className="h-3.5 w-3.5" />
+              <span>Auto</span>
+            </button>
+          </div>
 
-              {goproFleet.cameras.slice(0, 4).map((cam, idx) => {
-                const fullLabel = getGoProDisplayName(cam) || `Câmera ${idx + 1}`;
-                const shortCode = `C${idx + 1}`;
+          {/* Linha 2: Câmeras Conectadas Lado a Lado em Grid Fixo (sem scroll horizontal) */}
+          {hasAnyGoPro && (
+            <div className={`grid ${gridColsClass} gap-1.5`}>
+              {goproFleet.cameras.slice(0, 6).map((cam, idx) => {
+                const fullLabel = getGoProDisplayName(cam) || `Cam ${idx + 1}`;
+                const shortName = `Cam ${idx + 1}`;
                 const asleep = cam.sleeping || !cam.connected;
 
                 return (
                   <div
                     key={cam.id}
                     title={fullLabel}
-                    className={`flex min-w-0 items-center gap-1 rounded-full border px-1.5 py-0.5 ${
+                    className={`flex h-[34px] min-w-0 items-center justify-between gap-1 rounded-lg border px-2 ${
                       cam.recording
-                        ? 'border-[#E10600]/80 bg-[#1B0809]'
+                        ? 'border-[#E10600]/80 bg-red-500/10'
                         : asleep
-                          ? 'border-zinc-800 bg-[#07090C] opacity-75'
-                          : 'border-zinc-700 bg-[#090B0F]'
+                          ? 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] opacity-80'
+                          : 'border-[var(--ps-border)] bg-[var(--ps-card)]'
                     }`}
                   >
-                    <div className="min-w-[26px] text-center font-mono leading-tight">
-                      <p className="text-[9px] font-black text-white">{shortCode}</p>
+                    <div className="min-w-0 leading-tight font-mono">
+                      <p className="truncate text-[10px] font-extrabold text-[var(--ps-text)]">
+                        {shortName}
+                      </p>
                       <p
                         className={`text-[9px] font-bold tabular-nums ${
                           cam.recording
-                            ? 'text-[#FF3B30] animate-pulse'
+                            ? 'text-[#FF2A2A] animate-pulse'
                             : asleep
-                              ? 'text-zinc-500'
-                              : 'text-emerald-400'
+                              ? 'text-[var(--ps-muted)]'
+                              : 'text-[var(--ps-emerald)]'
                         }`}
                       >
                         {cam.recording
                           ? formatGoProRecTimer(cam.encodingDurationSec)
                           : asleep
                             ? 'OFF'
-                            : 'ON'}
+                            : 'PRONTO'}
                       </p>
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={asleep}
-                      onClick={() => {
-                        void shutterSingleGoPro(cam, !cam.recording);
-                      }}
-                      title={cam.recording ? `Parar ${fullLabel}` : `Gravar ${fullLabel}`}
-                      aria-label={cam.recording ? `Parar ${fullLabel}` : `Gravar ${fullLabel}`}
-                      className={`inline-flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-full border disabled:opacity-30 ${
-                        cam.recording
-                          ? 'border-white/50 bg-zinc-800'
-                          : 'border-[#E10600]/80 bg-[#1B090A]'
-                      }`}
-                    >
-                      {cam.recording ? (
-                        <span className="h-2.5 w-2.5 rounded-[2px] bg-white" />
-                      ) : (
-                        <span className="h-3 w-3 rounded-full bg-[#FF2A2A]" />
-                      )}
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={asleep}
+                        onClick={() => {
+                          void shutterSingleGoPro(cam, !cam.recording);
+                        }}
+                        title={cam.recording ? `Parar ${fullLabel}` : `Gravar ${fullLabel}`}
+                        aria-label={cam.recording ? `Parar ${fullLabel}` : `Gravar ${fullLabel}`}
+                        className={`inline-flex h-[28px] w-[28px] items-center justify-center rounded-md border disabled:opacity-30 ${
+                          cam.recording
+                            ? 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]'
+                            : 'border-[#E10600]/80 bg-[#E10600]/15'
+                        }`}
+                      >
+                        {cam.recording ? (
+                          <span className="h-2.5 w-2.5 rounded-[2px] bg-[var(--ps-text)]" />
+                        ) : (
+                          <span className="h-2.5 w-2.5 rounded-full bg-[#FF2A2A]" />
+                        )}
+                      </button>
 
-                    <button
-                      type="button"
-                      disabled={cam.reconnecting}
-                      onClick={() => {
-                        if (asleep) void wakeSingleGoPro(cam);
-                        else void sleepSingleGoPro(cam);
-                      }}
-                      title={asleep ? `Ligar ${fullLabel}` : `Desligar ${fullLabel}`}
-                      aria-label={asleep ? `Ligar ${fullLabel}` : `Desligar ${fullLabel}`}
-                      className={`inline-flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-full border ${
-                        asleep
-                          ? 'border-emerald-500/60 bg-emerald-950/40 text-emerald-300'
-                          : 'border-zinc-700 bg-[#14171D] text-zinc-300 hover:text-white'
-                      }`}
-                    >
-                      <Power className="h-3.5 w-3.5" />
-                    </button>
+                      <button
+                        type="button"
+                        disabled={cam.reconnecting}
+                        onClick={() => {
+                          if (asleep) void wakeSingleGoPro(cam);
+                          else void sleepSingleGoPro(cam);
+                        }}
+                        title={asleep ? `Ligar ${fullLabel}` : `Desligar ${fullLabel}`}
+                        aria-label={asleep ? `Ligar ${fullLabel}` : `Desligar ${fullLabel}`}
+                        className={`inline-flex h-[28px] w-[28px] items-center justify-center rounded-md border ${
+                          asleep
+                            ? 'border-[var(--ps-emerald)] bg-emerald-500/15 text-[var(--ps-emerald)]'
+                            : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                        }`}
+                      >
+                        <Power className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
 
               {goproFleet.cameras.length === 0 &&
-                savedMissingGoPros.slice(0, 4).map((sd, idx) => {
-                  const fullLabel = getGoProDisplayName(sd) || `Câmera ${idx + 1}`;
+                savedMissingGoPros.slice(0, 6).map((sd, idx) => {
+                  const fullLabel = getGoProDisplayName(sd) || `Cam ${idx + 1}`;
                   return (
                     <div
                       key={sd.deviceId}
                       title={fullLabel}
-                      className="flex min-w-0 items-center gap-1 rounded-full border border-zinc-800 bg-[#07090C] px-1.5 py-0.5"
+                      className="flex h-[34px] min-w-0 items-center justify-between gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2"
                     >
-                      <div className="min-w-[24px] text-center font-mono leading-tight">
-                        <p className="text-[9px] font-black text-zinc-300">C{idx + 1}</p>
-                        <p className="text-[9px] font-bold text-zinc-500">OFF</p>
+                      <div className="min-w-0 leading-tight font-mono">
+                        <p className="truncate text-[10px] font-extrabold text-[var(--ps-text)]">
+                          Cam {idx + 1}
+                        </p>
+                        <p className="text-[9px] font-bold text-[var(--ps-muted)]">OFF</p>
                       </div>
                       <button
                         type="button"
@@ -2466,7 +2645,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         }}
                         title={`Ligar ${fullLabel}`}
                         aria-label={`Ligar ${fullLabel}`}
-                        className="inline-flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-950/40 text-emerald-300"
+                        className="inline-flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-md border border-[var(--ps-emerald)] bg-emerald-500/15 text-[var(--ps-emerald)]"
                       >
                         <Power className="h-3.5 w-3.5" />
                       </button>
@@ -2474,13 +2653,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   );
                 })}
             </div>
-          </div>
+          )}
         </div>
       );
     }
 
     return (
-      <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2 text-white space-y-1.5 shrink-0">
+      <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-[var(--ps-text)] space-y-1.5 shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-1.5">
           <button
             type="button"
@@ -2492,38 +2671,45 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 recordingGoProCount > 0
                   ? 'bg-[#E10600] animate-pulse'
                   : activeGoProsReady.length > 0
-                    ? 'bg-emerald-400'
-                    : 'bg-zinc-600'
+                    ? 'bg-[var(--ps-emerald)]'
+                    : 'bg-[var(--ps-muted)]'
               }`}
             />
-            <Camera className="h-3.5 w-3.5 shrink-0 text-[#E10600]" />
+            <Camera className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
             <p className="text-[11px] font-extrabold uppercase tracking-wide truncate">
               GoPro ({activeGoProsReady.length}/{goproFleet.cameras.length || goproFleet.savedDevices.length})
               {recordingGoProCount > 0 ? ` · ${recordingGoProCount} REC` : ''}
             </p>
             {hasAnyGoPro &&
               (goproDrawerOpen ? (
-                <ChevronUp className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                <ChevronUp className="h-3.5 w-3.5 text-[var(--ps-muted)] shrink-0" />
               ) : (
-                <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                <ChevronDown className="h-3.5 w-3.5 text-[var(--ps-muted)] shrink-0" />
               ))}
           </button>
 
           <div className="flex flex-wrap items-center gap-1 shrink-0">
             <button
               type="button"
-              onClick={() =>
-                updateNavSettings({ goproAutoRecOnStart: !navSettings.goproAutoRecOnStart })
-              }
+              onClick={() => {
+                if (!isPro) {
+                  openProUpgradeModal(
+                    'Automação de Câmeras GoPro BLE',
+                    'O disparo automático na largada e chegada requer Plano PRO.'
+                  );
+                  return;
+                }
+                updateNavSettings({ goproAutoRecOnStart: !navSettings.goproAutoRecOnStart });
+              }}
               title="Grava automaticamente na Largada e para na Chegada"
               className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[10px] font-extrabold uppercase transition-colors ${
-                navSettings.goproAutoRecOnStart
-                  ? 'border-emerald-500/70 bg-emerald-950/50 text-emerald-300'
-                  : 'border-zinc-700 bg-[#080B0D] text-zinc-400 hover:text-white'
+                navSettings.goproAutoRecOnStart && isPro
+                  ? 'border-[var(--ps-emerald)]/70 bg-emerald-500/15 text-[var(--ps-emerald)]'
+                  : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
               }`}
             >
               <span>Auto-REC Largada/Chegada:</span>
-              <span>{navSettings.goproAutoRecOnStart ? 'ON' : 'OFF'}</span>
+              <span>{navSettings.goproAutoRecOnStart && isPro ? 'ON' : 'OFF'}</span>
             </button>
 
             {hasAnyGoPro &&
@@ -2532,12 +2718,19 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   <button
                     type="button"
                     onClick={() => {
+                      if (!isPro) {
+                        openProUpgradeModal(
+                          'Automação de Câmeras GoPro BLE',
+                          'Controle remoto de gravação GoPro via Bluetooth faz parte do Plano PRO.'
+                        );
+                        return;
+                      }
                       void shutterAllGoPro(recordingGoProCount === 0);
                     }}
                     className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[10px] font-extrabold uppercase ${
                       recordingGoProCount > 0
-                        ? 'border border-zinc-600 bg-zinc-800 text-white'
-                        : 'pitstop-btn-red text-white'
+                        ? 'border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)]'
+                        : 'pitstop-btn-red'
                     }`}
                   >
                     {recordingGoProCount > 0 ? (
@@ -2557,10 +2750,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     onClick={() => {
                       void sleepAllGoPro();
                     }}
-                    className="inline-flex h-7 items-center gap-1 rounded-md border border-zinc-700 bg-[#080B0D] px-1.5 text-[10px] font-bold text-[#C0C4C9] hover:text-white"
+                    className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-1.5 text-[10px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                     title="Desligar / Hibernar todas as GoPro"
                   >
-                    <Power className="h-3 w-3 text-zinc-400" />
+                    <Power className="h-3 w-3" />
                   </button>
                 </>
               ) : (
@@ -2569,7 +2762,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   onClick={() => {
                     void wakeAllGoPro();
                   }}
-                  className="inline-flex h-7 items-center gap-1 rounded-md border border-emerald-500/50 bg-emerald-950/40 px-2 text-[10px] font-extrabold text-emerald-300 uppercase hover:bg-emerald-950/70"
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--ps-emerald)]/60 bg-emerald-500/15 px-2 text-[10px] font-extrabold text-[var(--ps-emerald)] uppercase hover:bg-emerald-500/25"
                 >
                   <Power className="h-3 w-3" />
                   <span>Ligar</span>
@@ -2579,12 +2772,12 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         </div>
 
       {goproFleet.errorMsg && (
-        <div className="flex items-center justify-between gap-2 rounded-lg border border-red-700/60 bg-red-950/40 px-2.5 py-1.5 text-[11px] text-red-200">
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-red-500/50 bg-red-500/15 px-2.5 py-1.5 text-[11px] text-red-500">
           <span className="truncate">{goproFleet.errorMsg}</span>
           <button
             type="button"
             onClick={clearGoProFleetError}
-            className="shrink-0 text-red-300 hover:text-white"
+            className="shrink-0 opacity-80 hover:opacity-100"
             aria-label="Fechar erro GoPro"
           >
             <X className="h-3.5 w-3.5" />
@@ -2593,7 +2786,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       )}
 
       {goproDrawerOpen && (
-        <div className="space-y-1.5 border-t border-zinc-800 pt-2">
+        <div className="space-y-1.5 border-t border-[var(--ps-border)] pt-2">
           {goproFleet.cameras.map((cam) => {
             const label = getGoProDisplayName(cam);
             const asleep = cam.sleeping || !cam.connected;
@@ -2601,16 +2794,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             return (
               <div
                 key={cam.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5"
               >
                 <div className="flex min-w-0 flex-1 items-center gap-1.5">
                   <span
                     className={`h-2 w-2 shrink-0 rounded-full ${
                       asleep
-                        ? 'bg-zinc-500'
+                        ? 'bg-[var(--ps-muted)]'
                         : cam.recording
                           ? 'bg-[#E10600] animate-pulse'
-                          : 'bg-emerald-400'
+                          : 'bg-[var(--ps-emerald)]'
                     }`}
                   />
                   {isEditing ? (
@@ -2628,7 +2821,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         }}
                         placeholder="Ex: Capô"
                         autoFocus
-                        className="h-7 min-w-0 flex-1 rounded border border-zinc-600 bg-[#111214] px-2 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                        className="h-7 min-w-0 flex-1 rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                       />
                       <button
                         type="button"
@@ -2644,20 +2837,20 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     </div>
                   ) : (
                     <>
-                      <span className="truncate text-xs font-bold text-white">{label}</span>
+                      <span className="truncate text-xs font-bold text-[var(--ps-text)]">{label}</span>
                       <button
                         type="button"
                         onClick={() => {
                           setEditingGoProId(cam.id);
                           setEditingGoProName(cam.alias || cam.name);
                         }}
-                        className="p-0.5 text-zinc-500 hover:text-white"
+                        className="p-0.5 text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                         aria-label={`Renomear ${label}`}
                         title="Nomear câmera"
                       >
                         <Pencil className="h-3 w-3" />
                       </button>
-                      <span className="font-mono text-[10px] text-zinc-400 tabular-nums shrink-0">
+                      <span className="font-mono text-[10px] text-[var(--ps-muted)] tabular-nums shrink-0">
                         {cam.recording
                           ? `● ${formatGoProRecTimer(cam.encodingDurationSec)}`
                           : `${cam.batteryPct}%`}
@@ -2675,7 +2868,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     }}
                     className={`inline-flex h-7 items-center gap-1 rounded px-2 text-[10px] font-extrabold uppercase disabled:opacity-35 ${
                       cam.recording
-                        ? 'border border-zinc-600 bg-zinc-800 text-white'
+                        ? 'border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)]'
                         : 'bg-[#E10600] text-white'
                     }`}
                   >
@@ -2689,8 +2882,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     }}
                     className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[10px] font-bold ${
                       asleep
-                        ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
-                        : 'border-zinc-700 bg-[#111214] text-[#C0C4C9] hover:text-white'
+                        ? 'border-[var(--ps-emerald)]/60 bg-emerald-500/15 text-[var(--ps-emerald)]'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                     }`}
                   >
                     <Power className="h-3 w-3" />
@@ -2707,10 +2900,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             return (
               <div
                 key={sd.deviceId}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5"
               >
                 <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="h-2 w-2 shrink-0 rounded-full bg-zinc-600" />
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--ps-muted)]" />
                   {isEditing ? (
                     <div className="flex flex-1 items-center gap-1">
                       <input
@@ -2726,7 +2919,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         }}
                         placeholder="Ex: Capô"
                         autoFocus
-                        className="h-7 min-w-0 flex-1 rounded border border-zinc-600 bg-[#111214] px-2 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                        className="h-7 min-w-0 flex-1 rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                       />
                       <button
                         type="button"
@@ -2742,14 +2935,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     </div>
                   ) : (
                     <>
-                      <span className="truncate text-xs font-bold text-zinc-300">{label}</span>
+                      <span className="truncate text-xs font-bold text-[var(--ps-text)]">{label}</span>
                       <button
                         type="button"
                         onClick={() => {
                           setEditingGoProId(sd.deviceId);
                           setEditingGoProName(sd.alias || sd.name);
                         }}
-                        className="p-0.5 text-zinc-500 hover:text-white"
+                        className="p-0.5 text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                         aria-label={`Renomear ${label}`}
                       >
                         <Pencil className="h-3 w-3" />
@@ -2763,7 +2956,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   onClick={() => {
                     void wakeSavedGoProInFleet(sd);
                   }}
-                  className="inline-flex h-7 items-center gap-1 rounded border border-emerald-500/50 bg-emerald-950/40 px-2.5 text-[10px] font-extrabold text-emerald-300 uppercase"
+                  className="inline-flex h-7 items-center gap-1 rounded border border-[var(--ps-emerald)]/60 bg-emerald-500/15 px-2.5 text-[10px] font-extrabold text-[var(--ps-emerald)] uppercase"
                 >
                   <Power className="h-3 w-3" />
                   <span>{goproFleet.wakingId === sd.deviceId ? 'Ligando...' : 'Ligar'}</span>
@@ -2782,7 +2975,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     <div className="space-y-3">
       {/* Compact Top Bar inside Velocidade (hidden in full-viewport fixed Live Cockpit) */}
       {screen !== 'live' && (
-        <section className="rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2 text-white shadow-lg">
+        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[var(--ps-text)] shadow-lg">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               {screen !== 'home' && (
@@ -2790,9 +2983,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   type="button"
                   onClick={handleBackAction}
                   aria-label="Voltar"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                 >
-                  <ArrowLeft className="h-4 w-4 text-[#E10600]" />
+                  <ArrowLeft className="h-4 w-4 text-[var(--ps-accent)]" />
                 </button>
               )}
               <div className="min-w-0">
@@ -2807,15 +3000,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 type="button"
                 onClick={() => setScreen('settings')}
                 title="Status GPS / Satélites"
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 font-mono text-[11px] font-bold text-[#C0C4C9] hover:text-white"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-[11px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 <Satellite
                   className={`h-3.5 w-3.5 ${
                     source === 'simulator'
-                      ? 'text-amber-400'
+                      ? 'text-[var(--ps-amber)]'
                       : gpsActive
-                        ? 'text-emerald-400'
-                        : 'text-zinc-500'
+                        ? 'text-[var(--ps-emerald)]'
+                        : 'text-[var(--ps-muted)]'
                   }`}
                 />
                 <span>
@@ -2834,8 +3027,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 title="Configurações de Velocidade"
                 className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
                   screen === 'settings'
-                    ? 'border-[#E10600] bg-[#E10600] text-white'
-                    : 'border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
+                    ? 'pitstop-btn-red'
+                    : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                 }`}
               >
                 <Settings className="h-4 w-4" />
@@ -2844,16 +3037,18 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </div>
 
           {(statusFeedback || gpsError) && (
-            <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-3 py-1.5 text-xs">
+            <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs">
               <span
                 className={
-                  gpsError && !statusFeedback ? 'text-amber-300' : 'text-emerald-400 font-semibold'
+                  gpsError && !statusFeedback
+                    ? 'text-[var(--ps-amber)]'
+                    : 'text-[var(--ps-emerald)] font-semibold'
                 }
               >
                 {statusFeedback || gpsError}
               </span>
               {wakeLockActive && (
-                <span className="font-mono text-[10px] text-zinc-400 whitespace-nowrap">
+                <span className="font-mono text-[10px] text-[var(--ps-muted)] whitespace-nowrap">
                   Tela Ativa
                 </span>
               )}
@@ -2866,13 +3061,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       {screen === 'home' && (
         <section className="space-y-4">
           {/* Active Track / Especial Selector */}
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)]">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+              <span className="text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                 Especial / Pista Ativa
               </span>
               {autoDetectedNotice && (
-                <span className="font-mono text-[10px] font-bold text-emerald-400">
+                <span className="font-mono text-[10px] font-bold text-[var(--ps-emerald)]">
                   {autoDetectedNotice}
                 </span>
               )}
@@ -2896,7 +3091,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   setLastFinishedMs(null);
                   setCurrentSplitTimesMs({});
                 }}
-                className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-sm font-bold text-white focus:border-[#E10600] focus:outline-none"
+                className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-sm font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
               >
                 <option value="">Especial Livre (Sem traps fixos)</option>
                 {tracks.map((t) => (
@@ -2909,20 +3104,20 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 <button
                   type="button"
                   onClick={() => setScreen('track-editor')}
-                  className="inline-flex h-[44px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-bold text-[#C0C4C9] hover:text-white shrink-0"
+                  className="inline-flex h-[44px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] shrink-0"
                   title="Editar Marcos no Mapa"
                 >
-                  <MapIcon className="h-4 w-4 text-[#E10600]" />
+                  <MapIcon className="h-4 w-4 text-[var(--ps-accent)]" />
                   <span>Mapa</span>
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={() => setShowNewTrackModal(true)}
-                  className="inline-flex h-[44px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-bold text-white hover:border-[#E10600] shrink-0"
+                  className="inline-flex h-[44px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] shrink-0"
                   title="Criar Nova Pista"
                 >
-                  <Plus className="h-4 w-4 text-[#E10600]" />
+                  <Plus className="h-4 w-4 text-[var(--ps-accent)]" />
                   <span>Nova</span>
                 </button>
               )}
@@ -2930,17 +3125,48 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </div>
 
           {/* Centerpiece Circular RaceChrono START Button */}
-          <div className="flex flex-col items-center justify-center py-3 sm:py-5">
+          <div className="flex flex-col items-center justify-center py-3 sm:py-5 gap-3">
             <button
               type="button"
               onClick={handleStartOrArmStage}
-              className="group relative flex h-36 w-36 flex-col items-center justify-center rounded-full border-4 border-zinc-600/80 bg-gradient-to-b from-[#FF2A2A] via-[#E10600] to-[#990400] text-white shadow-[0_12px_36px_rgba(225,6,0,0.45)] transition-transform active:scale-95 hover:scale-[1.03] sm:h-40 sm:w-40"
+              className="pitstop-btn-red group relative flex h-36 w-36 flex-col items-center justify-center rounded-full border-4 border-[var(--ps-border-strong)] shadow-xl transition-transform active:scale-95 hover:scale-[1.03] sm:h-40 sm:w-40"
             >
+              {!isPro && (
+                <span className="absolute -top-2 rounded-md border border-amber-400/60 bg-black/90 px-2 py-0.5 font-mono text-[10px] font-black text-amber-400">
+                  PRO
+                </span>
+              )}
               <span className="font-['Barlow_Condensed'] text-4xl font-black tracking-wider uppercase drop-shadow">
                 START
               </span>
-              <span className="mt-0.5 font-mono text-[10px] font-bold tracking-widest text-white/85 uppercase">
+              <span className="mt-0.5 font-mono text-[10px] font-bold tracking-widest opacity-85 uppercase">
                 {activeTrack ? 'Armar Especial' : 'Especial Livre'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowLiveMap(false);
+                setLiveMode('gauges');
+                setIsRecording(false);
+                setStageState('idle');
+                setScreen('live');
+              }}
+              className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-4 text-xs font-extrabold tracking-wide text-[var(--ps-text)] uppercase shadow-sm transition-colors hover:border-[var(--ps-accent)]"
+            >
+              <Activity className="h-4 w-4 text-[var(--ps-emerald)]" />
+              <span>Odômetro & Velocímetro Básico</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowLayoutModal(true)}
+              className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 text-[11px] font-extrabold tracking-wide text-[var(--ps-muted)] uppercase transition-colors hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
+            >
+              <LayoutGrid className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+              <span>
+                Layout: {cockpitLayout.preset.code} · {cockpitLayout.preset.shortName}
               </span>
             </button>
           </div>
@@ -2949,20 +3175,48 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={() => setScreen('sessions')}
-              className="flex min-h-[60px] items-center justify-center gap-2.5 rounded-xl border border-zinc-700 bg-[#14161A] px-3 text-sm font-extrabold text-white shadow-md transition-colors hover:border-[#E10600] active:scale-[0.98]"
+              onClick={() => {
+                if (!isPro) {
+                  openProUpgradeModal(
+                    'Sessões & Datalogger de 3 Voltas',
+                    'O histórico completo de voltas, setores e comparação de telemetria requer Plano PRO.'
+                  );
+                  return;
+                }
+                setScreen('sessions');
+              }}
+              className="relative flex min-h-[60px] items-center justify-center gap-2.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-sm font-extrabold text-[var(--ps-text)] shadow-md transition-colors hover:border-[var(--ps-accent)] active:scale-[0.98]"
             >
-              <History className="h-5 w-5 text-[#E10600]" />
+              <History className="h-5 w-5 text-[var(--ps-accent)]" />
               <span>Sessões ({groupedSessions.length})</span>
+              {!isPro && (
+                <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] font-black text-amber-400">
+                  PRO
+                </span>
+              )}
             </button>
 
             <button
               type="button"
-              onClick={() => setScreen('tracks')}
-              className="flex min-h-[60px] items-center justify-center gap-2.5 rounded-xl border border-zinc-700 bg-[#14161A] px-3 text-sm font-extrabold text-white shadow-md transition-colors hover:border-[#E10600] active:scale-[0.98]"
+              onClick={() => {
+                if (!isPro) {
+                  openProUpgradeModal(
+                    'Gestor de Pistas & Parciais',
+                    'A criação e edição de pistas com traps de largada, parciais e chegada faz parte do Plano PRO.'
+                  );
+                  return;
+                }
+                setScreen('tracks');
+              }}
+              className="relative flex min-h-[60px] items-center justify-center gap-2.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-sm font-extrabold text-[var(--ps-text)] shadow-md transition-colors hover:border-[var(--ps-accent)] active:scale-[0.98]"
             >
-              <Flag className="h-5 w-5 text-[#E10600]" />
+              <Flag className="h-5 w-5 text-[var(--ps-accent)]" />
               <span>Pistas ({tracks.length})</span>
+              {!isPro && (
+                <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] font-black text-amber-400">
+                  PRO
+                </span>
+              )}
             </button>
           </div>
 
@@ -2971,27 +3225,46 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             <button
               type="button"
               onClick={handleOpenQuickAnalysis}
-              className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl border border-zinc-800 bg-[#111214] px-2 py-2 text-xs font-bold text-[#C0C4C9] hover:border-zinc-600 hover:text-white"
+              className="relative flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-2 text-xs font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
             >
-              <TrendingUp className="h-4 w-4 text-[#E10600]" />
+              {!isPro && (
+                <span className="absolute top-1 right-1 rounded bg-amber-500/20 px-1 py-0.2 font-mono text-[8px] font-black text-amber-400">
+                  PRO
+                </span>
+              )}
+              <TrendingUp className="h-4 w-4 text-[var(--ps-accent)]" />
               <span>Telemetria</span>
             </button>
 
             <button
               type="button"
               onClick={() => setScreen('survey')}
-              className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl border border-zinc-800 bg-[#111214] px-2 py-2 text-xs font-bold text-[#C0C4C9] hover:border-zinc-600 hover:text-white"
+              className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-2 text-xs font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
             >
-              <Compass className="h-4 w-4 text-[#E10600]" />
+              <Compass className="h-4 w-4 text-[var(--ps-accent)]" />
               <span>Levantamento</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setScreen('satcron')}
-              className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl border border-zinc-800 bg-[#111214] px-2 py-2 text-xs font-bold text-[#C0C4C9] hover:border-zinc-600 hover:text-white"
+              onClick={() => {
+                if (!isPro) {
+                  openProUpgradeModal(
+                    'Satcron Ao Vivo',
+                    'O acompanhamento oficial de especiais do Satcron em tempo real dentro do cockpit requer Plano PRO.'
+                  );
+                  return;
+                }
+                setScreen('satcron');
+              }}
+              className="relative flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-2 text-xs font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
             >
-              <Trophy className="h-4 w-4 text-[#E10600]" />
+              {!isPro && (
+                <span className="absolute top-1 right-1 rounded bg-amber-500/20 px-1 py-0.2 font-mono text-[8px] font-black text-amber-400">
+                  PRO
+                </span>
+              )}
+              <Trophy className="h-4 w-4 text-[var(--ps-accent)]" />
               <span>Satcron Ao Vivo</span>
             </button>
           </div>
@@ -3002,16 +3275,50 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
       {/* SCREEN: LIVE COCKPIT (Fixed Non-Scrolling 100dvh + Prominent Active Stage Banner) */}
       {screen === 'live' && (() => {
-        const startGate = orderedTraps.find(
-          (t) => t.kind === 'start' || t.kind === 'start_finish'
-        );
-        const distToStartM =
-          currentPos && startGate
-            ? Math.round(haversineMetersVel(currentPos.lat, currentPos.lon, startGate.lat, startGate.lon))
-            : null;
         const liveMapTrace =
           liveSamples.length > 0 ? liveSamples : activeTrack?.baseTrace ?? [];
         const activeStageBannerName = activeTrack ? activeTrack.name : 'Especial Livre';
+        const liveReferenceDistanceKm = (() => {
+          if (activeTrack?.referenceDistanceKm && activeTrack.referenceDistanceKm > 0.05) {
+            return activeTrack.referenceDistanceKm;
+          }
+          if (bestRun?.distanceKm && bestRun.distanceKm > 0.05) {
+            return bestRun.distanceKm;
+          }
+          if (orderedTraps.length >= 2) {
+            let sumM = 0;
+            for (let i = 1; i < orderedTraps.length; i += 1) {
+              sumM += haversineMetersVel(
+                orderedTraps[i - 1].lat,
+                orderedTraps[i - 1].lon,
+                orderedTraps[i].lat,
+                orderedTraps[i].lon
+              );
+            }
+            if (sumM > 50) return sumM / 1000;
+          }
+          return 0;
+        })();
+
+        const liveHasRefDist = liveReferenceDistanceKm > 0.05;
+        const liveProgressRatio =
+          liveHasRefDist && (stageState === 'running' || stageState === 'finished')
+            ? Math.min(1, Math.max(0, totalDistKm / liveReferenceDistanceKm))
+            : stageState === 'running'
+              ? Math.min(
+                  1,
+                  Math.max(0, (speedKmh / 140) * 0.72 + Math.max(0, liveLongG) * 0.28)
+                )
+              : 0;
+        const liveProgressPct = Math.round(liveProgressRatio * 100);
+        const liveRemainingDistM = liveHasRefDist
+          ? Math.max(0, (liveReferenceDistanceKm - totalDistKm) * 1000)
+          : null;
+        const liveIsFinishFlash =
+          stageState === 'running' &&
+          liveHasRefDist &&
+          (liveProgressRatio >= 0.95 ||
+            (liveRemainingDistM !== null && liveRemainingDistM <= 100));
 
         const handleEditTripFromLive = (nextDisplayedKm: number) => {
           if (tripRegressive && tripTargetKm !== null) {
@@ -3022,182 +3329,278 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           showToast(`Trip ajustado: ${Math.round(nextDisplayedKm * 1000)}m (${nextDisplayedKm.toFixed(2)} km)`);
         };
 
+        const handleOpenLiveAnalysis = () => {
+          if (!isPro) {
+            openProUpgradeModal(
+              'Datalogger & Telemetria de 3 Voltas',
+              'Comparativo de 3 voltas, forças G, mapa de calor e Vídeo Overlay HUD estão disponíveis no Plano PRO.'
+            );
+            return;
+          }
+          if (trackRuns.length > 0) {
+            openSessionDetail(activeTrack?.id || trackRuns[0].trackId, 'analysis');
+            return;
+          }
+          if (groupedSessions.length > 0) {
+            openSessionDetail(groupedSessions[0].trackId, 'analysis');
+            return;
+          }
+          setLiveNotice('Nenhuma volta concluída ainda para análise.');
+          window.setTimeout(() => setLiveNotice(null), 3200);
+        };
+
+        const handleOpenLiveSatcron = () => {
+          if (!isPro) {
+            openProUpgradeModal(
+              'Satcron Ao Vivo',
+              'O acompanhamento oficial de especiais do Satcron requer Plano PRO.'
+            );
+            return;
+          }
+          setScreen('satcron');
+        };
+
+        const handleOpenLiveMapTab = () => {
+          if (!isPro) {
+            openProUpgradeModal(
+              'Mapa Ao Vivo com Calor G/Velocidade',
+              'O mapa ao vivo de telemetria requer Plano PRO.'
+            );
+            return;
+          }
+          setShowLiveMap(true);
+        };
+
+        if (cockpitLayout.config.layoutId !== 'classic' && liveMode === 'timer') {
+          return (
+            <VelocityLivePresetScreen
+              layoutId={cockpitLayout.config.layoutId}
+              customWidgets={cockpitLayout.config.customWidgets}
+              activeTrackId={activeTrack?.id || 'live_free'}
+              activeTrackName={activeStageBannerName}
+              hasTraps={Boolean(activeTrack && activeTrack.traps.length > 0)}
+              orderedTraps={orderedTraps}
+              currentSplitTimesMs={currentSplitTimesMs}
+              stageState={stageState}
+              stageStartMs={stageStartMs}
+              lastFinishedMs={lastFinishedMs}
+              clockOffsetMs={navSettings.clockOffsetMs}
+              speedKmh={speedKmh}
+              displayedTripKm={displayedTripKm}
+              totalDistKm={totalDistKm}
+              liveRemainingDistM={liveRemainingDistM}
+              liveHasRefDist={liveHasRefDist}
+              liveProgressPct={liveProgressPct}
+              liveIsFinishFlash={liveIsFinishFlash}
+              bestRun={bestRun}
+              fallbackRuns={trackRuns}
+              optimalSummary={optimalSummary}
+              lapNumber={trackRuns.length + 1}
+              liveSamples={liveSamples}
+              liveMapTrace={liveMapTrace}
+              currentPos={currentPos}
+              headingDeg={headingDeg}
+              liveHeadingUp={liveHeadingUp}
+              onToggleHeadingUp={() => setLiveHeadingUp((v) => !v)}
+              liveHeatmapMode={liveHeatmapMode}
+              onToggleHeatmapMode={() =>
+                setLiveHeatmapMode((m) => (m === 'accel' ? 'speed' : 'accel'))
+              }
+              isPro={isPro}
+              showLiveMap={showLiveMap}
+              liveNotice={liveNotice}
+              gpsError={gpsError}
+              wakeLockActive={wakeLockActive}
+              goproBarNode={renderGoProBar(true)}
+              onBack={handleBackAction}
+              onOpenSettings={() => setScreen('settings')}
+              onOpenSatcron={handleOpenLiveSatcron}
+              onOpenLayoutModal={() => setShowLayoutModal(true)}
+              onOpenAnalysis={handleOpenLiveAnalysis}
+              onSelectTimerTab={() => {
+                setShowLiveMap(false);
+                setLiveMode('timer');
+              }}
+              onSelectMapTab={handleOpenLiveMapTab}
+              onZeroTrip={() => {
+                setTripDistKm(0);
+                showToast('Hodômetro parcial (Trip) zerado.');
+              }}
+              onStartOrArmStage={handleStartOrArmStage}
+              onForceManualStart={handleForceManualStart}
+              onEditTripDistanceKm={handleEditTripFromLive}
+            />
+          );
+        }
+
         return (
-        <section className="fixed inset-0 z-40 h-[100dvh] overflow-hidden flex flex-col justify-between gap-1.5 bg-[#050608] p-2 sm:p-3 text-white">
-          {/* Top Bar + Active Stage Banner */}
-          <div className="shrink-0 space-y-1.5">
-            <div className="flex items-center justify-between gap-1.5 rounded-xl border border-zinc-800 bg-[#111214] px-2.5 py-1.5">
-              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+        <section className="fixed inset-0 z-40 h-[100dvh] overflow-hidden flex flex-col justify-between gap-1.5 bg-[var(--ps-bg)] p-2 sm:p-3 text-[var(--ps-text)]">
+          {/* Top Utility Strip + Thin Arrival Progress Bar + Full-Width Complete Stage Name */}
+          <div className="shrink-0 space-y-1">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 space-y-1">
+              <div className="flex items-center justify-between gap-1.5">
                 <button
                   type="button"
                   onClick={handleBackAction}
                   aria-label="Voltar"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]"
+                  className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                 >
-                  <ArrowLeft className="h-4 w-4 text-[#E10600]" />
+                  <ArrowLeft className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+                  <span className="hidden xs:inline">Voltar</span>
                 </button>
-                <div className="min-w-0 flex-1 rounded-lg border border-[#E10600]/60 bg-[#1A090A] px-2.5 py-1">
-                  <p className="truncate font-['Barlow_Condensed'] text-sm font-black tracking-wide text-white uppercase sm:text-base">
-                    ESPECIAL: <span className="text-[#FF3B30]">{activeStageBannerName}</span>
-                  </p>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowLayoutModal(true)}
+                    className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
+                    title="Trocar Layout do Cockpit (10 + Customizado)"
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+                    <span className="hidden sm:inline">Layout</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenLiveSatcron}
+                    className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
+                    title="Satcron Ao Vivo"
+                  >
+                    <Trophy className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+                    <span className="hidden sm:inline">Satcron</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScreen('settings')}
+                    aria-label="Configurações"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+                  >
+                    <Settings className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
 
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setScreen('satcron')}
-                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-2 text-[10px] font-bold text-[#C0C4C9] hover:border-[#E10600] hover:text-white"
-                  title="Satcron Ao Vivo"
-                >
-                  <Trophy className="h-3.5 w-3.5 text-[#E10600]" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setScreen('settings')}
-                  title="Status GPS / Satélites"
-                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] px-2 font-mono text-[10px] font-bold text-[#C0C4C9] hover:text-white"
-                >
-                  <Satellite
-                    className={`h-3 w-3 ${
-                      source === 'simulator'
-                        ? 'text-amber-400'
-                        : gpsActive
-                          ? 'text-emerald-400'
-                          : 'text-zinc-500'
+              {/* Barra fina de acendimento progressivo até a chegada logo acima do nome da pista */}
+              <div className="flex items-center gap-2 px-0.5">
+                <div className="relative h-1.5 flex-1 overflow-hidden rounded-full border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
+                  <div
+                    className={`h-full rounded-full transition-all duration-200 ${
+                      liveIsFinishFlash
+                        ? 'animate-pulse bg-[#00E5FF] shadow-[0_0_8px_#00E5FF]'
+                        : 'bg-gradient-to-r from-[#10B981] via-[#F59E0B] to-[#FF2A2A]'
                     }`}
+                    style={{ width: `${liveProgressPct}%` }}
                   />
-                  <span>
-                    {source === 'simulator'
-                      ? `SIM`
-                      : gpsActive
-                        ? `±${gpsAccuracyM ?? '--'}m`
-                        : 'GPS'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setScreen('settings')}
-                  aria-label="Configurações"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white"
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Mode Toggle + Compact GPS Diagnostics */}
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              <div className="grid grid-cols-3 gap-1 rounded-xl border border-zinc-800 bg-[#111214] p-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowLiveMap(false);
-                    setLiveMode('timer');
-                  }}
-                  className={`inline-flex min-h-[34px] items-center justify-center gap-1 rounded-lg text-[11px] font-extrabold uppercase transition-colors ${
-                    !showLiveMap && liveMode === 'timer'
-                      ? 'pitstop-btn-red text-white'
-                      : 'text-[#B5B5B5] hover:text-white'
+                </div>
+                <span
+                  className={`shrink-0 font-mono text-[9px] font-extrabold tabular-nums ${
+                    liveIsFinishFlash
+                      ? 'text-[#00E5FF]'
+                      : liveProgressPct >= 85
+                        ? 'text-[#FF2A2A]'
+                        : 'text-[var(--ps-muted)]'
                   }`}
                 >
-                  <Flag className="h-3 w-3" />
-                  <span>Cronômetro</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowLiveMap(false);
-                    setLiveMode('gauges');
-                  }}
-                  className={`inline-flex min-h-[34px] items-center justify-center gap-1 rounded-lg text-[11px] font-extrabold uppercase transition-colors ${
-                    !showLiveMap && liveMode === 'gauges'
-                      ? 'pitstop-btn-red text-white'
-                      : 'text-[#B5B5B5] hover:text-white'
-                  }`}
-                >
-                  <Activity className="h-3 w-3" />
-                  <span>Mostradores</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowLiveMap((v) => !v)}
-                  className={`inline-flex min-h-[34px] items-center justify-center gap-1 rounded-lg text-[11px] font-extrabold uppercase transition-colors ${
-                    showLiveMap
-                      ? 'bg-sky-600 text-white'
-                      : 'text-[#B5B5B5] hover:text-white'
-                  }`}
-                >
-                  <MapIcon className="h-3 w-3" />
-                  <span>Mapa</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-4 gap-1 rounded-xl border border-zinc-800 bg-[#0C0D10] px-2 py-1 font-mono text-[10px] tabular-nums">
-                <div className="text-center">
-                  <p className="text-[9px] text-zinc-500 uppercase">Precisão</p>
-                  <p
-                    className={`font-bold ${
-                      gpsAccuracyM !== null && gpsAccuracyM <= 10
-                        ? 'text-emerald-400'
-                        : gpsAccuracyM !== null && gpsAccuracyM <= 25
-                          ? 'text-amber-300'
-                          : 'text-[#FF2A2A]'
-                    }`}
-                  >
-                    {gpsAccuracyM !== null ? `±${gpsAccuracyM}m` : '--'}
-                  </p>
-                </div>
-                <div className="text-center">
-                  <p className="text-[9px] text-zinc-500 uppercase">Vel GPS</p>
-                  <p className="font-bold text-white">{Math.round(speedKmh)} km/h</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-[9px] text-zinc-500 uppercase">Start</p>
-                  <p className="font-bold text-amber-300">
-                    {distToStartM !== null ? `${distToStartM}m` : '--'}
-                  </p>
-                </div>
-                <div className="text-center">
-                  <p className="text-[9px] text-zinc-500 uppercase">Status</p>
-                  <p
-                    className={`font-bold uppercase ${
+                  {liveHasRefDist
+                    ? liveRemainingDistM !== null &&
+                      liveRemainingDistM <= 300 &&
                       stageState === 'running'
-                        ? 'text-emerald-400'
-                        : stageState === 'armed'
-                          ? 'text-amber-300'
-                          : 'text-zinc-300'
-                    }`}
-                  >
-                    {stageState === 'running'
-                      ? 'Rodando'
-                      : stageState === 'armed'
-                        ? 'Armado'
-                        : stageState === 'finished'
-                          ? 'Salva'
-                          : 'Pronto'}
-                  </p>
-                </div>
+                      ? `-${Math.round(liveRemainingDistM)}m`
+                      : `${liveProgressPct}%`
+                    : `${Math.round(speedKmh)} km/h`}
+                </span>
+              </div>
+
+              {/* Nome completo da Especial sem prefixo fixo e com quebra de linha suave */}
+              <div className="w-full rounded-lg border border-[var(--ps-accent)]/45 bg-[var(--ps-accent-soft)] px-2.5 py-1 text-center">
+                <p className="line-clamp-2 font-['Barlow_Condensed'] text-base font-black leading-tight tracking-wide text-[var(--ps-text)] uppercase sm:text-lg">
+                  {activeStageBannerName}
+                </p>
               </div>
             </div>
 
-            {(statusFeedback || gpsError) && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#0C0D10] px-2.5 py-1 text-[11px]">
-                <span className={gpsError && !statusFeedback ? 'text-amber-300 truncate' : 'text-emerald-400 font-semibold truncate'}>
-                  {statusFeedback || gpsError}
-                </span>
+            {/* Mode Toggle: 3 abas fixas lado a lado (CRONÔMETRO | ANÁLISE | MAPA) */}
+            <div className="grid grid-cols-3 gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLiveMap(false);
+                  setLiveMode('timer');
+                }}
+                className={`inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-extrabold uppercase transition-colors sm:text-xs ${
+                  !showLiveMap
+                    ? 'pitstop-btn-red'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                }`}
+              >
+                <Flag className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Cronômetro</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isPro) {
+                    openProUpgradeModal(
+                      'Datalogger & Telemetria de 3 Voltas',
+                      'Comparativo de 3 voltas, forças G, mapa de calor e Vídeo Overlay HUD estão disponíveis no Plano PRO.'
+                    );
+                    return;
+                  }
+                  if (trackRuns.length > 0) {
+                    openSessionDetail(activeTrack?.id || trackRuns[0].trackId, 'analysis');
+                    return;
+                  }
+                  if (groupedSessions.length > 0) {
+                    openSessionDetail(groupedSessions[0].trackId, 'analysis');
+                    return;
+                  }
+                  setLiveNotice('Nenhuma volta concluída ainda para análise.');
+                  window.setTimeout(() => setLiveNotice(null), 3200);
+                }}
+                className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-extrabold text-[var(--ps-emerald)] uppercase transition-colors hover:bg-emerald-500/15 sm:text-xs"
+              >
+                <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Análise {!isPro ? '(PRO)' : ''}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isPro) {
+                    openProUpgradeModal(
+                      'Mapa Ao Vivo com Calor G/Velocidade',
+                      'O mapa ao vivo de telemetria requer Plano PRO.'
+                    );
+                    return;
+                  }
+                  setShowLiveMap(true);
+                }}
+                className={`inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-extrabold uppercase transition-colors sm:text-xs ${
+                  showLiveMap
+                    ? 'bg-sky-600 text-white'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                }`}
+              >
+                <MapIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Mapa {!isPro ? '(PRO)' : ''}</span>
+              </button>
+            </div>
+
+            {(liveNotice || gpsError) && (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1 text-[11px]">
+                <span className="truncate text-[var(--ps-amber)]">{liveNotice || gpsError}</span>
                 {wakeLockActive && (
-                  <span className="font-mono text-[9px] text-zinc-400 shrink-0">Tela Ativa</span>
+                  <span className="shrink-0 font-mono text-[9px] text-[var(--ps-muted)]">Tela Ativa</span>
                 )}
               </div>
             )}
 
             {/* Manual Play Override whenever Waiting for Start or Idle */}
-            {(stageState === 'idle' || stageState === 'armed') && (
+            {isPro && (stageState === 'idle' || stageState === 'armed') && (
               <button
                 type="button"
                 onClick={handleForceManualStart}
-                className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/60 bg-emerald-600/20 px-3 text-xs font-extrabold tracking-wider text-emerald-300 uppercase shadow transition-colors hover:bg-emerald-600/30 active:scale-[0.99]"
+                className="flex min-h-[38px] w-full items-center justify-center gap-2 rounded-xl border border-[var(--ps-emerald)]/60 bg-emerald-500/15 px-3 text-xs font-extrabold tracking-wider text-[var(--ps-emerald)] uppercase shadow transition-colors hover:bg-emerald-500/25 active:scale-[0.99]"
               >
                 <Play className="h-3.5 w-3.5 fill-current" />
                 <span>Largar Agora (Play Manual)</span>
@@ -3208,18 +3611,18 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           {/* Flexible Center Pane (NEVER overflows 100dvh) */}
           <div className="flex-1 min-h-0 flex flex-col justify-between gap-1.5 overflow-hidden">
             {showLiveMap ? (
-              <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-[#111214]">
-                <div className="flex items-center justify-between gap-2 border-b border-zinc-800 px-2.5 py-1.5 shrink-0 font-mono text-xs tabular-nums">
-                  <span className="font-bold text-white">
+              <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)]">
+                <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] px-2.5 py-1.5 shrink-0 font-mono text-xs tabular-nums">
+                  <span className="font-bold text-[var(--ps-text)]">
                     {Math.round(speedKmh)} km/h ·{' '}
-                    <span className="text-amber-300">{Math.round(displayedTripKm * 1000)}m</span>
+                    <span className="text-[var(--ps-amber)]">{Math.round(displayedTripKm * 1000)}m</span>
                   </span>
                   <button
                     type="button"
                     onClick={() =>
                       setLiveHeatmapMode((m) => (m === 'accel' ? 'speed' : 'accel'))
                     }
-                    className="rounded-md border border-zinc-700 bg-[#080B0D] px-2 py-0.5 text-[10px] font-bold text-[#C0C4C9] hover:text-white"
+                    className="rounded-md border border-[var(--ps-border)] bg-[var(--ps-card)] px-2 py-0.5 text-[10px] font-bold text-[var(--ps-text)]"
                   >
                     Cor: {liveHeatmapMode === 'accel' ? 'Força G' : 'Veloc.'}
                   </button>
@@ -3254,9 +3657,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   speedKmh={speedKmh}
                   displayedTripKm={displayedTripKm}
                   totalDistKm={totalDistKm}
-                  longG={liveLongG}
-                  latG={liveLatG}
                   bestRun={bestRun}
+                  fallbackRuns={trackRuns}
                   optimalSummary={optimalSummary}
                   lapNumber={trackRuns.length + 1}
                   liveSamples={liveSamples}
@@ -3265,7 +3667,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               </div>
             ) : (
               <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 overflow-hidden">
-                <div className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-1.5 text-white">
+                <div className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-1.5 text-[var(--ps-text)]">
                   <button
                     type="button"
                     onClick={() => {
@@ -3279,8 +3681,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     }}
                     className={`min-h-[32px] rounded-lg border px-2.5 text-xs font-bold whitespace-nowrap ${
                       tripRegressive
-                        ? 'border-[#E10600] bg-[#E10600]/20 text-white'
-                        : 'border-zinc-700 bg-[#080B0D] text-[#C0C4C9]'
+                        ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)]'
                     }`}
                   >
                     Trip: {tripRegressive ? 'Regressivo' : 'Progressivo'}
@@ -3289,7 +3691,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   <button
                     type="button"
                     onClick={() => setShowGaugeConfig((v) => !v)}
-                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 text-xs font-bold text-[#C0C4C9] hover:text-white"
+                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                   >
                     <Settings2 className="h-3.5 w-3.5" />
                     <span>Campos</span>
@@ -3297,7 +3699,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 </div>
 
                 {showGaugeConfig && (
-                  <div className="grid shrink-0 grid-cols-2 gap-1.5 rounded-xl border border-zinc-800 bg-[#111214] p-2 text-[11px] sm:grid-cols-4">
+                  <div className="grid shrink-0 grid-cols-2 gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-[11px] sm:grid-cols-4">
                     {(
                       [
                         ['speed', 'Velocidade'],
@@ -3312,7 +3714,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     ).map(([key, label]) => (
                       <label
                         key={key}
-                        className="flex cursor-pointer items-center justify-between gap-1.5 rounded-lg border border-zinc-800 bg-[#080B0D] px-2 py-1 text-white"
+                        className="flex cursor-pointer items-center justify-between gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1 text-[var(--ps-text)]"
                       >
                         <span className="truncate">{label}</span>
                         <input
@@ -3324,7 +3726,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                               [key]: e.target.checked,
                             }))
                           }
-                          className="h-3.5 w-3.5 accent-[#E10600]"
+                          className="h-3.5 w-3.5 accent-[var(--ps-accent)]"
                         />
                       </label>
                     ))}
@@ -3333,20 +3735,20 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
                 <div className="grid flex-1 min-h-0 grid-cols-2 gap-2 sm:grid-cols-4">
                   {gaugeVisibility.speed && (
-                    <div className="flex flex-col justify-center rounded-xl border border-zinc-800 bg-[#000000] p-2.5 text-center">
-                      <p className="text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
+                      <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                         Velocidade
                       </p>
-                      <p className="mt-0.5 font-mono text-3xl font-extrabold text-white tabular-nums sm:text-5xl">
+                      <p className="mt-0.5 font-mono text-3xl font-extrabold text-[var(--ps-text)] tabular-nums sm:text-5xl">
                         {Math.round(speedKmh)}
                       </p>
-                      <p className="font-mono text-[10px] text-[#E10600] font-bold">KM/H</p>
+                      <p className="font-mono text-[10px] text-[var(--ps-accent)] font-bold">KM/H</p>
                     </div>
                   )}
 
                   {gaugeVisibility.trip && (
-                    <div className="flex flex-col justify-center rounded-xl border border-zinc-800 bg-[#000000] p-2.5 text-center">
-                      <p className="text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
+                      <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                         {tripRegressive ? 'Trip Regressivo' : 'Trip Parcial'}
                       </p>
                       {editingGaugeTrip ? (
@@ -3369,12 +3771,12 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                                 }
                                 if (e.key === 'Escape') setEditingGaugeTrip(false);
                               }}
-                              className="min-w-0 flex-1 rounded border border-[#E10600] bg-[#14161A] px-1.5 py-1 text-center font-mono text-sm font-black text-amber-300 focus:outline-none"
+                              className="min-w-0 flex-1 rounded border border-[var(--ps-accent)] bg-[var(--ps-card)] px-1.5 py-1 text-center font-mono text-sm font-black text-[var(--ps-amber)] focus:outline-none"
                             />
                             <button
                               type="button"
                               onClick={() => setGaugeTripUnit((u) => (u === 'm' ? 'km' : 'm'))}
-                              className="rounded border border-zinc-700 bg-[#14161A] px-1.5 py-1 font-mono text-[10px] font-bold text-white uppercase"
+                              className="rounded border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-1 font-mono text-[10px] font-bold text-[var(--ps-text)] uppercase"
                             >
                               {gaugeTripUnit}
                             </button>
@@ -3388,7 +3790,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                               }
                               setEditingGaugeTrip(false);
                             }}
-                            className="pitstop-btn-red w-full rounded py-0.5 text-[10px] font-extrabold text-white"
+                            className="pitstop-btn-red w-full rounded py-0.5 text-[10px] font-extrabold"
                           >
                             OK
                           </button>
@@ -3405,14 +3807,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             setEditingGaugeTrip(true);
                           }}
                           title="Toque para digitar metragem do Trip"
-                          className="group flex flex-col items-center justify-center rounded-lg py-0.5 hover:bg-[#0D0F12]"
+                          className="group flex flex-col items-center justify-center rounded-lg py-0.5 hover:bg-[var(--ps-card)]"
                         >
-                          <p className="font-mono text-2xl font-extrabold text-amber-300 tabular-nums sm:text-4xl">
+                          <p className="font-mono text-2xl font-extrabold text-[var(--ps-amber)] tabular-nums sm:text-4xl">
                             {Math.round(displayedTripKm * 1000)}m
                           </p>
-                          <p className="inline-flex items-center gap-1 font-mono text-[10px] text-zinc-400">
+                          <p className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--ps-muted)]">
                             <span>{displayedTripKm.toFixed(2)} km</span>
-                            <Pencil className="h-2.5 w-2.5 text-zinc-500 group-hover:text-[#E10600]" />
+                            <Pencil className="h-2.5 w-2.5 text-[var(--ps-muted)] group-hover:text-[var(--ps-accent)]" />
                           </p>
                         </button>
                       )}
@@ -3431,44 +3833,44 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   />
 
                   {gaugeVisibility.maxSpeed && (
-                    <div className="flex flex-col justify-center rounded-xl border border-zinc-800 bg-[#080B0D] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Vel. Máxima</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-white tabular-nums sm:text-2xl">
+                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máxima</p>
+                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
                         {maxSpeedKmh}
                       </p>
-                      <p className="font-mono text-[9px] text-zinc-500">km/h</p>
+                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">km/h</p>
                     </div>
                   )}
 
                   {gaugeVisibility.altitude && (
-                    <div className="flex flex-col justify-center rounded-xl border border-zinc-800 bg-[#080B0D] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Altitude</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-white tabular-nums sm:text-2xl">
+                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Altitude</p>
+                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
                         {altitudeM !== null ? `${altitudeM}m` : '--'}
                       </p>
-                      <p className="font-mono text-[9px] text-zinc-500">Elevação</p>
+                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">Elevação</p>
                     </div>
                   )}
 
                   {gaugeVisibility.gpsAccuracy && (
-                    <div className="flex flex-col justify-center rounded-xl border border-zinc-800 bg-[#080B0D] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Sinal GPS</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-emerald-400 tabular-nums sm:text-2xl">
+                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Sinal GPS</p>
+                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-emerald)] tabular-nums sm:text-2xl">
                         {gpsAccuracyM !== null ? `±${gpsAccuracyM}m` : '--'}
                       </p>
-                      <p className="font-mono text-[9px] text-zinc-500">
+                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">
                         {source === 'simulator' ? 'Simulador' : 'Receptor'}
                       </p>
                     </div>
                   )}
 
                   {gaugeVisibility.heading && (
-                    <div className="flex flex-col justify-center rounded-xl border border-zinc-800 bg-[#080B0D] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[#B5B5B5] uppercase">Rumo (CAP)</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-white tabular-nums sm:text-2xl">
+                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Rumo (CAP)</p>
+                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
                         {headingDeg !== null ? `${headingDeg}°` : '--'}
                       </p>
-                      <p className="font-mono text-[9px] text-zinc-500">Direção</p>
+                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">Direção</p>
                     </div>
                   )}
                 </div>
@@ -3480,17 +3882,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           <div className="shrink-0 space-y-1.5">
             {renderGoProBar(true)}
 
-            {(stageState === 'finished' || lastFinishedMs !== null) && (activeTrack || runs.length > 0) && (
-              <button
-                type="button"
-                onClick={() => openSessionDetail(activeTrack?.id || 'free_stage', 'analysis')}
-                className="flex min-h-[34px] w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/60 bg-emerald-950/30 text-xs font-bold text-emerald-300 hover:bg-emerald-950/50"
-              >
-                <TrendingUp className="h-3.5 w-3.5" />
-                <span>Abrir Análise da Sessão</span>
-              </button>
-            )}
-
             <div className="grid grid-cols-2 gap-2.5">
               <button
                 type="button"
@@ -3500,14 +3891,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 }}
                 className="pitstop-btn-metal flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-3 text-xs font-extrabold uppercase sm:text-sm"
               >
-                <RotateCcw className="h-4 w-4 text-[#C0C4C9]" />
+                <RotateCcw className="h-4 w-4 text-[var(--ps-muted)]" />
                 <span>Zerar Trip</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleStartOrArmStage}
-                className="pitstop-btn-red flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-3 text-xs font-extrabold text-white uppercase sm:text-sm"
+                className="pitstop-btn-red flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-3 text-xs font-extrabold uppercase sm:text-sm"
               >
                 {stageState === 'running' ? (
                   <>
@@ -3530,14 +3921,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       {/* SCREEN: SESSIONS LIST (Clean RaceChrono Sessions List) */}
       {screen === 'sessions' && (
         <section className="space-y-3">
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white">
-            <span className="text-xs text-[#B5B5B5]">
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)]">
+            <span className="text-xs text-[var(--ps-muted)]">
               Selecione uma sessão para Análise, Gráfico Sobreposto e Telemetria.
             </span>
             <button
               type="button"
               onClick={handleLoadDemoStage}
-              className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-bold text-emerald-400 hover:border-emerald-500"
+              className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-emerald)] hover:border-[var(--ps-emerald)]"
             >
               <Play className="h-3 w-3" />
               <span>Demo SS-01</span>
@@ -3545,32 +3936,32 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </div>
 
           {groupedSessions.length === 0 ? (
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-6 text-center text-white space-y-2.5">
-              <p className="text-sm font-bold text-[#C0C4C9]">Nenhuma sessão gravada.</p>
-              <p className="text-xs text-zinc-500">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-6 text-center text-[var(--ps-text)] space-y-2.5">
+              <p className="text-sm font-bold text-[var(--ps-text)]">Nenhuma sessão gravada.</p>
+              <p className="text-xs text-[var(--ps-muted)]">
                 Toque em <strong>START</strong> na tela inicial ou rode a <strong>Demo SS-01</strong>.
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-zinc-800 overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-white">
+            <div className="divide-y divide-[var(--ps-border)] overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)]">
               {groupedSessions.map((sess) => (
                 <button
                   key={sess.trackId}
                   type="button"
                   onClick={() => openSessionDetail(sess.trackId, 'analysis')}
-                  className="flex w-full items-center justify-between gap-3 px-3.5 py-3 text-left transition-colors hover:bg-[#17191D] active:bg-[#1E2026]"
+                  className="flex w-full items-center justify-between gap-3 px-3.5 py-3 text-left transition-colors hover:bg-[var(--ps-card)]"
                 >
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-sm font-extrabold text-white sm:text-base">
+                      <span className="truncate text-sm font-extrabold text-[var(--ps-text)] sm:text-base">
                         {sess.trackName}
                       </span>
-                      <span className="shrink-0 font-mono text-xs font-bold text-[#C0C4C9] tabular-nums">
+                      <span className="shrink-0 font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
                         {sess.approxSizeKb} kB
                       </span>
                     </div>
 
-                    <div className="flex items-baseline justify-between gap-2 font-mono text-xs text-zinc-400 tabular-nums">
+                    <div className="flex items-baseline justify-between gap-2 font-mono text-xs text-[var(--ps-muted)] tabular-nums">
                       <span>{formatShortDateTime(sess.latestAtMs)}</span>
                       <span>
                         {formatSessionDurationCompact(sess.totalDurationMs)} (
@@ -3578,14 +3969,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       </span>
                     </div>
 
-                    <p className="truncate text-xs font-semibold text-[#C0C4C9] tabular-nums">
+                    <p className="truncate text-xs font-semibold text-[var(--ps-muted)] tabular-nums">
                       {sess.runs.length} {sess.runs.length === 1 ? 'volta' : 'voltas'}, melhor:{' '}
-                      <span className="font-mono text-emerald-400">
+                      <span className="font-mono text-[var(--ps-emerald)]">
                         {formatStageDuration(sess.bestTotalMs)}
                       </span>
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-500" />
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[var(--ps-muted)]" />
                 </button>
               ))}
             </div>
@@ -3597,9 +3988,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       {screen === 'session-detail' && (
         <section className="space-y-3">
           {/* 3-Lap Selector (V1 Ref Verde, V2 Comp. A Vermelho, V3 Comp. B Ciano) + 3-Tab Bar */}
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white space-y-2.5">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <label className="space-y-1 text-[11px] text-[#B5B5B5]">
+              <label className="space-y-1 text-[11px] text-[var(--ps-muted)]">
                 <span className="font-bold text-[#10B981] uppercase">Volta 1 (Ref · Verde)</span>
                 <select
                   value={lap1?.id || ''}
@@ -3608,7 +3999,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     setReplayElapsedMs(0);
                     setReplayPlaying(false);
                   }}
-                  className="min-h-[40px] w-full rounded-lg border border-emerald-600/50 bg-[#080B0D] px-2 font-mono text-xs font-bold text-emerald-300"
+                  className="min-h-[40px] w-full rounded-lg border border-emerald-600/50 bg-[var(--ps-card-deep)] px-2 font-mono text-xs font-bold text-[var(--ps-emerald)]"
                 >
                   {sessionRuns.map((r) => (
                     <option key={r.id} value={r.id}>
@@ -3618,7 +4009,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 </select>
               </label>
 
-              <label className="space-y-1 text-[11px] text-[#B5B5B5]">
+              <label className="space-y-1 text-[11px] text-[var(--ps-muted)]">
                 <span className="font-bold text-[#FF2A2A] uppercase">Volta 2 (Comp. A · Vermelho)</span>
                 <select
                   value={lap2?.id || ''}
@@ -3627,7 +4018,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     setReplayElapsedMs(0);
                     setReplayPlaying(false);
                   }}
-                  className="min-h-[40px] w-full rounded-lg border border-red-600/50 bg-[#080B0D] px-2 font-mono text-xs font-bold text-[#FF4D47]"
+                  className="min-h-[40px] w-full rounded-lg border border-red-600/50 bg-[var(--ps-card-deep)] px-2 font-mono text-xs font-bold text-[#FF4D47]"
                 >
                   <option value="">Nenhuma</option>
                   {sessionRuns.map((r) => (
@@ -3638,7 +4029,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 </select>
               </label>
 
-              <label className="space-y-1 text-[11px] text-[#B5B5B5]">
+              <label className="space-y-1 text-[11px] text-[var(--ps-muted)]">
                 <span className="font-bold text-[#38BDF8] uppercase">Volta 3 (Comp. B · Ciano)</span>
                 <select
                   value={lap3?.id || ''}
@@ -3647,7 +4038,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     setReplayElapsedMs(0);
                     setReplayPlaying(false);
                   }}
-                  className="min-h-[40px] w-full rounded-lg border border-sky-600/50 bg-[#080B0D] px-2 font-mono text-xs font-bold text-sky-300"
+                  className="min-h-[40px] w-full rounded-lg border border-sky-600/50 bg-[var(--ps-card-deep)] px-2 font-mono text-xs font-bold text-sky-400"
                 >
                   <option value="">Nenhuma</option>
                   {sessionRuns.map((r) => (
@@ -3659,7 +4050,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               </label>
             </div>
 
-            <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+            <div className="grid grid-cols-3 gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
               {(
                 [
                   ['analysis', 'Análise', TrendingUp],
@@ -3670,11 +4061,20 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 <button
                   key={tabId}
                   type="button"
-                  onClick={() => setDetailTab(tabId)}
+                  onClick={() => {
+                    if (!isPro) {
+                      openProUpgradeModal(
+                        label === 'Vídeo HUD' ? 'Vídeo & Overlay HUD' : 'Datalogger & Telemetria de 3 Voltas',
+                        'A análise detalhada e o Vídeo & Overlay HUD fazem parte do Plano PRO.'
+                      );
+                      return;
+                    }
+                    setDetailTab(tabId);
+                  }}
                   className={`inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-md px-1 text-[11px] font-bold sm:text-xs ${
                     detailTab === tabId
-                      ? 'pitstop-btn-red text-white'
-                      : 'text-[#B5B5B5] hover:text-white'
+                      ? 'pitstop-btn-red'
+                      : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                   }`}
                 >
                   <Icon className="h-3.5 w-3.5 shrink-0" />
@@ -3739,7 +4139,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 : null;
 
             const replayLegendOverlay = (
-              <div className="rounded-lg border border-zinc-700/90 bg-[#050608]/90 px-2.5 py-1.5 font-mono text-[10px] leading-snug text-white shadow-lg backdrop-blur-xs tabular-nums">
+              <div className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2.5 py-1.5 font-mono text-[10px] leading-snug text-[var(--ps-text)] shadow-lg backdrop-blur-xs tabular-nums">
                 <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
                   <span className="inline-flex items-center gap-1 font-bold text-[#10B981]">
                     <span aria-hidden="true">●</span>
@@ -3776,17 +4176,17 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             );
 
             return (
-              <div className="space-y-2.5 rounded-xl border border-zinc-800 bg-[#050608] p-3 text-white">
+              <div className="space-y-2.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <div className="inline-flex rounded-lg border border-zinc-800 bg-[#0A0C10] p-0.5">
+                    <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
                       <button
                         type="button"
                         onClick={() => setHeatmapMode('accel')}
                         className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
                           heatmapMode === 'accel'
-                            ? 'bg-[#E10600] text-white'
-                            : 'text-[#B5B5B5]'
+                            ? 'pitstop-btn-red'
+                            : 'text-[var(--ps-muted)]'
                         }`}
                       >
                         Aceleração / Freio
@@ -3796,22 +4196,22 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         onClick={() => setHeatmapMode('speed')}
                         className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
                           heatmapMode === 'speed'
-                            ? 'bg-[#E10600] text-white'
-                            : 'text-[#B5B5B5]'
+                            ? 'pitstop-btn-red'
+                            : 'text-[var(--ps-muted)]'
                         }`}
                       >
                         Velocidade (km/h)
                       </button>
                     </div>
 
-                    <div className="inline-flex rounded-lg border border-zinc-800 bg-[#0A0C10] p-0.5">
+                    <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
                       <button
                         type="button"
                         onClick={() => setHeatmapCompareMode('single')}
                         className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
                           heatmapCompareMode === 'single'
-                            ? 'bg-zinc-800 text-white'
-                            : 'text-[#B5B5B5]'
+                            ? 'bg-[var(--ps-card)] text-[var(--ps-text)]'
+                            : 'text-[var(--ps-muted)]'
                         }`}
                       >
                         Mapa Único
@@ -3821,8 +4221,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         onClick={() => setHeatmapCompareMode('side-by-side')}
                         className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
                           heatmapCompareMode === 'side-by-side'
-                            ? 'bg-zinc-800 text-white'
-                            : 'text-[#B5B5B5]'
+                            ? 'bg-[var(--ps-card)] text-[var(--ps-text)]'
+                            : 'text-[var(--ps-muted)]'
                         }`}
                       >
                         Lado a Lado
@@ -3834,7 +4234,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     <span className="text-[#10B981]">
                       ■ {heatmapMode === 'accel' ? 'Acelerando' : 'Alta'}
                     </span>
-                    <span className="text-amber-400">■ Médio</span>
+                    <span className="text-[var(--ps-amber)]">■ Médio</span>
                     <span className="text-[#FF2A2A]">
                       ■ {heatmapMode === 'accel' ? 'Freando' : 'Baixa'}
                     </span>
@@ -3848,15 +4248,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     }`}
                   >
                     {/* Mapa Volta 1 */}
-                    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0A0C10]">
-                      <div className="flex items-center justify-between border-b border-zinc-800 px-2.5 py-2 font-mono text-[11px] tabular-nums">
+                    <div className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
+                      <div className="flex items-center justify-between border-b border-[var(--ps-border)] px-2.5 py-2 font-mono text-[11px] tabular-nums">
                         <span className="font-extrabold text-[#10B981]">
                           V1 #{lap1?.runNumber ?? '-'} ·{' '}
-                          <span className="text-white">
+                          <span className="text-[var(--ps-text)]">
                             {formatStageDuration(lap1?.totalMs)}
                           </span>
                         </span>
-                        <span className="font-bold text-white">
+                        <span className="font-bold text-[var(--ps-text)]">
                           {spd1} km/h · {Math.round((activeSample1?.distKm ?? 0) * 1000)}m
                         </span>
                       </div>
@@ -3873,21 +4273,22 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         }
                         navHeadingDeg={activeSample1?.headingDeg ?? null}
                         heatmapMode={heatmapMode}
+                        showSpeedBadges={true}
                         topLeftOverlay={replayLegendOverlay}
                         containerClassName="relative h-[240px] w-full overflow-hidden bg-[#000000] sm:h-[320px]"
                       />
                     </div>
 
                     {/* Mapa Volta 2 */}
-                    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0A0C10]">
-                      <div className="flex items-center justify-between border-b border-zinc-800 px-2.5 py-2 font-mono text-[11px] tabular-nums">
+                    <div className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
+                      <div className="flex items-center justify-between border-b border-[var(--ps-border)] px-2.5 py-2 font-mono text-[11px] tabular-nums">
                         <span className="font-extrabold text-[#FF2A2A]">
                           V2 #{lap2?.runNumber ?? '-'} ·{' '}
-                          <span className="text-white">
+                          <span className="text-[var(--ps-text)]">
                             {formatStageDuration(lap2?.totalMs ?? null)}
                           </span>
                         </span>
-                        <span className="font-bold text-white">
+                        <span className="font-bold text-[var(--ps-text)]">
                           {spd2} km/h · {Math.round((activeSample2?.distKm ?? 0) * 1000)}m
                         </span>
                       </div>
@@ -3905,10 +4306,11 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           }
                           navHeadingDeg={activeSample2?.headingDeg ?? null}
                           heatmapMode={heatmapMode}
+                          showSpeedBadges={true}
                           containerClassName="relative h-[240px] w-full overflow-hidden bg-[#000000] sm:h-[320px]"
                         />
                       ) : (
-                        <div className="flex h-[240px] items-center justify-center p-4 text-center text-xs text-zinc-500 sm:h-[320px]">
+                        <div className="flex h-[240px] items-center justify-center p-4 text-center text-xs text-[var(--ps-muted)] sm:h-[320px]">
                           Selecione uma Volta 2 diferente para comparar lado a lado.
                         </div>
                       )}
@@ -3916,15 +4318,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
                     {/* Mapa Volta 3 (quando selecionada) */}
                     {hasDistinctLap3 && (
-                      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0A0C10]">
-                        <div className="flex items-center justify-between border-b border-zinc-800 px-2.5 py-2 font-mono text-[11px] tabular-nums">
+                      <div className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
+                        <div className="flex items-center justify-between border-b border-[var(--ps-border)] px-2.5 py-2 font-mono text-[11px] tabular-nums">
                           <span className="font-extrabold text-[#38BDF8]">
                             V3 #{lap3?.runNumber ?? '-'} ·{' '}
-                            <span className="text-white">
+                            <span className="text-[var(--ps-text)]">
                               {formatStageDuration(lap3?.totalMs ?? null)}
                             </span>
                           </span>
-                          <span className="font-bold text-white">
+                          <span className="font-bold text-[var(--ps-text)]">
                             {spd3} km/h · {Math.round((activeSample3?.distKm ?? 0) * 1000)}m
                           </span>
                         </div>
@@ -3941,6 +4343,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           }
                           navHeadingDeg={activeSample3?.headingDeg ?? null}
                           heatmapMode={heatmapMode}
+                          showSpeedBadges={true}
                           containerClassName="relative h-[240px] w-full overflow-hidden bg-[#000000] sm:h-[320px]"
                         />
                       </div>
@@ -3984,13 +4387,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         : null
                     }
                     heatmapMode={heatmapMode}
+                    showSpeedBadges={true}
                     topLeftOverlay={replayLegendOverlay}
-                    containerClassName="relative h-[320px] w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#000000] sm:h-[410px]"
+                    containerClassName="relative h-[320px] w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-[410px]"
                   />
                 )}
 
                 {lap1Samples.length > 1 && (
-                  <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0A0C10] p-2.5">
+                  <div className="space-y-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums">
                       <div className="flex items-center gap-1.5">
                         <button
@@ -4001,7 +4405,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             }
                             setReplayPlaying((v) => !v);
                           }}
-                          className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#E10600] px-3 text-xs font-bold text-white"
+                          className="pitstop-btn-red inline-flex h-9 items-center gap-1 rounded-lg px-3 text-xs font-bold"
                         >
                           {replayPlaying ? (
                             <>
@@ -4021,18 +4425,18 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           onClick={() =>
                             setReplaySpeed((s) => (s === 1 ? 2 : s === 2 ? 4 : 1))
                           }
-                          className="inline-flex h-9 min-w-[40px] items-center justify-center rounded-lg border border-zinc-700 bg-[#050608] px-2 text-[11px] font-extrabold text-amber-300 hover:border-zinc-500"
+                          className="inline-flex h-9 min-w-[40px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 text-[11px] font-extrabold text-[var(--ps-amber)] hover:border-[var(--ps-accent)]"
                           title="Velocidade do Replay"
                         >
                           {replaySpeed}x
                         </button>
                       </div>
 
-                      <span className="font-extrabold text-white">
+                      <span className="font-extrabold text-[var(--ps-text)]">
                         {formatStageDuration(replayElapsedMs)}
                       </span>
 
-                      <span className="font-bold text-white">
+                      <span className="font-bold text-[var(--ps-text)]">
                         <span className="text-[#10B981]">V1: {spd1}</span>
                         {hasDistinctLap2 && (
                           <span className="text-[#FF2A2A]"> · V2: {spd2}</span>
@@ -4040,7 +4444,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         {hasDistinctLap3 && (
                           <span className="text-[#38BDF8]"> · V3: {spd3}</span>
                         )}
-                        <span className="text-zinc-400"> km/h</span>
+                        <span className="text-[var(--ps-muted)]"> km/h</span>
                       </span>
 
                       {(gap2vs1Meters !== null || gap3vs1Meters !== null) && (
@@ -4070,7 +4474,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         setReplayPlaying(false);
                         setReplayElapsedMs(Number(e.target.value));
                       }}
-                      className="w-full accent-[#E10600]"
+                      className="w-full accent-[var(--ps-accent)]"
                     />
                   </div>
                 )}
@@ -4078,170 +4482,33 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             );
           })()}
 
-          {/* 5C. SINCRONIZAÇÃO DE VÍDEO + OVERLAY TELEMETRIA */}
-          {detailTab === 'video' && (() => {
-            const activeHudSample = lap1Samples[videoHudSampleIdx] ?? lap1Samples[0] ?? null;
-            const gX = Math.max(-1, Math.min(1, activeHudSample?.accelLatG ?? 0));
-            const gY = Math.max(-1, Math.min(1, activeHudSample?.accelLongG ?? 0));
-
-            return (
-              <div className="space-y-3 rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="font-['Barlow_Condensed'] text-lg font-bold uppercase">
-                      Vídeo &amp; Overlay HUD
-                    </h3>
-                    <p className="text-[11px] text-[#B5B5B5]">
-                      Sincronize seu vídeo com os dados GPS da Volta 1 #{lap1?.runNumber ?? '-'}.
-                    </p>
-                  </div>
-
-                  <label className="pitstop-btn-red inline-flex min-h-[38px] cursor-pointer items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white">
-                    <Upload className="h-3.5 w-3.5" />
-                    <span>{videoUrl ? 'Trocar Vídeo' : 'Abrir Vídeo MP4/MOV'}</span>
-                    <input
-                      type="file"
-                      accept="video/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        if (videoUrl) URL.revokeObjectURL(videoUrl);
-                        setVideoUrl(URL.createObjectURL(file));
-                      }}
-                    />
-                  </label>
-                </div>
-
-                <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-zinc-800 bg-[#050608]">
-                  {videoUrl ? (
-                    <video
-                      ref={videoRef}
-                      src={videoUrl}
-                      controls
-                      playsInline
-                      onTimeUpdate={() => {
-                        const vid = videoRef.current;
-                        if (!vid || lap1Samples.length === 0) return;
-                        const targetMs = Math.max(0, vid.currentTime * 1000 + videoOffsetMs);
-                        let closest = 0;
-                        let bestDiff = Infinity;
-                        for (let i = 0; i < lap1Samples.length; i += 1) {
-                          const diff = Math.abs(lap1Samples[i].stageElapsedMs - targetMs);
-                          if (diff < bestDiff) {
-                            bestDiff = diff;
-                            closest = i;
-                          }
-                        }
-                        setVideoHudSampleIdx(closest);
-                      }}
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full flex-col items-center justify-center p-4 text-center">
-                      <Film className="h-8 w-8 text-zinc-600" />
-                      <p className="mt-2 text-xs text-zinc-400">
-                        Abra um vídeo da GoPro ou arraste o controle abaixo para pré-visualizar o Overlay HUD.
-                      </p>
-                    </div>
-                  )}
-
-                  {activeHudSample && (
-                    <div className="pointer-events-none absolute top-2.5 left-2.5 right-2.5 flex items-start justify-between gap-2">
-                      <div className="rounded-lg border border-white/15 bg-black/70 px-2.5 py-1.5 backdrop-blur-xs font-mono tabular-nums">
-                        <p className="text-[10px] font-bold text-[#10B981] uppercase">
-                          VOLTA #{lap1?.runNumber ?? '-'}
-                        </p>
-                        <p className="text-lg font-black text-white leading-tight sm:text-2xl">
-                          {Math.round(activeHudSample.speedKmh)}{' '}
-                          <span className="text-[10px] font-bold text-zinc-300">KM/H</span>
-                        </p>
-                        <p className="text-xs font-bold text-emerald-400">
-                          {formatStageDuration(activeHudSample.stageElapsedMs)}
-                        </p>
-                      </div>
-
-                      <div className="flex flex-col items-center rounded-lg border border-white/15 bg-black/70 p-2 backdrop-blur-xs">
-                        <div className="relative h-12 w-12 rounded-full border border-zinc-500/80">
-                          <div className="absolute inset-x-0 top-1/2 h-px bg-zinc-600/70" />
-                          <div className="absolute inset-y-0 left-1/2 w-px bg-zinc-600/70" />
-                          <div
-                            className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#E10600] shadow"
-                            style={{
-                              left: `${50 + gX * 42}%`,
-                              top: `${50 - gY * 42}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="mt-1 font-mono text-[9px] text-zinc-300 tabular-nums">
-                          G {gY.toFixed(1)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#080B0D] p-2.5 font-mono text-xs">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[#C0C4C9]">
-                      Sincronia Vídeo vs GPS:{' '}
-                      <strong className="text-amber-300">
-                        {videoOffsetMs >= 0 ? `+${videoOffsetMs}` : videoOffsetMs} ms
-                      </strong>
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {[-2000, -500, 500, 2000].map((step) => (
-                        <button
-                          key={step}
-                          type="button"
-                          onClick={() => setVideoOffsetMs((v) => v + step)}
-                          className="rounded border border-zinc-700 bg-[#14161A] px-2 py-1 text-[10px] font-bold text-white hover:border-[#E10600]"
-                        >
-                          {step > 0 ? `+${step / 1000}s` : `${step / 1000}s`}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => setVideoOffsetMs(0)}
-                        className="rounded border border-zinc-700 bg-[#14161A] px-2 py-1 text-[10px] font-bold text-zinc-400"
-                      >
-                        0
-                      </button>
-                    </div>
-                  </div>
-
-                  {!videoUrl && lap1Samples.length > 1 && (
-                    <input
-                      type="range"
-                      min={0}
-                      max={lap1Samples.length - 1}
-                      value={videoHudSampleIdx}
-                      onChange={(e) => setVideoHudSampleIdx(Number(e.target.value))}
-                      className="w-full accent-[#E10600]"
-                    />
-                  )}
-                </div>
-              </div>
-            );
-          })()}
+          {/* 5C. SINCRONIZAÇÃO DE VÍDEO + OVERLAY TELEMETRIA (RACECHRONO PRO HUD + EXPORT) */}
+          {detailTab === 'video' && (
+            <VideoHudOverlayPanel
+              lap1={lap1}
+              lap1Samples={lap1Samples}
+              sessionRuns={sessionRuns}
+              sessionOptimal={sessionOptimal}
+            />
+          )}
         </section>
       )}
 
       {/* SCREEN: TRACKS LIST (Clean Tracks Library — Map opens only when creating/editing) */}
       {screen === 'tracks' && (
         <section className="space-y-3">
-          <div className="grid grid-cols-3 gap-2 rounded-xl border border-zinc-800 bg-[#111214] p-2.5 text-white">
+          <div className="grid grid-cols-3 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 text-[var(--ps-text)]">
             <button
               type="button"
               onClick={() => setShowNewTrackModal(true)}
-              className="pitstop-btn-red inline-flex min-h-[42px] items-center justify-center gap-1 rounded-lg px-2 text-xs font-extrabold text-white"
+              className="pitstop-btn-red inline-flex min-h-[42px] items-center justify-center gap-1 rounded-lg px-2 text-xs font-extrabold"
             >
               <Plus className="h-4 w-4" />
               <span>Nova Pista</span>
             </button>
 
-            <label className="inline-flex min-h-[42px] cursor-pointer items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2 text-xs font-bold text-white hover:border-[#E10600]">
-              <Upload className="h-3.5 w-3.5 text-[#E10600]" />
+            <label className="inline-flex min-h-[42px] cursor-pointer items-center justify-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]">
+              <Upload className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
               <span>KML/GPX</span>
               <input
                 type="file"
@@ -4258,17 +4525,17 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             <button
               type="button"
               onClick={handleLoadDemoStage}
-              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2 text-xs font-bold text-emerald-400 hover:border-emerald-500"
+              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 text-xs font-bold text-[var(--ps-emerald)] hover:border-[var(--ps-emerald)]"
             >
               <Play className="h-3.5 w-3.5" />
               <span>Demo SS-01</span>
             </button>
           </div>
 
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white sm:p-4">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] sm:p-4">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <FolderOpen className="h-4 w-4 text-[#E10600]" />
+                <FolderOpen className="h-4 w-4 text-[var(--ps-accent)]" />
                 <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
                   Pistas Salvas ({tracks.length})
                 </h3>
@@ -4277,16 +4544,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 <button
                   type="button"
                   onClick={() => setScreen('track-editor')}
-                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-bold text-white hover:border-[#E10600]"
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                 >
-                  <MapIcon className="h-3.5 w-3.5 text-[#E10600]" />
+                  <MapIcon className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                   <span>Abrir Mapa Atual</span>
                 </button>
               )}
             </div>
 
             {tracks.length === 0 ? (
-              <p className="py-6 text-center text-xs text-zinc-500">
+              <p className="py-6 text-center text-xs text-[var(--ps-muted)]">
                 Nenhuma pista cadastrada. Toque em <strong>+ Nova Pista</strong> para abrir o mapa satélite.
               </p>
             ) : (
@@ -4299,8 +4566,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       key={tr.id}
                       className={`flex flex-col justify-between gap-2 rounded-xl border p-3 ${
                         isAct
-                          ? 'border-[#E10600]/80 bg-[#1A0D0E]'
-                          : 'border-zinc-800 bg-[#080B0D]'
+                          ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)]'
+                          : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)]'
                       }`}
                     >
                       {editingTrackId === tr.id ? (
@@ -4314,7 +4581,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                               if (e.key === 'Escape') setEditingTrackId(null);
                             }}
                             autoFocus
-                            className="w-full min-h-[34px] rounded border border-zinc-700 bg-[#111214] px-2 text-xs text-white focus:border-[#E10600] focus:outline-none"
+                            className="w-full min-h-[34px] rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 text-xs text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                           />
                           <button
                             type="button"
@@ -4327,16 +4594,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       ) : (
                         <div>
                           <div className="flex items-start justify-between gap-2">
-                            <p className="font-bold text-sm text-white leading-tight truncate">
+                            <p className="font-bold text-sm text-[var(--ps-text)] leading-tight truncate">
                               {tr.name}
                             </p>
                             {isAct && (
-                              <span className="font-mono text-[10px] font-extrabold text-[#E10600] uppercase shrink-0">
+                              <span className="font-mono text-[10px] font-extrabold text-[var(--ps-accent)] uppercase shrink-0">
                                 Ativa
                               </span>
                             )}
                           </div>
-                          <p className="mt-1 font-mono text-[11px] text-zinc-400">
+                          <p className="mt-1 font-mono text-[11px] text-[var(--ps-muted)]">
                             {tr.mode === 'circuit' ? 'Circuito' : 'Ponto-a-Ponto'} ·{' '}
                             {tr.traps.length} traps · {tr.referenceDistanceKm.toFixed(2)} km ·{' '}
                             {passCount} voltas
@@ -4344,7 +4611,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         </div>
                       )}
 
-                      <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-zinc-800/80">
+                      <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-[var(--ps-border)]">
                         <button
                           type="button"
                           onClick={() => {
@@ -4352,7 +4619,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             setUserPickedTrackManually(true);
                             setScreen('track-editor');
                           }}
-                          className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-lg bg-[#E10600] px-2.5 text-xs font-bold text-white"
+                          className="pitstop-btn-red inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-lg px-2.5 text-xs font-bold"
                         >
                           <MapIcon className="h-3.5 w-3.5" />
                           <span>Editar Mapa</span>
@@ -4365,7 +4632,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             setScreen('home');
                             showToast(`Pista "${tr.name}" selecionada!`);
                           }}
-                          className="min-h-[34px] rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-bold text-white hover:border-emerald-400"
+                          className="min-h-[34px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-emerald)]"
                         >
                           Usar
                         </button>
@@ -4375,7 +4642,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             setEditingTrackId(tr.id);
                             setEditingTrackName(tr.name);
                           }}
-                          className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-[#111214] text-zinc-400 hover:text-white"
+                          className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                           aria-label={`Renomear ${tr.name}`}
                           title="Renomear"
                         >
@@ -4384,7 +4651,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         <button
                           type="button"
                           onClick={() => handleDuplicateTrack(tr)}
-                          className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-[#111214] text-zinc-400 hover:text-white"
+                          className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                           aria-label={`Duplicar ${tr.name}`}
                           title="Duplicar"
                         >
@@ -4393,7 +4660,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         <button
                           type="button"
                           onClick={() => handleDeleteTrack(tr.id)}
-                          className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-[#111214] text-zinc-500 hover:bg-red-950/50 hover:text-red-400"
+                          className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:bg-red-500/15 hover:text-red-500"
                           aria-label={`Excluir ${tr.name}`}
                           title="Excluir"
                         >
@@ -4429,7 +4696,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
         return (
           <section className="space-y-3">
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-2.5 sm:p-3 space-y-2">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 space-y-2">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-1 items-center gap-2 min-w-0">
                   <input
@@ -4438,7 +4705,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     onChange={(e) => setMapTrackNameDraft(e.target.value)}
                     placeholder="Nome da pista (ex: SS-01 Erechim)"
                     aria-label="Nome da pista"
-                    className="min-h-[40px] min-w-0 flex-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none sm:text-sm"
+                    className="min-h-[40px] min-w-0 flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none sm:text-sm"
                   />
                   <button
                     type="button"
@@ -4446,7 +4713,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     className={`inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold uppercase transition-colors ${
                       justSavedTrack
                         ? 'bg-emerald-600 text-white'
-                        : 'pitstop-btn-red text-white'
+                        : 'pitstop-btn-red'
                     }`}
                   >
                     {justSavedTrack ? (
@@ -4463,12 +4730,12 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-[#B5B5B5]">
-                  <span className={trackTrapSummary.hasStart ? 'text-emerald-400 font-bold' : ''}>
+                <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-[var(--ps-muted)]">
+                  <span className={trackTrapSummary.hasStart ? 'text-[var(--ps-emerald)] font-bold' : ''}>
                     {trackTrapSummary.hasStart ? '✓ Largada' : '○ Largada'}
                   </span>
                   <span aria-hidden="true">·</span>
-                  <span className={trackTrapSummary.splitsCount > 0 ? 'text-amber-300 font-bold' : ''}>
+                  <span className={trackTrapSummary.splitsCount > 0 ? 'text-[var(--ps-amber)] font-bold' : ''}>
                     Parciais ({trackTrapSummary.splitsCount})
                   </span>
                   <span aria-hidden="true">·</span>
@@ -4479,18 +4746,18 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-[#111214] shadow-xl">
-              <div className="border-b border-zinc-800 bg-[#14161A] px-3 py-2.5 space-y-2.5">
+            <div className="overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] shadow-xl">
+              <div className="border-b border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-2.5 space-y-2.5">
                 <div>
                   <div className="flex items-center justify-between text-xs font-bold">
-                    <span className="text-white">Deslize para girar</span>
+                    <span className="text-[var(--ps-text)]">Deslize para girar</span>
                     <div className="flex items-center gap-1.5">
                       {selectedTrap && (
                         <>
                           <button
                             type="button"
                             onClick={() => handleRotateTrap(selectedTrap.id, -5)}
-                            className="rounded border border-zinc-700 bg-[#080B0D] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#C0C4C9] hover:text-white"
+                            className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                             aria-label="Girar -5 graus"
                           >
                             -5°
@@ -4498,14 +4765,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           <button
                             type="button"
                             onClick={() => handleRotateTrap(selectedTrap.id, 5)}
-                            className="rounded border border-zinc-700 bg-[#080B0D] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#C0C4C9] hover:text-white"
+                            className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                             aria-label="Girar +5 graus"
                           >
                             +5°
                           </button>
                         </>
                       )}
-                      <span className="font-mono text-sm font-black text-amber-300 tabular-nums">
+                      <span className="font-mono text-sm font-black text-[var(--ps-amber)] tabular-nums">
                         {activeBearing.toFixed(1).replace('.', ',')} °
                       </span>
                     </div>
@@ -4524,7 +4791,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         handleUpdateTrapProps(selectedTrap.id, { bearingDeg: val });
                       }
                     }}
-                    className="mt-1.5 h-6 w-full cursor-pointer accent-lime-400"
+                    className="mt-1.5 h-6 w-full cursor-pointer accent-lime-500"
                   />
                 </div>
 
@@ -4540,15 +4807,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           handleUpdateTrapProps(selectedTrap.id, { unidirectional: checked });
                         }
                       }}
-                      className="h-5 w-5 rounded border-zinc-600 accent-lime-400 cursor-pointer"
+                      className="h-5 w-5 rounded border-[var(--ps-border-strong)] accent-lime-500 cursor-pointer"
                     />
-                    <span className="text-xs font-bold text-white sm:text-sm">
+                    <span className="text-xs font-bold text-[var(--ps-text)] sm:text-sm">
                       Unidirecional
                     </span>
                   </label>
 
                   <div className="flex items-center gap-2">
-                    <label className="inline-flex items-center gap-1.5 text-xs text-[#C0C4C9]">
+                    <label className="inline-flex items-center gap-1.5 text-xs text-[var(--ps-muted)]">
                       <span className="font-bold">Largura (m):</span>
                       <input
                         type="number"
@@ -4567,7 +4834,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           }
                         }}
                         aria-label="Largura do Marco em metros"
-                        className="h-9 w-16 rounded-lg border border-zinc-700 bg-[#080B0D] text-center font-mono text-xs font-extrabold text-white focus:border-[#E10600] focus:outline-none"
+                        className="h-9 w-16 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-center font-mono text-xs font-extrabold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                       />
                     </label>
 
@@ -4579,7 +4846,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       className={`inline-flex min-h-[36px] items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition-colors ${
                         placementKind
                           ? 'bg-amber-400 text-zinc-950'
-                          : 'border border-zinc-700 bg-[#080B0D] text-white hover:border-[#E10600]'
+                          : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]'
                       }`}
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -4588,13 +4855,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-1 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+                <div className="grid grid-cols-4 gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
                   {(
                     [
-                      ['start', 'Largada', 'text-emerald-300'],
-                      ['finish', 'Chegada', 'text-red-300'],
-                      ['start_finish', 'Larg/Cheg', 'text-sky-300'],
-                      ['split', 'Parcial (Setor)', 'text-amber-300'],
+                      ['start', 'Largada', 'text-[var(--ps-emerald)]'],
+                      ['finish', 'Chegada', 'text-red-500'],
+                      ['start_finish', 'Larg/Cheg', 'text-sky-500'],
+                      ['split', 'Parcial (Setor)', 'text-[var(--ps-amber)]'],
                     ] as const
                   ).map(([kindVal, label, tone]) => {
                     const isAct = activeKind === kindVal;
@@ -4611,8 +4878,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         }}
                         className={`min-h-[36px] rounded-md px-1 text-[10px] font-bold transition-colors sm:text-xs ${
                           isAct
-                            ? 'bg-[#E10600] text-white'
-                            : `${tone} hover:bg-zinc-800`
+                            ? 'pitstop-btn-red'
+                            : `${tone} hover:bg-[var(--ps-card)]`
                         }`}
                       >
                         {label}
@@ -4638,15 +4905,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 onDragTrapEnd={handleDragTrapEnd}
                 containerClassName="relative h-[340px] w-full overflow-hidden bg-[#000000] sm:h-[440px]"
                 fullscreenOverlay={
-                  <div className="rounded-xl border border-zinc-700/90 bg-[#080B0D]/92 p-2 text-white shadow-2xl backdrop-blur-md space-y-2">
+                  <div className="rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 p-2 text-[var(--ps-text)] shadow-2xl backdrop-blur-md space-y-2">
                     {/* Colocar Marcos direto em Tela Cheia */}
                     <div className="grid grid-cols-4 gap-1">
                       {(
                         [
-                          ['start', 'Largada', 'text-emerald-300 border-emerald-600/40'],
-                          ['finish', 'Chegada', 'text-red-300 border-red-600/40'],
-                          ['start_finish', 'Larg/Cheg', 'text-sky-300 border-sky-600/40'],
-                          ['split', 'Parcial', 'text-amber-300 border-amber-600/40'],
+                          ['start', 'Largada', 'text-[var(--ps-emerald)] border-emerald-500/40'],
+                          ['finish', 'Chegada', 'text-red-500 border-red-500/40'],
+                          ['start_finish', 'Larg/Cheg', 'text-sky-500 border-sky-500/40'],
+                          ['split', 'Parcial', 'text-[var(--ps-amber)] border-amber-500/40'],
                         ] as const
                       ).map(([kindVal, label, tone]) => {
                         const isPlacingThis = placementKind === kindVal;
@@ -4662,7 +4929,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             className={`inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg border px-1 text-[10px] font-extrabold uppercase transition-colors sm:text-xs ${
                               isPlacingThis
                                 ? 'border-amber-300 bg-amber-400 text-zinc-950'
-                                : `${tone} bg-[#111214] hover:bg-zinc-800`
+                                : `${tone} bg-[var(--ps-card-deep)] hover:bg-[var(--ps-card)]`
                             }`}
                           >
                             <Plus className="h-3 w-3 shrink-0" />
@@ -4675,7 +4942,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     {/* Rotação rápida, Largura, +GPS e Salvar Pista dentro da Tela Cheia */}
                     <div className="flex flex-wrap items-center justify-between gap-1.5">
                       <div className="flex min-w-[140px] flex-1 items-center gap-2">
-                        <span className="font-mono text-[10px] font-bold text-amber-300 tabular-nums shrink-0">
+                        <span className="font-mono text-[10px] font-bold text-[var(--ps-amber)] tabular-nums shrink-0">
                           {activeBearing.toFixed(0)}°
                         </span>
                         <input
@@ -4692,7 +4959,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                               handleUpdateTrapProps(selectedTrap.id, { bearingDeg: val });
                             }
                           }}
-                          className="h-5 w-full cursor-pointer accent-lime-400"
+                          className="h-5 w-full cursor-pointer accent-lime-500"
                         />
                       </div>
 
@@ -4713,13 +4980,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             }
                           }}
                           aria-label="Largura (m)"
-                          className="h-8 w-12 rounded-lg border border-zinc-700 bg-[#111214] text-center font-mono text-[11px] font-bold text-white"
+                          className="h-8 w-12 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-center font-mono text-[11px] font-bold text-[var(--ps-text)]"
                         />
 
                         <button
                           type="button"
                           onClick={() => handleDropTrapAtPosition(activeKind)}
-                          className="inline-flex h-8 items-center rounded-lg border border-zinc-700 bg-[#111214] px-2 text-[10px] font-bold text-emerald-300"
+                          className="inline-flex h-8 items-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-emerald)]"
                           title="Capturar Marco na posição GPS atual"
                         >
                           +GPS
@@ -4729,7 +4996,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           <button
                             type="button"
                             onClick={() => handleRemoveTrap(selectedTrap.id)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#111214] text-zinc-400 hover:text-red-400"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-red-500"
                             aria-label={`Remover ${selectedTrap.name}`}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -4742,7 +5009,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[10px] font-extrabold uppercase ${
                             justSavedTrack
                               ? 'bg-emerald-600 text-white'
-                              : 'pitstop-btn-red text-white'
+                              : 'pitstop-btn-red'
                           }`}
                         >
                           {justSavedTrack ? (
@@ -4758,7 +5025,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 }
               />
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 bg-[#14161A] px-3 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-2.5">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <span
                     className={`h-3.5 w-3.5 shrink-0 rounded-full border border-white/70 ${
@@ -4772,10 +5039,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     }`}
                   />
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-extrabold text-white sm:text-sm">
+                    <p className="truncate text-xs font-extrabold text-[var(--ps-text)] sm:text-sm">
                       {selectedTrap ? selectedTrap.name : 'Novo marco (toque em Novo Marco)'}
                     </p>
-                    <p className="font-mono text-[11px] text-[#B5B5B5] tabular-nums">
+                    <p className="font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
                       {kindLabelMap[activeKind]}, {activeBearing.toFixed(1).replace('.', ',')} °,{' '}
                       {activeWidthM.toFixed(2).replace('.', ',')} m
                       {activeUnidirectional ? ' · Unidirecional' : ' · Bidirecional'}
@@ -4787,7 +5054,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   <button
                     type="button"
                     onClick={() => handleDropTrapAtPosition(activeKind)}
-                    className="min-h-[36px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 text-[11px] font-bold text-emerald-300 hover:border-emerald-400"
+                    className="min-h-[36px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-[11px] font-bold text-[var(--ps-emerald)] hover:border-[var(--ps-emerald)]"
                     title="Capturar Marco na posição GPS atual"
                   >
                     + GPS Atual
@@ -4796,7 +5063,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     <button
                       type="button"
                       onClick={() => handleRemoveTrap(selectedTrap.id)}
-                      className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-zinc-400 hover:border-red-500 hover:text-red-400"
+                      className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:border-red-500 hover:text-red-500"
                       aria-label={`Remover ${selectedTrap.name}`}
                       title="Excluir Marco selecionado"
                     >
@@ -4807,10 +5074,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               </div>
             </div>
 
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white space-y-2.5">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
               {editableTrace.length > 1 && (
-                <div className="rounded-lg border border-zinc-800 bg-[#080B0D] p-2.5 space-y-1.5">
-                  <div className="flex items-center justify-between font-mono text-[11px] text-zinc-400">
+                <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between font-mono text-[11px] text-[var(--ps-muted)]">
                     <span>
                       Traçado #{postEditIdx + 1}/{editableTrace.length}
                     </span>
@@ -4822,27 +5089,27 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     max={Math.max(0, editableTrace.length - 1)}
                     value={postEditIdx}
                     onChange={(e) => setPostEditIdx(Number(e.target.value))}
-                    className="w-full accent-sky-400"
+                    className="w-full accent-sky-500"
                   />
                   <div className="grid grid-cols-3 gap-1.5">
                     <button
                       type="button"
                       onClick={() => handleDropTrapAtPosition('start', editableTrace[postEditIdx])}
-                      className="min-h-[34px] rounded border border-emerald-600/40 bg-emerald-950/30 text-[11px] font-bold text-emerald-300"
+                      className="min-h-[34px] rounded border border-emerald-500/40 bg-emerald-500/10 text-[11px] font-bold text-[var(--ps-emerald)]"
                     >
                       + Largada
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDropTrapAtPosition('split', editableTrace[postEditIdx])}
-                      className="min-h-[34px] rounded border border-amber-600/40 bg-amber-950/30 text-[11px] font-bold text-amber-300"
+                      className="min-h-[34px] rounded border border-amber-500/40 bg-amber-500/10 text-[11px] font-bold text-[var(--ps-amber)]"
                     >
                       + Parcial
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDropTrapAtPosition('finish', editableTrace[postEditIdx])}
-                      className="min-h-[34px] rounded border border-red-600/40 bg-red-950/30 text-[11px] font-bold text-red-300"
+                      className="min-h-[34px] rounded border border-red-500/40 bg-red-500/10 text-[11px] font-bold text-red-500"
                     >
                       + Chegada
                     </button>
@@ -4863,13 +5130,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         }}
                         className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs ${
                           isSel
-                            ? 'border-[#E10600] bg-[#1A0D0E]'
-                            : 'border-zinc-800 bg-[#080B0D]'
+                            ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)]'
+                            : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)]'
                         }`}
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="font-bold text-white truncate">{tr.name}</p>
-                          <p className="font-mono text-[10px] text-zinc-400 tabular-nums">
+                          <p className="font-bold text-[var(--ps-text)] truncate">{tr.name}</p>
+                          <p className="font-mono text-[10px] text-[var(--ps-muted)] tabular-nums">
                             {tr.bearingDeg.toFixed(1)}° · {tr.widthM}m ·{' '}
                             {tr.unidirectional !== false ? 'Unidir.' : 'Bidir.'}
                           </p>
@@ -4880,7 +5147,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             e.stopPropagation();
                             handleRemoveTrap(tr.id);
                           }}
-                          className="flex h-8 w-8 items-center justify-center rounded text-zinc-500 hover:bg-red-950/50 hover:text-red-400"
+                          className="flex h-8 w-8 items-center justify-center rounded text-[var(--ps-muted)] hover:bg-red-500/15 hover:text-red-500"
                           aria-label={`Remover ${tr.name}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -4891,13 +5158,13 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-1.5 border-t border-zinc-800 pt-2">
+              <div className="flex flex-wrap gap-1.5 border-t border-[var(--ps-border)] pt-2">
                 {activeTrack && (
                   <>
                     <button
                       type="button"
                       onClick={() => handleExportTrack('gpx')}
-                      className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-semibold text-[#C0C4C9] hover:text-white"
+                      className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-semibold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                     >
                       <Download className="h-3.5 w-3.5" />
                       <span>.GPX</span>
@@ -4905,7 +5172,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     <button
                       type="button"
                       onClick={() => handleExportTrack('geojson')}
-                      className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2.5 text-xs font-semibold text-[#C0C4C9] hover:text-white"
+                      className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-semibold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                     >
                       <Download className="h-3.5 w-3.5" />
                       <span>.GeoJSON</span>
@@ -4913,7 +5180,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     <button
                       type="button"
                       onClick={handleStartOrArmStage}
-                      className="pitstop-btn-red ml-auto inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold text-white"
+                      className="pitstop-btn-red ml-auto inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold"
                     >
                       <Play className="h-3.5 w-3.5 fill-current" />
                       <span>Ir para Cronômetro</span>
@@ -4929,25 +5196,37 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       {/* SCREEN: GEAR SETTINGS & SENSORS (Top-right Gear Icon) */}
       {screen === 'settings' && (
         <section className="space-y-3">
-          <div className="rounded-xl border border-zinc-800 bg-[#111214] p-4 text-white space-y-4">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-3">
+            <div>
+              <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
+                Layout da Tela Ao Vivo (10 Modelos + Customizado)
+              </h3>
+              <p className="text-xs text-[var(--ps-muted)]">
+                Troque o painel de cronometragem ou monte sua própria ordem e tamanho de blocos.
+              </p>
+            </div>
+            <VelocityCockpitLayoutEditor />
+          </div>
+
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-4">
             <div>
               <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
                 Receptor GPS &amp; Motor de Cronometragem
               </h3>
-              <p className="text-xs text-[#B5B5B5]">
+              <p className="text-xs text-[var(--ps-muted)]">
                 Configure fonte GPS, tolerância automática HDOP e acelerômetro IMU.
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
               <div>
-                <p className="text-xs font-bold text-white">Fonte de Telemetria</p>
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-xs font-bold text-[var(--ps-text)]">Fonte de Telemetria</p>
+                <p className="text-[11px] text-[var(--ps-muted)]">
                   GPS real ou Simulador de bancada (SS-01)
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <div className="inline-flex rounded-lg border border-zinc-700 bg-[#111214] p-0.5">
+                <div className="inline-flex rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
                   <button
                     type="button"
                     onClick={() => {
@@ -4955,7 +5234,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       setSimPlaying(false);
                     }}
                     className={`rounded-md px-3 py-1.5 text-xs font-bold ${
-                      source === 'gps' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5]'
+                      source === 'gps' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
                     }`}
                   >
                     GPS
@@ -4964,21 +5243,21 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     type="button"
                     onClick={() => setSource('simulator')}
                     className={`rounded-md px-3 py-1.5 text-xs font-bold ${
-                      source === 'simulator' ? 'bg-[#E10600] text-white' : 'text-[#B5B5B5]'
+                      source === 'simulator' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
                     }`}
                   >
                     Simulador
                   </button>
                 </div>
                 {source === 'simulator' && (
-                  <div className="inline-flex items-center gap-1 rounded-lg border border-zinc-700 bg-[#111214] p-0.5">
+                  <div className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
                     {[1, 2, 4].map((x) => (
                       <button
                         key={x}
                         type="button"
                         onClick={() => setSimMultiplier(x)}
                         className={`rounded px-2 py-1 font-mono text-[10px] font-bold ${
-                          simMultiplier === x ? 'bg-[#E10600] text-white' : 'text-zinc-400'
+                          simMultiplier === x ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
                         }`}
                       >
                         {x}x
@@ -4989,10 +5268,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               </div>
             </div>
 
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-[#080B0D] p-3">
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
               <div>
-                <p className="text-xs font-bold text-white">Detecção Automática de Pista (GPS)</p>
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-xs font-bold text-[var(--ps-text)]">Detecção Automática de Pista (GPS)</p>
+                <p className="text-[11px] text-[var(--ps-muted)]">
                   Reconhece pistas salvas num raio de{' '}
                   {velPrefs.autoDetectRadiusM >= 1000
                     ? `${(velPrefs.autoDetectRadiusM / 1000).toFixed(1)} km`
@@ -5006,14 +5285,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 onChange={(e) =>
                   setVelPrefs((p) => ({ ...p, autoDetectTrack: e.target.checked }))
                 }
-                className="h-5 w-5 accent-[#E10600]"
+                className="h-5 w-5 accent-[var(--ps-accent)]"
               />
             </label>
 
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-[#080B0D] p-3">
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
               <div>
-                <p className="text-xs font-bold text-white">Auto-Snap Dinâmico (HDOP)</p>
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-xs font-bold text-[var(--ps-text)]">Auto-Snap Dinâmico (HDOP)</p>
+                <p className="text-[11px] text-[var(--ps-muted)]">
                   Expande o portal proporcionalmente à precisão horizontal do GPS.
                 </p>
               </div>
@@ -5023,14 +5302,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 onChange={(e) =>
                   setVelPrefs((p) => ({ ...p, autoSnapHdop: e.target.checked }))
                 }
-                className="h-5 w-5 accent-[#E10600]"
+                className="h-5 w-5 accent-[var(--ps-accent)]"
               />
             </label>
 
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-[#080B0D] p-3">
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
               <div>
-                <p className="text-xs font-bold text-white">Acelerômetro &amp; Força G (IMU)</p>
-                <p className="text-[11px] text-zinc-400">
+                <p className="text-xs font-bold text-[var(--ps-text)]">Acelerômetro &amp; Força G (IMU)</p>
+                <p className="text-[11px] text-[var(--ps-muted)]">
                   Combina sensores internos com variação cinemática de velocidade.
                 </p>
               </div>
@@ -5040,7 +5319,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 onChange={(e) =>
                   setVelPrefs((p) => ({ ...p, useDeviceImu: e.target.checked }))
                 }
-                className="h-5 w-5 accent-[#E10600]"
+                className="h-5 w-5 accent-[var(--ps-accent)]"
               />
             </label>
           </div>
@@ -5057,8 +5336,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
       {/* Modal: Create New Special Stage or Circuit Track */}
       {showNewTrackModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-[#111214] p-4 sm:p-5 text-white shadow-2xl space-y-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-4 sm:p-5 text-[var(--ps-text)] shadow-2xl space-y-3">
             <h3 className="font-['Barlow_Condensed'] text-xl font-bold italic uppercase">
               Nova Pista / Especial
             </h3>
@@ -5067,16 +5346,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               value={newTrackName}
               onChange={(e) => setNewTrackName(e.target.value)}
               placeholder="Ex: SS-02 Erechim ou Kartódromo"
-              className="w-full min-h-[42px] rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-sm text-white focus:border-[#E10600] focus:outline-none"
+              className="w-full min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-sm text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
             />
-            <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-zinc-800 bg-[#080B0D] p-1">
+            <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
               <button
                 type="button"
                 onClick={() => setNewTrackMode('circuit')}
                 className={`min-h-[36px] rounded-md text-xs font-bold ${
                   newTrackMode === 'circuit'
-                    ? 'bg-[#E10600] text-white'
-                    : 'text-[#B5B5B5]'
+                    ? 'pitstop-btn-red'
+                    : 'text-[var(--ps-muted)]'
                 }`}
               >
                 Circuito (Voltas)
@@ -5086,8 +5365,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 onClick={() => setNewTrackMode('point-to-point')}
                 className={`min-h-[36px] rounded-md text-xs font-bold ${
                   newTrackMode === 'point-to-point'
-                    ? 'bg-[#E10600] text-white'
-                    : 'text-[#B5B5B5]'
+                    ? 'pitstop-btn-red'
+                    : 'text-[var(--ps-muted)]'
                 }`}
               >
                 Ponto-a-Ponto (SS)
@@ -5097,14 +5376,14 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               <button
                 type="button"
                 onClick={() => setShowNewTrackModal(false)}
-                className="min-h-[40px] rounded-lg border border-zinc-700 bg-[#080B0D] px-4 text-xs font-semibold text-[#C0C4C9]"
+                className="min-h-[40px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-semibold text-[var(--ps-muted)]"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={handleCreateNewTrack}
-                className="pitstop-btn-red min-h-[40px] rounded-lg px-4 text-xs font-extrabold text-white"
+                className="pitstop-btn-red min-h-[40px] rounded-lg px-4 text-xs font-extrabold"
               >
                 Abrir no Mapa
               </button>
@@ -5112,6 +5391,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </div>
         </div>
       )}
+      <VelocityCockpitLayoutModal
+        open={showLayoutModal}
+        onClose={() => setShowLayoutModal(false)}
+      />
     </div>
   );
 };

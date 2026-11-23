@@ -230,7 +230,8 @@ const CroppedObsImage: React.FC<{
   src: string;
   alt: string;
   className?: string;
-}> = ({ src, alt, className = '' }) => {
+  style?: React.CSSProperties;
+}> = ({ src, alt, className = '', style }) => {
   const [croppedSrc, setCroppedSrc] = useState<string>(src);
 
   useEffect(() => {
@@ -244,7 +245,7 @@ const CroppedObsImage: React.FC<{
     };
   }, [src]);
 
-  return <img src={croppedSrc} alt={alt} className={className} />;
+  return <img src={croppedSrc} alt={alt} className={className} style={style} />;
 };
 
 const CroppedDesenhoImage: React.FC<{
@@ -252,7 +253,8 @@ const CroppedDesenhoImage: React.FC<{
   isComposite?: boolean;
   alt: string;
   className?: string;
-}> = ({ src, isComposite, alt, className = '' }) => {
+  style?: React.CSSProperties;
+}> = ({ src, isComposite, alt, className = '', style }) => {
   const [croppedSrc, setCroppedSrc] = useState<string>(src);
 
   useEffect(() => {
@@ -268,7 +270,7 @@ const CroppedDesenhoImage: React.FC<{
     };
   }, [src, isComposite]);
 
-  return <img src={croppedSrc} alt={alt} className={className} />;
+  return <img src={croppedSrc} alt={alt} className={className} style={style} />;
 };
 
 /**
@@ -287,7 +289,7 @@ const TnavVerticalBar: React.FC<{
 
   return (
     <div
-      className="flex h-full w-6 shrink-0 flex-col justify-between rounded-lg border-2 border-slate-600 bg-black p-0.5 sm:w-7"
+      className="flex h-full w-6 shrink-0 flex-col justify-between rounded-lg border-2 border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] p-0.5 sm:w-7"
       title={
         disabled
           ? 'Trecho isento (D/N)'
@@ -307,7 +309,7 @@ const TnavVerticalBar: React.FC<{
           <div
             key={`red-${idx}`}
             className={`w-full flex-1 rounded-[1px] transition-colors ${
-              isLate && idx <= level ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.85)]' : 'bg-red-950/35'
+              isLate && idx <= level ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.85)]' : 'bg-red-500/15'
             }`}
           />
         ))}
@@ -318,8 +320,8 @@ const TnavVerticalBar: React.FC<{
         <div
           className={`h-[3px] w-full rounded-full ${
             !disabled && deltaSec !== null && Math.abs(deltaSec) < 0.5
-              ? 'bg-slate-200 shadow-[0_0_6px_rgba(255,255,255,0.9)]'
-              : 'bg-slate-500'
+              ? 'bg-[var(--ps-text)] shadow-[0_0_6px_rgba(255,255,255,0.65)]'
+              : 'bg-[var(--ps-muted)]/60'
           }`}
         />
       </div>
@@ -332,7 +334,7 @@ const TnavVerticalBar: React.FC<{
             className={`w-full flex-1 rounded-[1px] transition-colors ${
               isAhead && idx <= level
                 ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.85)]'
-                : 'bg-emerald-950/35'
+                : 'bg-emerald-500/15'
             }`}
           />
         ))}
@@ -370,28 +372,28 @@ const TnavHorizontalColorBar: React.FC<{
   return (
     <div className="space-y-1.5" aria-label="Barra de cores de regularidade">
       <div className="flex items-center justify-between text-[10px] font-bold tracking-wider uppercase">
-        <span className={isAhead ? 'text-emerald-400' : 'text-zinc-500'}>
+        <span className={isAhead ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-muted)]'}>
           − Adiantado
         </span>
         <span
           className={
             isZero
-              ? 'text-slate-200'
+              ? 'text-[var(--ps-text)]'
               : isAhead
-                ? 'text-emerald-400'
+                ? 'text-[var(--ps-emerald)]'
                 : isLate
                   ? 'text-[#FF2A2A]'
-                  : 'text-zinc-400'
+                  : 'text-[var(--ps-muted)]'
           }
         >
           {statusLabel}
         </span>
-        <span className={isLate ? 'text-[#FF2A2A]' : 'text-zinc-500'}>
+        <span className={isLate ? 'text-[#FF2A2A]' : 'text-[var(--ps-muted)]'}>
           Atrasado +
         </span>
       </div>
 
-      <div className="relative h-4 w-full overflow-hidden rounded-full border border-zinc-700 bg-black">
+      <div className="relative h-4 w-full overflow-hidden rounded-full border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)]">
         {/* Left side fill: Green for Adiantado */}
         {isAhead && (
           <div
@@ -409,7 +411,7 @@ const TnavHorizontalColorBar: React.FC<{
         {/* Center Grey 00:00 Crosshair Marker */}
         <div
           className={`absolute left-1/2 top-0 bottom-0 z-10 w-1.5 -translate-x-1/2 ${
-            isZero ? 'bg-white shadow-[0_0_8px_rgba(255,255,255,0.95)]' : 'bg-zinc-400'
+            isZero ? 'bg-[var(--ps-text)] shadow-[0_0_8px_rgba(255,255,255,0.8)]' : 'bg-[var(--ps-muted)]'
           }`}
         />
       </div>
@@ -464,15 +466,16 @@ const TulipVectorIcon: React.FC<{
           active
             ? activeBgClass
             : passed
-              ? 'border-zinc-700/80 bg-[#12151B]'
-              : 'border-zinc-800 bg-[#0B0D10]'
+              ? 'border-[var(--ps-border)] bg-[var(--ps-card)]'
+              : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
         }`}
       >
         <CroppedDesenhoImage
           src={imageDataUrl}
           isComposite={imageIsComposite}
           alt="Tulipa"
-          className={`h-full w-full object-contain ${!active ? 'invert hue-rotate-180 contrast-125' : ''}`}
+          className="h-full w-full object-contain"
+          style={!active ? { filter: 'var(--ps-drawing-filter)' } : undefined}
         />
       </div>
     );
@@ -484,8 +487,8 @@ const TulipVectorIcon: React.FC<{
         active
           ? `${activeBgClass} text-slate-950`
           : passed
-            ? 'border-zinc-700/80 bg-[#12151B] text-[#C0C4C9]'
-            : 'border-zinc-800 bg-[#0B0D10] text-white'
+            ? 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)]'
+            : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)]'
       }`}
     >
       <svg viewBox="0 0 64 64" className={svgClass} aria-hidden="true">
@@ -494,14 +497,15 @@ const TulipVectorIcon: React.FC<{
           cy="32"
           r="26"
           fill="none"
-          stroke={active ? '#334155' : '#3F444E'}
+          stroke={active ? '#334155' : 'currentColor'}
+          strokeOpacity={active ? 1 : 0.3}
           strokeWidth="1.75"
           strokeDasharray="3 4"
         />
         <g transform={`rotate(${angle} 32 32)`}>
           <path
             d="M32 9 L42 29 L35 27 L35 51 L29 51 L29 27 L22 29 Z"
-            fill={active ? '#09090B' : '#F4F4F4'}
+            fill={active ? '#09090B' : 'currentColor'}
           />
           <circle cx="32" cy="51" r="4.5" fill={active ? '#09090B' : '#E10600'} />
         </g>
@@ -528,18 +532,18 @@ const DigitalSpeedometer: React.FC<{
     targetSpeedKmh && targetSpeedKmh > 0 ? speedKmh - targetSpeedKmh : null;
   const speedColor =
     diff === null
-      ? 'text-white'
+      ? 'text-[var(--ps-text)]'
       : Math.abs(diff) <= 1.5
-        ? 'text-emerald-400'
+        ? 'text-[var(--ps-emerald)]'
         : diff > 0
           ? 'text-[#FF2A2A]'
-          : 'text-[#C0C4C9]';
+          : 'text-[var(--ps-muted)]';
 
   return (
-    <div className="flex h-full flex-col justify-between rounded-xl border border-zinc-800 bg-[#111214] p-4 text-white">
-      <div className="flex items-center justify-between gap-2 text-[10px] font-bold tracking-widest text-[#B5B5B5] uppercase">
+    <div className="flex h-full flex-col justify-between rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)]">
+      <div className="flex items-center justify-between gap-2 text-[10px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
         <span>Velocímetro Digital</span>
-        <span className="font-mono text-[#E10600]">
+        <span className="font-mono text-[var(--ps-accent)]">
           {sectionType === 'D' || sectionType === 'N'
             ? `${sectionType} ${tdnMs ? formatTdnOrTime(tdnMs) : ''}`.trim()
             : targetSpeedKmh
@@ -548,20 +552,20 @@ const DigitalSpeedometer: React.FC<{
         </span>
       </div>
 
-      <div className="my-3 flex flex-col items-center justify-center rounded-lg border border-zinc-800 bg-[#080B0D] px-4 py-4">
+      <div className="my-3 flex flex-col items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-4 py-4">
         <div
           className={`font-mono text-6xl font-black leading-none tracking-tight tabular-nums sm:text-7xl ${speedColor}`}
           aria-label={`Velocímetro ${Math.round(speedKmh)} km/h`}
         >
           {String(Math.round(speedKmh)).padStart(2, '0')}
         </div>
-        <span className="mt-1.5 font-mono text-xs font-bold tracking-[0.22em] text-[#B5B5B5] uppercase">
+        <span className="mt-1.5 font-mono text-xs font-bold tracking-[0.22em] text-[var(--ps-muted)] uppercase">
           KM/H
         </span>
       </div>
 
       <div>
-        <div className="relative h-2.5 w-full overflow-hidden rounded-full border border-zinc-800 bg-[#080B0D]">
+        <div className="relative h-2.5 w-full overflow-hidden rounded-full border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
           <div
             className="h-full rounded-full bg-gradient-to-r from-[#C0C4C9] via-amber-400 to-[#E10600] transition-all duration-150"
             style={{ width: `${fillPct}%` }}
@@ -574,7 +578,7 @@ const DigitalSpeedometer: React.FC<{
             />
           )}
         </div>
-        <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-zinc-500 tabular-nums">
+        <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-[var(--ps-muted)] tabular-nums">
           <span>0</span>
           <span>
             {diff === null
@@ -660,7 +664,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
 
   const { primary: velPrimary, secondary: velSecondary } = formatVelTdnBadge(t);
 
-  const cellBorderClass = isActive ? 'border-slate-900/35' : 'border-zinc-800';
+  const cellBorderClass = isActive ? 'border-slate-900/35' : 'border-[var(--ps-border)]';
 
   const activeBgClass =
     highlightTheme === 'blue'
@@ -712,10 +716,10 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
             ? `${activeBgClass} outline-2 outline-sky-400`
             : activeBgClass
           : isManualSelected
-            ? 'bg-sky-950/60 text-white ring-2 ring-inset ring-sky-400'
+            ? 'bg-sky-500/15 text-[var(--ps-text)] ring-2 ring-inset ring-sky-400'
             : isPassed
-              ? `bg-[#12151B] text-zinc-400 hover:bg-[#171A21] ${compactPassed ? 'opacity-80' : ''}`
-              : 'bg-[#0B0D10] text-[#F4F4F4] hover:bg-[#14161A]'
+              ? `bg-[var(--ps-card)] text-[var(--ps-muted)] hover:bg-[var(--ps-surface)] ${compactPassed ? 'opacity-80' : ''}`
+              : 'bg-[var(--ps-surface)] text-[var(--ps-text)] hover:bg-[var(--ps-card)]'
       }`}
     >
       {/* Col 1: Desenho */}
@@ -723,7 +727,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
         className={`min-w-0 overflow-hidden flex items-center justify-center border-r ${
           compactPassed ? 'p-0.5' : 'p-0.5 sm:p-1.5'
         } ${cellBorderClass} ${
-          isActive ? activeCellBgClass : isPassed ? 'bg-[#12151B]' : 'bg-[#0B0D10]'
+          isActive ? activeCellBgClass : isPassed ? 'bg-[var(--ps-card)]' : 'bg-[var(--ps-surface)]'
         }`}
       >
         <TulipVectorIcon
@@ -740,7 +744,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
       {/* Col 2: Tul */}
       <div
         className={`min-w-0 overflow-hidden flex flex-col items-center justify-center border-r px-0.5 font-mono font-black tabular-nums sm:px-1 ${
-          isActive ? 'text-slate-950' : isPassed ? 'text-zinc-400' : 'text-white'
+          isActive ? 'text-slate-950' : isPassed ? 'text-[var(--ps-muted)]' : 'text-[var(--ps-text)]'
         } ${
           compactPassed
             ? 'py-0.5 text-[10px] sm:py-1 sm:text-xs'
@@ -771,7 +775,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
       >
         <span
           className={`max-w-full truncate font-black leading-none tracking-tighter ${
-            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-white'
+            isActive ? 'text-slate-950' : isPassed ? 'text-[var(--ps-muted)]' : 'text-[var(--ps-text)]'
           } ${
             compactPassed ? 'text-[10px] sm:text-sm' : 'text-[11px] sm:text-base md:text-lg'
           }`}
@@ -784,7 +788,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
               ? 'rounded-xs bg-lime-400 font-extrabold text-slate-950'
               : isActive
                 ? 'text-slate-950'
-                : 'text-[#B5B5B5]'
+                : 'text-[var(--ps-muted)]'
           }`}
         >
           {t.resetsOdometer ? `${formatKm3(diffKm)} | 0,00` : formatKm3(diffKm)}
@@ -792,7 +796,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
         {!compactPassed && (
           <div
             className={`mt-0.5 w-full truncate rounded-xs px-0.5 py-0.5 text-[8px] font-bold leading-tight sm:px-1 sm:text-[10px] ${
-              isActive ? activePillBgClass : 'bg-[#181B22] text-[#C0C4C9]'
+              isActive ? activePillBgClass : 'bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
             }`}
           >
             {t.section !== null ? `T${t.section}` : 'T-'} | {typeShortLabel(t.type)}
@@ -808,7 +812,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
       >
         <span
           className={`max-w-full truncate leading-none ${
-            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-white'
+            isActive ? 'text-slate-950' : isPassed ? 'text-[var(--ps-muted)]' : 'text-[var(--ps-text)]'
           } ${
             t.type === 'V'
               ? compactPassed
@@ -822,7 +826,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
         {velSecondary ? (
           <span
             className={`mt-0.5 max-w-full truncate text-[7.5px] font-bold leading-none sm:text-[9px] ${
-              isActive ? 'text-slate-900' : 'text-zinc-400'
+              isActive ? 'text-slate-900' : 'text-[var(--ps-muted)]'
             }`}
           >
             {velSecondary}
@@ -838,7 +842,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
       >
         <span
           className={`max-w-full truncate text-[9px] font-extrabold tracking-tighter sm:text-xs md:text-sm ${
-            isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-[#F4F4F4]'
+            isActive ? 'text-slate-950' : isPassed ? 'text-[var(--ps-muted)]' : 'text-[var(--ps-text)]'
           }`}
         >
           {idealFormatted}
@@ -882,9 +886,8 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
               alt={`Observação tulipa ${t.tulipa}`}
               className={`${
                 compactPassed ? 'h-9 sm:h-11' : 'h-12 sm:h-14 md:h-16'
-              } w-auto max-w-full object-contain object-left sm:object-center ${
-                !isActive ? 'invert hue-rotate-180 contrast-125' : ''
-              }`}
+              } w-auto max-w-full object-contain object-left sm:object-center`}
+              style={!isActive ? { filter: 'var(--ps-drawing-filter)' } : undefined}
             />
           </div>
         )}
@@ -892,7 +895,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
           <div className="flex w-full items-start gap-1 sm:justify-center">
             <p
               className={`w-full font-extrabold leading-snug whitespace-pre-line break-words uppercase ${
-                isActive ? 'text-slate-950' : isPassed ? 'text-zinc-300' : 'text-[#F4F4F4]'
+                isActive ? 'text-slate-950' : isPassed ? 'text-[var(--ps-muted)]' : 'text-[var(--ps-text)]'
               } ${
                 compactPassed
                   ? 'text-[9.5px] sm:text-[11px]'
@@ -930,7 +933,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
               </span>
             )}
             {markup.noteText && (
-              <span className="max-w-full truncate rounded bg-zinc-900 px-1.5 py-0.5 text-[8px] font-bold text-amber-300 uppercase sm:text-[9px]">
+              <span className="max-w-full truncate rounded bg-[var(--ps-card-deep)] px-1.5 py-0.5 text-[8px] font-bold text-[var(--ps-amber)] uppercase sm:text-[9px]">
                 {markup.noteText}
               </span>
             )}
@@ -959,7 +962,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
           <div className="mt-1 w-full">
             <div
               className={`mb-0.5 flex items-center justify-between gap-1 font-mono text-[8.5px] font-extrabold leading-none tabular-nums sm:text-[10px] ${
-                isActive ? 'text-emerald-950' : 'text-emerald-400'
+                isActive ? 'text-emerald-950' : 'text-[var(--ps-emerald)]'
               }`}
             >
               <span className="truncate">
@@ -973,7 +976,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
             </div>
             <div
               className={`h-1 w-full overflow-hidden rounded-xs border sm:h-1.5 ${
-                isActive ? 'border-emerald-800 bg-white' : 'border-emerald-700/70 bg-[#080B0D]'
+                isActive ? 'border-emerald-800 bg-white' : 'border-emerald-600/70 bg-[var(--ps-card-deep)]'
               }`}
               aria-label={`Distância restante ${Math.round(barRemainingKm * 1000)} metros`}
             >
@@ -996,7 +999,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
                 onSyncHereAndIdealTime(realIdx);
                 onExitManualBrowse();
               }}
-              className="pitstop-btn-red inline-flex items-center gap-1 rounded px-2 py-1 font-mono text-[9px] font-extrabold tracking-wide text-white uppercase shadow sm:text-[10px]"
+              className="pitstop-btn-red inline-flex items-center gap-1 rounded px-2 py-1 font-mono text-[9px] font-extrabold tracking-wide uppercase shadow sm:text-[10px]"
             >
               <MapPin className="h-3 w-3" />
               <span>Estou Aqui</span>
@@ -1007,14 +1010,14 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
                 onSyncToTulipa(realIdx);
                 onExitManualBrowse();
               }}
-              className="rounded border border-zinc-600 bg-zinc-950 px-2 py-1 font-mono text-[9px] font-bold text-sky-300 hover:bg-zinc-800 sm:text-[10px]"
+              className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2 py-1 font-mono text-[9px] font-bold text-sky-400 hover:bg-[var(--ps-card)] sm:text-[10px]"
             >
               Só Hodômetro
             </button>
             <button
               type="button"
               onClick={() => onOpenContextMenu(realIdx)}
-              className="rounded border border-amber-500/40 bg-amber-950/60 px-2 py-1 font-mono text-[9px] font-bold text-amber-200 hover:bg-amber-900 sm:text-[10px]"
+              className="rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 font-mono text-[9px] font-bold text-[var(--ps-amber)] hover:bg-amber-500/25 sm:text-[10px]"
             >
               Opções
             </button>
@@ -2216,9 +2219,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     return (
       <div className="space-y-2.5">
         {opts.pairedHeader && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2 text-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[var(--ps-text)]">
             <div className="flex items-center gap-2">
-              <Link2 className="h-4 w-4 text-[#E10600]" />
+              <Link2 className="h-4 w-4 text-[var(--ps-accent)]" />
               <span className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
                 Droid Piloto · {opts.pairedHeader.roomCode}
               </span>
@@ -2228,17 +2231,17 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 type="button"
                 onClick={() => setSoundEnabled((s) => !s)}
                 title={soundEnabled ? 'Desativar som' : 'Ativar som'}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
                 {soundEnabled ? (
-                  <Volume2 className="h-4 w-4 text-[#E10600]" />
+                  <Volume2 className="h-4 w-4 text-[var(--ps-accent)]" />
                 ) : (
                   <VolumeX className="h-4 w-4" />
                 )}
               </button>
               <span
                 className={`font-mono text-[11px] font-bold ${
-                  opts.pairedHeader.connected ? 'text-emerald-400' : 'text-amber-400'
+                  opts.pairedHeader.connected ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-amber)]'
                 }`}
               >
                 {opts.pairedHeader.connected
@@ -2252,7 +2255,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
         <section className="grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-12">
           {hasLeft && (
             <div
-              className={`rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white sm:p-4 space-y-3 ${
+              className={`rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] sm:p-4 space-y-3 ${
                 hasRight ? 'md:col-span-7' : 'md:col-span-12'
               }`}
             >
@@ -2260,14 +2263,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <div className="flex flex-wrap items-end justify-between gap-2">
                   {pd.showDistance && (
                     <div>
-                      <p className="text-[11px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+                      <p className="text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                         {nonTimed && opts.pSectionRemMs !== null
                           ? opts.pSectionRemMs >= 0
                             ? `${opts.pType === 'N' ? 'Neutro' : 'Desloc.'} · V em ${formatHmsDuration(opts.pSectionRemMs)}`
                             : `Excedido +${formatHmsDuration(-opts.pSectionRemMs)}`
                           : `Falta Ref #${opts.tulNum}`}
                       </p>
-                      <p className="mt-0.5 font-mono text-4xl font-black leading-none tracking-tight text-amber-300 tabular-nums sm:text-5xl">
+                      <p className="mt-0.5 font-mono text-4xl font-black leading-none tracking-tight text-[var(--ps-amber)] tabular-nums sm:text-5xl">
                         {opts.distKm < 1
                           ? `${Math.round(opts.distKm * 1000)} m`
                           : `${opts.distKm.toFixed(2)} km`}
@@ -2275,16 +2278,16 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     </div>
                   )}
 
-                  <div className="flex flex-col items-start gap-0.5 text-left font-mono text-xs text-[#C0C4C9] sm:items-end sm:text-right">
+                  <div className="flex flex-col items-start gap-0.5 text-left font-mono text-xs text-[var(--ps-muted)] sm:items-end sm:text-right">
                     {pd.showOdometer && (
                       <span>
-                        Odo: <strong className="text-white">{opts.odoKm.toFixed(3)} km</strong>
+                        Odo: <strong className="text-[var(--ps-text)]">{opts.odoKm.toFixed(3)} km</strong>
                       </span>
                     )}
                     {pd.showDeltaMeters && opts.pDeltaMeters !== null && (
                       <span>
                         Dif:{' '}
-                        <strong className={opts.pDeltaMeters >= 0 ? 'text-emerald-400' : 'text-[#FF2A2A]'}>
+                        <strong className={opts.pDeltaMeters >= 0 ? 'text-[var(--ps-emerald)]' : 'text-[#FF2A2A]'}>
                           {opts.pDeltaMeters >= 0 ? '+' : ''}
                           {opts.pDeltaMeters} m
                         </strong>
@@ -2292,7 +2295,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     )}
                     {pd.showClock && (
                       <span>
-                        Hora: <strong className="text-white">{opts.pClockStr}</strong>
+                        Hora: <strong className="text-[var(--ps-text)]">{opts.pClockStr}</strong>
                       </span>
                     )}
                   </div>
@@ -2301,28 +2304,28 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
               {/* VELOCIDADE · MÉDIA · TNAV */}
               {metricCount > 0 && (
-                <div className={`grid ${metricsGridClass} gap-2 border-t border-zinc-800 pt-2.5 text-center font-mono tabular-nums`}>
+                <div className={`grid ${metricsGridClass} gap-2 border-t border-[var(--ps-border)] pt-2.5 text-center font-mono tabular-nums`}>
                   {pd.showSpeed && (
-                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-1.5 py-2.5 sm:py-3">
-                      <span className="block text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+                    <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-1.5 py-2.5 sm:py-3">
+                      <span className="block text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                         Velocidade
                       </span>
-                      <strong className="mt-1 block text-3xl font-black leading-none text-white sm:text-5xl">
+                      <strong className="mt-1 block text-3xl font-black leading-none text-[var(--ps-text)] sm:text-5xl">
                         {Math.round(opts.speed)}
                       </strong>
-                      <span className="mt-1 block text-[10px] text-zinc-500 uppercase">km/h</span>
+                      <span className="mt-1 block text-[10px] text-[var(--ps-muted)] uppercase">km/h</span>
                     </div>
                   )}
 
                   {pd.showTargetSpeed && (
-                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-1.5 py-2.5 sm:py-3">
-                      <span className="block text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+                    <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-1.5 py-2.5 sm:py-3">
+                      <span className="block text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                         Média
                       </span>
-                      <strong className="mt-1 block text-3xl font-black leading-none text-[#E10600] sm:text-5xl">
+                      <strong className="mt-1 block text-3xl font-black leading-none text-[var(--ps-accent)] sm:text-5xl">
                         {nonTimed ? opts.pType : opts.targetSpeed ?? '--'}
                       </strong>
-                      <span className="mt-1 block text-[10px] text-zinc-400 uppercase truncate">
+                      <span className="mt-1 block text-[10px] text-[var(--ps-muted)] uppercase truncate">
                         {opts.nextTargetSpeed != null
                           ? `Próx ${opts.nextTargetSpeed}`
                           : opts.nextType === 'D' || opts.nextType === 'N'
@@ -2335,26 +2338,26 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   )}
 
                   {pd.showTnav && (
-                    <div className="rounded-xl border border-zinc-800 bg-[#080B0D] px-1.5 py-2.5 sm:py-3">
-                      <span className="block text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+                    <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-1.5 py-2.5 sm:py-3">
+                      <span className="block text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                         TNAV
                       </span>
                       <strong
                         className={`mt-1 block text-2xl font-black leading-none sm:text-4xl ${
                           nonTimed
-                            ? 'text-[#C0C4C9]'
+                            ? 'text-[var(--ps-muted)]'
                             : opts.pDeltaSec === null
-                              ? 'text-zinc-500'
+                              ? 'text-[var(--ps-muted)]'
                               : Math.abs(opts.pDeltaSec) <= 0.5
-                                ? 'text-white'
+                                ? 'text-[var(--ps-text)]'
                                 : opts.pDeltaSec < 0
-                                  ? 'text-emerald-400'
+                                  ? 'text-[var(--ps-emerald)]'
                                   : 'text-[#FF2A2A]'
                         }`}
                       >
                         {nonTimed ? 'n.e.' : formatTnavReadout(opts.pDeltaSec)}
                       </strong>
-                      <span className="mt-1 block text-[10px] text-zinc-500 uppercase">
+                      <span className="mt-1 block text-[10px] text-[var(--ps-muted)] uppercase">
                         {nonTimed ? 'Livre' : 'Seg'}
                       </span>
                     </div>
@@ -2363,7 +2366,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               )}
 
               {pd.showColorBar && (
-                <div className="border-t border-zinc-800 pt-2.5">
+                <div className="border-t border-[var(--ps-border)] pt-2.5">
                   <TnavHorizontalColorBar deltaSec={opts.pDeltaSec} disabled={nonTimed} />
                 </div>
               )}
@@ -2372,7 +2375,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
           {hasRight && (
             <div
-              className={`flex flex-col justify-between gap-2.5 rounded-xl border border-zinc-800 bg-[#111214] p-3 text-white sm:p-4 ${
+              className={`flex flex-col justify-between gap-2.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] sm:p-4 ${
                 hasLeft ? 'md:col-span-5' : 'md:col-span-12'
               }`}
             >
@@ -2389,11 +2392,11 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     />
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-bold text-[#E10600] uppercase">
+                    <p className="text-[11px] font-bold text-[var(--ps-accent)] uppercase">
                       Tulipa #{opts.tulNum}
                     </p>
                     {pd.showCap && (
-                      <p className="mt-0.5 font-['Barlow_Condensed'] text-2xl font-bold text-white sm:text-3xl">
+                      <p className="mt-0.5 font-['Barlow_Condensed'] text-2xl font-bold text-[var(--ps-text)] sm:text-3xl">
                         {opts.pCap !== null ? `CAP ${opts.pCap}°` : `Trecho ${opts.pSection ?? '-'}`}
                       </p>
                     )}
@@ -2413,7 +2416,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     </div>
                   )}
                   {(opts.pNotes || !obsImg) && (
-                    <p className="mt-1.5 text-center text-sm font-extrabold text-white whitespace-pre-line break-words uppercase sm:text-base">
+                    <p className="mt-1.5 text-center text-sm font-extrabold text-[var(--ps-text)] whitespace-pre-line break-words uppercase sm:text-base">
                       {opts.pNotes || `Trecho ${opts.pType || '-'}`}
                     </p>
                   )}
@@ -2432,28 +2435,28 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
       if (!pairedTelemetry) {
         return (
           <div className="mx-auto max-w-xl space-y-3">
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3.5 py-2.5 text-white">
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 py-2.5 text-[var(--ps-text)]">
               <div className="flex items-center gap-2">
-                <Link2 className="h-4 w-4 text-[#E10600]" />
+                <Link2 className="h-4 w-4 text-[var(--ps-accent)]" />
                 <span className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
                   Droid Piloto · Sala {navSettings.pairing.roomCode}
                 </span>
               </div>
               <span
                 className={`font-mono text-xs font-bold ${
-                  pairingPresence.navigators > 0 ? 'text-emerald-400' : 'text-amber-400'
+                  pairingPresence.navigators > 0 ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-amber)]'
                 }`}
               >
                 {pairingPresence.navigators > 0 ? 'Navegador Online' : 'Aguardando Navegador'}
               </span>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-[#111214] p-6 text-center space-y-3">
-              <p className="text-sm font-semibold text-white">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-6 text-center space-y-3">
+              <p className="text-sm font-semibold text-[var(--ps-text)]">
                 Aguardando Navegador na sala{' '}
-                <strong className="font-mono text-[#E10600]">{navSettings.pairing.roomCode}</strong>
+                <strong className="font-mono text-[var(--ps-accent)]">{navSettings.pairing.roomCode}</strong>
               </p>
-              <p className="text-xs text-[#B5B5B5]">
-                Canal: <strong className="text-white">{pairingPresence.transport.toUpperCase()}</strong>
+              <p className="text-xs text-[var(--ps-muted)]">
+                Canal: <strong className="text-[var(--ps-text)]">{pairingPresence.transport.toUpperCase()}</strong>
               </p>
               <div className="flex justify-center gap-2 pt-1">
                 <button
@@ -2466,7 +2469,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <button
                   type="button"
                   onClick={() => setSoundEnabled((s) => !s)}
-                  className="rounded-lg border border-zinc-700 bg-[#080B0D] px-3 py-2 text-xs font-bold text-[#C0C4C9]"
+                  className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-2 text-xs font-bold text-[var(--ps-muted)]"
                 >
                   {soundEnabled ? 'Som Ativo' : 'Som Mudo'}
                 </button>
@@ -2509,19 +2512,19 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
     return (
       <div className="mx-auto max-w-2xl space-y-4">
-        <section className="relative overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-xl">
+        <section className="relative overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-xl">
           <div className="p-6 text-center sm:p-8">
-            <Compass className="mx-auto h-10 w-10 text-[#E10600]" />
-            <h2 className="mt-3 font-['Barlow_Condensed'] text-2xl font-bold italic text-white uppercase sm:text-3xl">
+            <Compass className="mx-auto h-10 w-10 text-[var(--ps-accent)]" />
+            <h2 className="mt-3 font-['Barlow_Condensed'] text-2xl font-bold italic text-[var(--ps-text)] uppercase sm:text-3xl">
               Nenhuma Planilha Ativa
             </h2>
-            <p className="mt-1.5 text-sm text-[#B5B5B5]">
+            <p className="mt-1.5 text-sm text-[var(--ps-muted)]">
               Importe ou selecione seu livro de bordo em{' '}
-              <strong className="text-white">Configurações &gt; Planilhas &amp; Livros de Bordo</strong>.
+              <strong className="text-[var(--ps-text)]">Configurações &gt; Planilhas &amp; Livros de Bordo</strong>.
             </p>
 
             {parseError && (
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-800/70 bg-red-950/50 p-3 text-left text-xs text-red-200">
+              <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/50 bg-red-500/15 p-3 text-left text-xs text-red-500">
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#FF2A2A]" />
                 <span>{parseError}</span>
               </div>
@@ -2532,7 +2535,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <button
                   type="button"
                   onClick={onOpenRoadbookSettings}
-                  className="pitstop-btn-red inline-flex min-h-[48px] items-center justify-center gap-2 rounded-lg px-6 text-sm font-extrabold tracking-wide text-white uppercase"
+                  className="pitstop-btn-red inline-flex min-h-[48px] items-center justify-center gap-2 rounded-lg px-6 text-sm font-extrabold tracking-wide uppercase"
                 >
                   <Database className="h-4 w-4" />
                   <span>Abrir Planilhas em Configurações</span>
@@ -2545,7 +2548,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 disabled={loadingSample}
                 className="pitstop-btn-metal inline-flex min-h-[48px] items-center justify-center gap-2 rounded-lg px-5 text-sm font-bold"
               >
-                <FileText className="h-4 w-4 text-[#E10600]" />
+                <FileText className="h-4 w-4 text-[var(--ps-accent)]" />
                 <span>{loadingSample ? 'Carregando...' : 'Testar com Modelo'}</span>
               </button>
             </div>
@@ -2562,19 +2565,19 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
   const regTone = isNonTimedSection
     ? {
-        text: 'text-[#C0C4C9]',
+        text: 'text-[var(--ps-muted)]',
         label:
           currentTulipa?.type === 'D'
             ? `Deslocamento ${formatHmsDuration(currentTulipa?.sectionDurationMs)}`
             : `Neutralização ${formatHmsDuration(currentTulipa?.sectionDurationMs)}`,
-        bg: 'bg-[#C0C4C9]',
+        bg: 'bg-[var(--ps-muted)]',
       }
     : deltaSec === null
-      ? { text: 'text-[#B5B5B5]', label: 'Aguardando largada', bg: 'bg-zinc-600' }
+      ? { text: 'text-[var(--ps-muted)]', label: 'Aguardando largada', bg: 'bg-zinc-500' }
       : Math.abs(deltaSec) <= 0.5
-        ? { text: 'text-emerald-400', label: 'NO TEMPO IDEAL', bg: 'bg-emerald-500' }
+        ? { text: 'text-[var(--ps-emerald)]', label: 'NO TEMPO IDEAL', bg: 'bg-emerald-500' }
         : deltaSec < 0
-          ? { text: 'text-emerald-400', label: 'ADIANTADO · TIRE O PÉ', bg: 'bg-emerald-500' }
+          ? { text: 'text-[var(--ps-emerald)]', label: 'ADIANTADO · TIRE O PÉ', bg: 'bg-emerald-500' }
           : { text: 'text-[#FF2A2A]', label: 'ATRASADO · ACELERE', bg: 'bg-[#E10600]' };
 
   const hasPmmChangeSoon =
@@ -2586,18 +2589,18 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
   return (
     <div className="space-y-2.5 sm:space-y-3">
       {/* Slim Clean Cockpit Action Bar (Event details moved into Funções) */}
-      <section className="overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-white shadow-lg">
+      <section className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-1.5 px-2.5 py-2 sm:px-4">
           <div className="flex flex-wrap items-center gap-1.5">
             {/* Layout Scenario: Navegador vs Piloto */}
-            <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-0.5">
+            <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
               <button
                 type="button"
                 onClick={() => setScenario('navegador')}
                 className={`min-h-[32px] rounded-md px-2.5 text-[11px] font-semibold transition-colors sm:text-xs ${
                   scenario === 'navegador'
-                    ? 'bg-zinc-800 text-white'
-                    : 'text-[#B5B5B5] hover:text-white'
+                    ? 'bg-[var(--ps-card)] text-[var(--ps-text)] shadow-xs'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                 }`}
               >
                 Navegador
@@ -2607,8 +2610,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 onClick={() => setScenario('piloto')}
                 className={`min-h-[32px] rounded-md px-2.5 text-[11px] font-semibold transition-colors sm:text-xs ${
                   scenario === 'piloto'
-                    ? 'bg-zinc-800 text-white'
-                    : 'text-[#B5B5B5] hover:text-white'
+                    ? 'bg-[var(--ps-card)] text-[var(--ps-text)] shadow-xs'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                 }`}
               >
                 Piloto
@@ -2616,14 +2619,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             </div>
 
             {/* Source: GPS vs Simulator */}
-            <div className="inline-flex rounded-lg border border-zinc-800 bg-[#080B0D] p-0.5">
+            <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
               <button
                 type="button"
                 onClick={() => setDriveSource('gps')}
                 className={`min-h-[32px] rounded-md px-2.5 text-[11px] font-semibold transition-colors sm:text-xs ${
                   driveSource === 'gps'
-                    ? 'bg-[#E10600] text-white'
-                    : 'text-[#B5B5B5] hover:text-white'
+                    ? 'pitstop-btn-red'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                 }`}
               >
                 GPS
@@ -2633,8 +2636,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 onClick={() => setDriveSource('simulator')}
                 className={`min-h-[32px] rounded-md px-2.5 text-[11px] font-semibold transition-colors sm:text-xs ${
                   driveSource === 'simulator'
-                    ? 'bg-[#E10600] text-white'
-                    : 'text-[#B5B5B5] hover:text-white'
+                    ? 'pitstop-btn-red'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                 }`}
               >
                 Simulador
@@ -2643,11 +2646,11 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
             {navSettings.pairing.enabled && (
               <span
-                className={`hidden sm:inline-flex items-center gap-1 rounded-md border border-zinc-800 bg-[#080B0D] px-2 py-1 font-mono text-[10px] font-bold ${
-                  pairingPresence.status === 'connected' ? 'text-emerald-400' : 'text-amber-400'
+                className={`hidden sm:inline-flex items-center gap-1 rounded-md border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1 font-mono text-[10px] font-bold ${
+                  pairingPresence.status === 'connected' ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-amber)]'
                 }`}
               >
-                <Link2 className="h-3 w-3 text-[#E10600]" />
+                <Link2 className="h-3 w-3 text-[var(--ps-accent)]" />
                 <span>{navSettings.pairing.roomCode}</span>
               </span>
             )}
@@ -2658,10 +2661,10 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               type="button"
               onClick={() => setSoundEnabled((s) => !s)}
               title={soundEnabled ? 'Desativar bipes e voz' : 'Ativar bipes e voz'}
-              className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white"
+              className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
             >
               {soundEnabled ? (
-                <Volume2 className="h-4 w-4 text-[#E10600]" />
+                <Volume2 className="h-4 w-4 text-[var(--ps-accent)]" />
               ) : (
                 <VolumeX className="h-4 w-4" />
               )}
@@ -2670,9 +2673,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             <button
               type="button"
               onClick={() => setFunctionsOpen(true)}
-              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 text-[11px] font-semibold text-[#F4F4F4] hover:bg-zinc-800 whitespace-nowrap shrink-0 sm:text-xs"
+              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-[11px] font-semibold text-[var(--ps-text)] hover:bg-[var(--ps-card)] whitespace-nowrap shrink-0 sm:text-xs"
             >
-              <Settings2 className="h-3.5 w-3.5 text-[#C0C4C9]" />
+              <Settings2 className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
               <span>Funções</span>
             </button>
 
@@ -2680,7 +2683,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               <button
                 type="button"
                 onClick={handleStartNavigation}
-                className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3.5 text-[11px] font-extrabold tracking-wide text-white uppercase whitespace-nowrap sm:text-xs"
+                className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap sm:text-xs"
               >
                 <Play className="h-3.5 w-3.5 fill-current" />
                 <span>Largada</span>
@@ -2689,9 +2692,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               <button
                 type="button"
                 onClick={() => setIsRunning(false)}
-                className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3.5 text-[11px] font-extrabold tracking-wide text-white uppercase whitespace-nowrap sm:text-xs"
+                className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap sm:text-xs"
               >
-                <Pause className="h-3.5 w-3.5 text-[#E10600]" />
+                <Pause className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                 <span>Pausar</span>
               </button>
             )}
@@ -2788,10 +2791,10 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
         {/* Simulator Speed Control Bar */}
         {driveSource === 'simulator' && (
-          <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800 bg-[#080B0D] px-4 py-2 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-t border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-4 py-2 sm:px-5">
             <div className="flex flex-1 items-center gap-3 min-w-[220px]">
-              <Gauge className="h-4 w-4 text-[#E10600] shrink-0" />
-              <span className="text-xs font-medium text-[#C0C4C9] whitespace-nowrap">
+              <Gauge className="h-4 w-4 text-[var(--ps-accent)] shrink-0" />
+              <span className="text-xs font-medium text-[var(--ps-muted)] whitespace-nowrap">
                 Simulador:
               </span>
               <input
@@ -2801,9 +2804,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 step={1}
                 value={simSpeedKmh}
                 onChange={(e) => setSimSpeedKmh(Number(e.target.value))}
-                className="h-1.5 flex-1 cursor-pointer appearance-none rounded bg-zinc-700 accent-[#E10600]"
+                className="h-1.5 flex-1 cursor-pointer appearance-none rounded bg-[var(--ps-border-strong)] accent-[var(--ps-accent)]"
               />
-              <span className="font-mono text-sm font-bold text-white tabular-nums w-20 text-right">
+              <span className="font-mono text-sm font-bold text-[var(--ps-text)] tabular-nums w-20 text-right">
                 {simSpeedKmh} km/h
               </span>
             </div>
@@ -2811,7 +2814,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               <button
                 type="button"
                 onClick={() => setSimSpeedKmh(Math.round(currentTulipa.avgSpeedKmh ?? 40))}
-                className="rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 py-1 text-xs font-medium text-[#F4F4F4] hover:bg-zinc-800 whitespace-nowrap"
+                className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 py-1 text-xs font-medium text-[var(--ps-text)] hover:border-[var(--ps-accent)] whitespace-nowrap"
               >
                 Cravar na Média ({currentTulipa.avgSpeedKmh} km/h)
               </button>
@@ -2834,7 +2837,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 tdnMs={currentTulipa?.tdnMs ?? currentTulipa?.sectionDurationMs}
               />
             </div>
-            <section className="overflow-hidden rounded-xl border border-zinc-800 bg-[#080B0D] p-2 text-white sm:p-3.5 lg:col-span-8">
+            <section className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2 text-[var(--ps-text)] sm:p-3.5 lg:col-span-8">
             {/* Row 1: HODÔMETRO (GPS) + TNAV + Barra Vertical de Regularidade */}
             <div className="grid grid-cols-12 gap-1.5 sm:gap-2">
               <div
@@ -2843,13 +2846,13 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 onMouseLeave={cancelLongPress}
                 onTouchStart={startLongPress}
                 onTouchEnd={cancelLongPress}
-                className="col-span-6 min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-zinc-800 bg-[#111214] px-2.5 py-1.5 select-none sm:col-span-7 sm:px-3 sm:py-2"
+                className="col-span-6 min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-1.5 select-none sm:col-span-7 sm:px-3 sm:py-2"
               >
                 <div className="flex items-center justify-between gap-1.5">
-                  <span className="truncate text-[9px] font-bold tracking-wider text-[#C0C4C9] uppercase sm:text-xs">
+                  <span className="truncate text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-xs">
                     Hodômetro ({navSettings.sensorMode === 'blue' ? 'Blue' : 'GPS'})
                   </span>
-                  <span className="font-mono text-[9px] text-[#E10600] tabular-nums shrink-0 sm:text-[10px]">
+                  <span className="font-mono text-[9px] text-[var(--ps-accent)] tabular-nums shrink-0 sm:text-[10px]">
                     {navSettings.sensorMode === 'blue'
                       ? `W${wValueFromCalibrationPct(calibrationPct, navSettings.wBaseValue)}`
                       : `${calibrationPct.toFixed(1)}%`}
@@ -2857,7 +2860,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </div>
                 <div
                   className={`mt-0.5 font-mono text-2xl font-extrabold leading-none tracking-tight tabular-nums sm:text-4xl lg:text-5xl ${
-                    isRunning ? 'text-[#FF2A2A]' : 'text-[#C0C4C9]'
+                    isRunning ? 'text-[#FF2A2A]' : 'text-[var(--ps-muted)]'
                   }`}
                 >
                   {(() => {
@@ -2868,22 +2871,22 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     return displayOdo.toFixed(3).replace('.', ',');
                   })()}
                 </div>
-                <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[9px] text-zinc-400 sm:text-[10px]">
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[9px] text-[var(--ps-muted)] sm:text-[10px]">
                   <span className="hidden sm:inline">Segure p/ Funções</span>
-                  <span className="truncate font-mono text-[#C0C4C9]">
+                  <span className="truncate font-mono text-[var(--ps-muted)]">
                     Parc {partialKm.toFixed(3).replace('.', ',')} · Acum {odometerKm.toFixed(2)}km
                   </span>
                 </div>
               </div>
 
-              <div className="col-span-6 min-w-0 overflow-hidden flex items-stretch gap-1.5 rounded-lg border border-zinc-800 bg-[#111214] px-2 py-1.5 sm:col-span-5 sm:gap-2 sm:px-2.5 sm:py-2">
+              <div className="col-span-6 min-w-0 overflow-hidden flex items-stretch gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 sm:col-span-5 sm:gap-2 sm:px-2.5 sm:py-2">
                 <div className="flex min-w-0 flex-1 flex-col justify-between">
                   <div className="flex items-center justify-between gap-1">
-                    <span className="text-[9px] font-bold tracking-wider text-[#C0C4C9] uppercase sm:text-xs">
+                    <span className="text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-xs">
                       TNAV
                     </span>
                     {deltaMeters !== null && (
-                      <span className="font-mono text-[9px] text-zinc-400 tabular-nums shrink-0 sm:text-[10px]">
+                      <span className="font-mono text-[9px] text-[var(--ps-muted)] tabular-nums shrink-0 sm:text-[10px]">
                         {deltaMeters > 0 ? '+' : ''}
                         {deltaMeters} m
                       </span>
@@ -2892,13 +2895,13 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   <div
                     className={`mt-0.5 font-mono text-2xl font-extrabold leading-none tracking-tight tabular-nums sm:text-4xl lg:text-5xl ${
                       isNonTimedSection
-                        ? 'text-[#C0C4C9]'
+                        ? 'text-[var(--ps-muted)]'
                         : deltaSec === null
-                          ? 'text-zinc-500'
+                          ? 'text-[var(--ps-muted)]'
                           : Math.abs(deltaSec) <= 0.5
-                            ? 'text-emerald-400'
+                            ? 'text-[var(--ps-emerald)]'
                             : deltaSec < 0
-                              ? 'text-emerald-400'
+                              ? 'text-[var(--ps-emerald)]'
                               : 'text-[#E10600]'
                     }`}
                   >
@@ -2929,31 +2932,31 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
             {/* Row 2: REGR PROX REF + VEL + MEDIA + KM REGR */}
             <div className="mt-1.5 grid grid-cols-4 gap-1.5 sm:mt-2 sm:grid-cols-12 sm:gap-2">
-              <div className="min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-zinc-800 bg-[#111214] px-1.5 py-1.5 text-center sm:col-span-4 sm:px-2.5 sm:py-2">
-                <span className="truncate text-[9px] font-bold tracking-tight text-[#C0C4C9] uppercase sm:text-[10px]">
+              <div className="min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-1.5 text-center sm:col-span-4 sm:px-2.5 sm:py-2">
+                <span className="truncate text-[9px] font-bold tracking-tight text-[var(--ps-muted)] uppercase sm:text-[10px]">
                   <span className="sm:hidden">Regr Próx</span>
                   <span className="hidden sm:inline">Regr Próx Ref</span>
                 </span>
-                <div className="my-0.5 font-mono text-base font-extrabold leading-tight text-amber-300 tabular-nums sm:my-1 sm:text-3xl">
+                <div className="my-0.5 font-mono text-base font-extrabold leading-tight text-[var(--ps-amber)] tabular-nums sm:my-1 sm:text-3xl">
                   {distToNextKm.toFixed(3).replace('.', ',')}
                 </div>
-                <span className="truncate font-mono text-[9px] text-zinc-400 sm:text-[10px]">
+                <span className="truncate font-mono text-[9px] text-[var(--ps-muted)] sm:text-[10px]">
                   Tul #{nextTulipa?.tulipa ?? currentTulipa?.tulipa ?? '-'}
                 </span>
               </div>
 
-              <div className="min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-zinc-800 bg-[#111214] px-1.5 py-1.5 text-center sm:col-span-3 sm:px-2 sm:py-2">
-                <span className="truncate text-[9px] font-bold tracking-tight text-[#C0C4C9] uppercase sm:text-[10px]">
+              <div className="min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-1.5 text-center sm:col-span-3 sm:px-2 sm:py-2">
+                <span className="truncate text-[9px] font-bold tracking-tight text-[var(--ps-muted)] uppercase sm:text-[10px]">
                   Vel
                 </span>
                 <div className="my-0.5 font-mono text-lg font-extrabold leading-tight text-[#FF2A2A] tabular-nums sm:my-1 sm:text-3xl">
                   {currentSpeedKmh.toFixed(0)}
                 </div>
-                <span className="font-mono text-[9px] text-zinc-400 sm:text-[10px]">km/h</span>
+                <span className="font-mono text-[9px] text-[var(--ps-muted)] sm:text-[10px]">km/h</span>
               </div>
 
-              <div className="min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-zinc-800 bg-[#111214] px-1.5 py-1.5 text-center sm:col-span-3 sm:px-2 sm:py-2">
-                <span className="truncate text-[9px] font-bold tracking-tight text-[#C0C4C9] uppercase sm:text-[10px]">
+              <div className="min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-1.5 text-center sm:col-span-3 sm:px-2 sm:py-2">
+                <span className="truncate text-[9px] font-bold tracking-tight text-[var(--ps-muted)] uppercase sm:text-[10px]">
                   <span className="sm:hidden">Média</span>
                   <span className="hidden sm:inline">Média (Vel/TDN)</span>
                 </span>
@@ -2969,7 +2972,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         : '--'
                     : '--'}
                 </div>
-                <span className="truncate font-mono text-[8.5px] text-zinc-400 sm:text-[10px]">
+                <span className="truncate font-mono text-[8.5px] text-[var(--ps-muted)] sm:text-[10px]">
                   {currentTulipa?.type === 'D'
                     ? `D ${formatTdnOrTime(currentTulipa.tdnMs ?? currentTulipa.sectionDurationMs)}`
                     : currentTulipa?.type === 'N'
@@ -2982,7 +2985,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 type="button"
                 onClick={() => syncToTulipa(activeTulipaIdx)}
                 title="Sincronizar / Zerar Hodômetro na Referência Atual"
-                className="min-w-0 overflow-hidden flex flex-col items-center justify-center gap-0.5 rounded-lg border-2 border-amber-200 bg-amber-400 px-1 py-1.5 text-zinc-950 transition-colors hover:bg-amber-300 active:bg-amber-500 sm:col-span-2 sm:gap-1 sm:py-2"
+                className="min-w-0 overflow-hidden flex flex-col items-center justify-center gap-0.5 rounded-lg border-2 border-amber-300 bg-amber-400 px-1 py-1.5 text-zinc-950 transition-colors hover:bg-amber-300 active:bg-amber-500 sm:col-span-2 sm:gap-1 sm:py-2"
               >
                 <RefreshCw className="h-4 w-4 stroke-[2.5] sm:h-6 sm:w-6" />
                 <span className="text-[8.5px] font-extrabold leading-tight tracking-tight uppercase sm:text-[10px]">
@@ -2993,27 +2996,27 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
             {/* Row 3: CRONO (PROVA / HORA DO DIA) + GPS Signal Bars */}
             <div className="mt-1.5 grid grid-cols-12 gap-1.5 sm:mt-2 sm:gap-2">
-              <div className="col-span-7 min-w-0 overflow-hidden flex items-center justify-between gap-1.5 rounded-lg border border-zinc-800 bg-[#111214] px-2.5 py-1.5 sm:px-3 sm:py-2">
+              <div className="col-span-7 min-w-0 overflow-hidden flex items-center justify-between gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-1.5 sm:px-3 sm:py-2">
                 <div className="min-w-0">
-                  <span className="block truncate text-[8.5px] font-bold tracking-wider text-zinc-400 uppercase sm:text-[9px]">
+                  <span className="block truncate text-[8.5px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-[9px]">
                     {isRunning ? `Crono · Hora ${formatClockMs(officialNowMs, false)}` : 'Hora do Dia (Oficial)'}
                   </span>
-                  <div className="truncate font-mono text-base font-extrabold leading-tight tracking-tight text-white tabular-nums sm:text-2xl">
+                  <div className="truncate font-mono text-base font-extrabold leading-tight tracking-tight text-[var(--ps-text)] tabular-nums sm:text-2xl">
                     {isRunning ? `R${formatElapsedMs(elapsedMs)}` : formatClockMs(officialNowMs, false)}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setPartialBaseKm(odometerKm)}
-                  className="shrink-0 rounded-lg border border-zinc-700 bg-[#1E1E22] px-2 py-1 text-[9px] font-bold text-[#C0C4C9] hover:bg-zinc-800 hover:text-white sm:px-2.5 sm:py-1.5 sm:text-[10px]"
+                  className="shrink-0 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 py-1 text-[9px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)] sm:px-2.5 sm:py-1.5 sm:text-[10px]"
                 >
                   Zerar
                 </button>
               </div>
 
-              <div className="col-span-5 min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-zinc-800 bg-[#111214] px-2.5 py-1.5 sm:px-3 sm:py-2">
+              <div className="col-span-5 min-w-0 overflow-hidden flex flex-col justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-1.5 sm:px-3 sm:py-2">
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-[9px] font-bold text-[#C0C4C9] uppercase sm:text-[10px]">
+                  <span className="text-[9px] font-bold text-[var(--ps-muted)] uppercase sm:text-[10px]">
                     {driveSource === 'gps' ? 'GPS' : 'SIM'}
                   </span>
                   <div className="flex items-end gap-0.5 shrink-0" aria-hidden="true">
@@ -3022,17 +3025,17 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         key={bar}
                         className={`w-1 rounded-xs sm:w-1.5 ${
                           driveSource === 'simulator'
-                            ? 'bg-[#E10600]'
+                            ? 'bg-[var(--ps-accent)]'
                             : gpsStatus.state === 'active'
-                              ? 'bg-emerald-400'
-                              : 'bg-zinc-700'
+                              ? 'bg-emerald-500'
+                              : 'bg-[var(--ps-border-strong)]'
                         }`}
                         style={{ height: `${bar * 3.5 + 2}px` }}
                       />
                     ))}
                   </div>
                 </div>
-                <div className="truncate font-mono text-[10px] font-bold tabular-nums text-zinc-200 sm:text-xs">
+                <div className="truncate font-mono text-[10px] font-bold tabular-nums text-[var(--ps-text)] sm:text-xs">
                   {driveSource === 'simulator'
                     ? `${simSpeedKmh} km/h`
                     : gpsStatus.state === 'active'
@@ -3045,9 +3048,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             </div>
 
             {/* Thin Visual Regularity Scale */}
-            <div className="mt-2 border-t border-zinc-800 pt-2">
-              <div className="relative h-2 w-full overflow-hidden rounded-full border border-zinc-800 bg-[#111214] sm:h-2.5">
-                <div className="absolute left-1/2 top-0 bottom-0 z-10 w-0.5 -translate-x-1/2 bg-[#C0C4C9]" />
+            <div className="mt-2 border-t border-[var(--ps-border)] pt-2">
+              <div className="relative h-2 w-full overflow-hidden rounded-full border border-[var(--ps-border)] bg-[var(--ps-surface)] sm:h-2.5">
+                <div className="absolute left-1/2 top-0 bottom-0 z-10 w-0.5 -translate-x-1/2 bg-[var(--ps-muted)]" />
                 <div
                   className={`absolute top-0.5 bottom-0.5 w-3 -translate-x-1/2 rounded-full transition-all duration-150 ${regTone.bg}`}
                   style={{ left: `${gaugePercent}%` }}
@@ -3059,15 +3062,15 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
           {/* --- PAINEL DE CONTEXTO COMPLETO DO TRECHO (D / N / V + PRÓXIMA TRANSIÇÃO) --- */}
           {currentTulipa && blockTelemetry && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3.5 py-2 text-xs text-[#F4F4F4]">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 py-2 text-xs text-[var(--ps-text)]">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span
                   className={`font-mono font-extrabold uppercase ${
                     currentTulipa.type === 'D'
-                      ? 'text-sky-400'
+                      ? 'text-sky-500'
                       : currentTulipa.type === 'N'
-                        ? 'text-amber-400'
-                        : 'text-[#E10600]'
+                        ? 'text-[var(--ps-amber)]'
+                        : 'text-[var(--ps-accent)]'
                   }`}
                 >
                   {currentTulipa.section !== null ? `T${currentTulipa.section} · ` : ''}
@@ -3079,9 +3082,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </span>
 
                 {isNonTimedSection ? (
-                  <span className="font-mono text-[#C0C4C9] tabular-nums">
+                  <span className="font-mono text-[var(--ps-muted)] tabular-nums">
                     Falta p/ saída:{' '}
-                    <strong className="text-white">
+                    <strong className="text-[var(--ps-text)]">
                       {blockTelemetry.distToBlockEndKm < 1
                         ? `${Math.round(blockTelemetry.distToBlockEndKm * 1000)} m`
                         : `${blockTelemetry.distToBlockEndKm.toFixed(2)} km`}
@@ -3090,7 +3093,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       <>
                         {' '}
                         · Início {blockTelemetry.nextBlockStartTulipa?.type || 'V'} às{' '}
-                        <strong className="text-sky-300">
+                        <strong className="text-sky-500">
                           {blockTelemetry.nextBlockStartTulipa?.idealTimeStr?.slice(0, 8) ||
                             formatHmsDuration(currentTulipa.sectionEndTimeMs)}
                         </strong>
@@ -3100,9 +3103,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 ) : (
                   blockTelemetry.nextChangeTulipa &&
                   blockTelemetry.distToNextChangeKm !== null && (
-                    <span className="font-mono text-[#C0C4C9] tabular-nums">
+                    <span className="font-mono text-[var(--ps-muted)] tabular-nums">
                       Próx.{' '}
-                      <strong className="text-amber-300">
+                      <strong className="text-[var(--ps-amber)]">
                         {blockTelemetry.nextChangeTulipa.type === 'D'
                           ? `D ${formatHmsDuration(blockTelemetry.nextChangeTulipa.sectionDurationMs)}`
                           : blockTelemetry.nextChangeTulipa.type === 'N'
@@ -3110,7 +3113,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                             : `${blockTelemetry.nextChangeTulipa.avgSpeedKmh?.toFixed(0) ?? '--'} km/h`}
                       </strong>{' '}
                       em{' '}
-                      <strong className="text-white">
+                      <strong className="text-[var(--ps-text)]">
                         {blockTelemetry.distToNextChangeKm < 1
                           ? `${Math.round(blockTelemetry.distToNextChangeKm * 1000)} m`
                           : `${blockTelemetry.distToNextChangeKm.toFixed(2)} km`}
@@ -3121,7 +3124,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 )}
               </div>
 
-              <span className="font-mono text-[11px] text-zinc-400 tabular-nums">
+              <span className="font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
                 Ref {activeTulipaIdx + 1}/{roadbook.tulipas.length} · Antecipação {transitionAdvanceM}m
               </span>
             </div>
@@ -3180,14 +3183,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
       {scenario === 'navegador' && (
         <div className="space-y-2.5 sm:space-y-3">
           {/* Sub-bar Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#111214] px-3 py-2 text-[#F4F4F4] sm:px-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[var(--ps-text)] sm:px-3.5">
             <div className="flex items-center gap-2">
-              <Compass className="h-4 w-4 text-[#E10600]" />
-              <span className="text-xs font-bold text-white">
+              <Compass className="h-4 w-4 text-[var(--ps-accent)]" />
+              <span className="text-xs font-bold text-[var(--ps-text)]">
                 Planilha Digital ({activeTulipaIdx + 1}/{roadbook.tulipas.length})
               </span>
               {hasPmmChangeSoon && nextTulipa && (
-                <span className="font-mono text-xs font-bold text-amber-400">
+                <span className="font-mono text-xs font-bold text-[var(--ps-amber)]">
                   · Próx:{' '}
                   {nextTulipa.type === 'N'
                     ? 'NEUTRO'
@@ -3199,12 +3202,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-[#C0C4C9] mr-1">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-[var(--ps-muted)] mr-1">
                 <input
                   type="checkbox"
                   checked={autoAdvance}
                   onChange={(e) => setAutoAdvance(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-zinc-600 accent-[#E10600]"
+                  className="h-3.5 w-3.5 rounded border-[var(--ps-border-strong)] accent-[var(--ps-accent)]"
                 />
                 <span>Troca auto ({transitionAdvanceM}m)</span>
               </label>
@@ -3215,8 +3218,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   onClick={() => setShowPassedRows((v) => !v)}
                   className={`inline-flex min-h-[34px] items-center rounded-lg border px-2.5 text-xs font-semibold ${
                     showPassedRows
-                      ? 'border-[#E10600] bg-[#E10600]/20 text-white'
-                      : 'border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
+                      ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                      : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                   }`}
                 >
                   {showPassedRows ? 'Ocultar anteriores' : `Anteriores (${activeTulipaIdx})`}
@@ -3227,7 +3230,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 type="button"
                 disabled={activeTulipaIdx === 0}
                 onClick={() => setActiveTulipaIdx((i) => Math.max(0, i - 1))}
-                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 text-xs font-semibold text-[#F4F4F4] hover:bg-zinc-800 disabled:opacity-40"
+                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:bg-[var(--ps-card)] disabled:opacity-40"
               >
                 <ChevronLeft className="h-3.5 w-3.5" />
                 <span>Anterior</span>
@@ -3240,7 +3243,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     Math.min(roadbook.tulipas.length - 1, i + 1)
                   )
                 }
-                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 text-xs font-semibold text-[#F4F4F4] hover:bg-zinc-800 disabled:opacity-40"
+                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:bg-[var(--ps-card)] disabled:opacity-40"
               >
                 <span>Próxima</span>
                 <ChevronRight className="h-3.5 w-3.5" />
@@ -3250,12 +3253,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
           {/* Sticky Banner during Long-Press Modo Livre */}
           {manualBrowseIdx !== null && roadbook.tulipas[manualBrowseIdx] && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-500/60 bg-sky-950/80 px-3 py-2 text-xs text-white shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-500/60 bg-sky-500/15 px-3 py-2 text-xs text-[var(--ps-text)] shadow-lg">
               <div className="min-w-0">
-                <p className="font-mono text-[10px] font-bold tracking-wider text-sky-300 uppercase">
+                <p className="font-mono text-[10px] font-bold tracking-wider text-sky-500 uppercase">
                   Modo Livre · Rolagem Manual (Cronômetro/Odo seguem ao vivo)
                 </p>
-                <p className="truncate font-bold text-white">
+                <p className="truncate font-bold text-[var(--ps-text)]">
                   Ref #{roadbook.tulipas[manualBrowseIdx].tulipa} selecionada ·{' '}
                   {formatKm3(
                     roadbook.tulipas[manualBrowseIdx].displayKm ??
@@ -3271,7 +3274,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     syncHereAndIdealTime(manualBrowseIdx);
                     exitManualBrowse();
                   }}
-                  className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1 rounded-lg px-3 text-[11px] font-extrabold text-white uppercase"
+                  className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1 rounded-lg px-3 text-[11px] font-extrabold uppercase"
                 >
                   <MapPin className="h-3.5 w-3.5" />
                   <span>Estou Aqui</span>
@@ -3279,7 +3282,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <button
                   type="button"
                   onClick={() => setContextMenuIdx(manualBrowseIdx)}
-                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-amber-500/50 bg-amber-950/50 px-2.5 text-[11px] font-bold text-amber-200 hover:bg-amber-950"
+                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-amber-500/50 bg-amber-500/15 px-2.5 text-[11px] font-bold text-[var(--ps-amber)] hover:bg-amber-500/25"
                 >
                   <PenTool className="h-3.5 w-3.5" />
                   <span>Marcar</span>
@@ -3287,7 +3290,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <button
                   type="button"
                   onClick={exitManualBrowse}
-                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-600 bg-[#080B0D] px-2.5 text-[11px] font-bold text-[#C0C4C9] hover:text-white"
+                  className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-[11px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                 >
                   <span>Retomar Auto</span>
                 </button>
@@ -3296,24 +3299,24 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
           )}
 
           {/* PLANILHA DIGITAL ESPELHO: Desenho | Tul | Distância | Vel/TDN | Tempo | Observação */}
-          <div className="overflow-hidden rounded-xl border border-zinc-700 bg-[#080B0D] text-[#F4F4F4] shadow-xl">
+          <div className="overflow-hidden rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-xl">
             {/* Table Column Header (explicit tracks prevent mobile cell overlap) */}
-            <div className="grid grid-cols-[40px_24px_54px_34px_42px_minmax(0,1fr)] sm:grid-cols-[68px_44px_100px_76px_88px_minmax(0,1fr)] md:grid-cols-[84px_52px_118px_88px_104px_minmax(0,1fr)] border-b border-zinc-700 bg-[#14161A] text-center text-[9px] font-bold tracking-wider uppercase text-[#C0C4C9] sm:text-xs">
-              <div className="min-w-0 overflow-hidden truncate border-r border-zinc-800 py-1.5 px-0.5 sm:px-1">
+            <div className="grid grid-cols-[40px_24px_54px_34px_42px_minmax(0,1fr)] sm:grid-cols-[68px_44px_100px_76px_88px_minmax(0,1fr)] md:grid-cols-[84px_52px_118px_88px_104px_minmax(0,1fr)] border-b border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-center text-[9px] font-bold tracking-wider uppercase text-[var(--ps-muted)] sm:text-xs">
+              <div className="min-w-0 overflow-hidden truncate border-r border-[var(--ps-border)] py-1.5 px-0.5 sm:px-1">
                 <span className="sm:hidden">Des.</span>
                 <span className="hidden sm:inline">Desenho</span>
               </div>
-              <div className="min-w-0 overflow-hidden truncate border-r border-zinc-800 py-1.5 px-0.5">Tul</div>
-              <div className="min-w-0 overflow-hidden truncate border-r border-zinc-800 py-1.5 px-0.5 sm:px-1">Distância</div>
-              <div className="min-w-0 overflow-hidden truncate border-r border-zinc-800 py-1.5 px-0.5 sm:px-1">Vel/TDN</div>
-              <div className="min-w-0 overflow-hidden truncate border-r border-zinc-800 py-1.5 px-0.5 sm:px-1">Tempo</div>
+              <div className="min-w-0 overflow-hidden truncate border-r border-[var(--ps-border)] py-1.5 px-0.5">Tul</div>
+              <div className="min-w-0 overflow-hidden truncate border-r border-[var(--ps-border)] py-1.5 px-0.5 sm:px-1">Distância</div>
+              <div className="min-w-0 overflow-hidden truncate border-r border-[var(--ps-border)] py-1.5 px-0.5 sm:px-1">Vel/TDN</div>
+              <div className="min-w-0 overflow-hidden truncate border-r border-[var(--ps-border)] py-1.5 px-0.5 sm:px-1">Tempo</div>
               <div className="min-w-0 overflow-hidden truncate py-1.5 px-1">Observação</div>
             </div>
 
             {/* Scrolling Rows (touch/wheel smooth scroll with hidden scrollbar) */}
-            <div className="no-scrollbar max-h-[54dvh] sm:max-h-[540px] divide-y divide-zinc-800/90 overflow-y-auto">
+            <div className="no-scrollbar max-h-[54dvh] sm:max-h-[540px] divide-y divide-[var(--ps-border)] overflow-y-auto">
               {planilhaRows.length === 0 ? (
-                <div className="p-6 text-center text-xs font-medium text-zinc-400">
+                <div className="p-6 text-center text-xs font-medium text-[var(--ps-muted)]">
                   Fim da planilha atingido. Use &quot;Anterior&quot; ou &quot;Funções &gt; Ir para Referência&quot; para reposicionar.
                 </div>
               ) : (
@@ -3387,14 +3390,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
           </div>
 
           {/* Bottom Manual Odometer Dock: F | - | Hodômetro & Passo | + | OK/Lap */}
-          <div className="grid grid-cols-[54px_56px_minmax(0,1fr)_56px_64px] items-stretch gap-1 rounded-xl border border-zinc-800 bg-[#080B0D] p-1 shadow-lg sm:grid-cols-[72px_72px_minmax(0,1fr)_72px_84px] sm:gap-1.5 sm:p-1.5">
+          <div className="grid grid-cols-[54px_56px_minmax(0,1fr)_56px_64px] items-stretch gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1 shadow-lg sm:grid-cols-[72px_72px_minmax(0,1fr)_72px_84px] sm:gap-1.5 sm:p-1.5">
             <button
               type="button"
               onClick={() => setFunctionsOpen(true)}
               title="Abrir Funções do Navegador"
-              className="flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-zinc-700 bg-[#111214] px-1 text-[#E10600] transition-colors hover:bg-zinc-800 active:bg-zinc-700"
+              className="flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-1 text-[var(--ps-accent)] transition-colors hover:bg-[var(--ps-card)]"
             >
-              <span className="text-[8px] font-bold tracking-wider text-[#C0C4C9] uppercase sm:text-[9px]">
+              <span className="text-[8px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-[9px]">
                 Função
               </span>
               <span className="font-mono text-lg font-black leading-none sm:text-xl">F</span>
@@ -3405,7 +3408,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               onClick={() => adjustOdometer(-manualStepKm)}
               title={`Diminuir hodômetro manualmente em ${Math.round(manualStepKm * 1000)}m`}
               aria-label={`Diminuir hodômetro em ${Math.round(manualStepKm * 1000)} metros`}
-              className="flex min-h-[44px] items-center justify-center rounded-lg border border-zinc-700 bg-[#111214] font-mono text-2xl font-black text-[#C0C4C9] transition-colors hover:bg-zinc-800 hover:text-white active:bg-zinc-700 sm:text-3xl"
+              className="flex min-h-[44px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] font-mono text-2xl font-black text-[var(--ps-muted)] transition-colors hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)] sm:text-3xl"
             >
               −
             </button>
@@ -3416,9 +3419,9 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 setManualStepKm((s) => (s === 0.01 ? 0.05 : s === 0.05 ? 0.1 : 0.01))
               }
               title="Toque para alternar o incremento manual (±10m, ±50m, ±100m)"
-              className="min-w-0 flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-zinc-700 bg-[#1E1E22] px-2 text-center text-white transition-colors hover:border-zinc-500"
+              className="min-w-0 flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 text-center text-[var(--ps-text)] transition-colors hover:border-[var(--ps-accent)]"
             >
-              <span className="truncate font-mono text-sm font-black leading-tight tabular-nums text-white sm:text-lg">
+              <span className="truncate font-mono text-sm font-black leading-tight tabular-nums text-[var(--ps-text)] sm:text-lg">
                 {(() => {
                   const sectionResetBase = currentTulipa
                     ? currentTulipa.totalKm - (currentTulipa.displayKm ?? currentTulipa.totalKm)
@@ -3427,7 +3430,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   return `${displayOdo.toFixed(3).replace('.', ',')} km`;
                 })()}
               </span>
-              <span className="font-mono text-[9px] font-bold text-[#C0C4C9] uppercase sm:text-[10px]">
+              <span className="font-mono text-[9px] font-bold text-[var(--ps-muted)] uppercase sm:text-[10px]">
                 Passo ±{Math.round(manualStepKm * 1000)}m
               </span>
             </button>
@@ -3437,7 +3440,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               onClick={() => adjustOdometer(manualStepKm)}
               title={`Aumentar hodômetro manualmente em ${Math.round(manualStepKm * 1000)}m`}
               aria-label={`Aumentar hodômetro em ${Math.round(manualStepKm * 1000)} metros`}
-              className="flex min-h-[44px] items-center justify-center rounded-lg border border-zinc-700 bg-[#111214] font-mono text-2xl font-black text-[#C0C4C9] transition-colors hover:bg-zinc-800 hover:text-white active:bg-zinc-700 sm:text-3xl"
+              className="flex min-h-[44px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] font-mono text-2xl font-black text-[var(--ps-muted)] transition-colors hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)] sm:text-3xl"
             >
               +
             </button>
@@ -3446,7 +3449,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               type="button"
               onClick={() => syncToTulipa(activeTulipaIdx)}
               title="Sincronizar hodômetro com a tulipa atual (OK / Lap)"
-              className="pitstop-btn-red flex min-h-[44px] flex-col items-center justify-center rounded-lg px-1 text-white transition-colors active:scale-[0.98]"
+              className="pitstop-btn-red flex min-h-[44px] flex-col items-center justify-center rounded-lg px-1 transition-colors active:scale-[0.98]"
             >
               <span className="font-mono text-base font-black leading-none sm:text-lg">OK</span>
               <span className="text-[8px] font-extrabold tracking-wide uppercase sm:text-[9px]">
@@ -3459,20 +3462,20 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
       {/* --- FUNÇÕES DO NAVEGADOR (PITSTOP SPORTS) --- */}
       {functionsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-xs sm:p-4">
-          <div className="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 backdrop-blur-xs sm:p-4">
+          <div className="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
             <div className="p-4 sm:p-6">
-              <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center justify-between border-b border-[var(--ps-border)] pb-3">
                 <div className="flex items-center gap-2">
-                  <SlidersHorizontal className="h-5 w-5 text-[#E10600]" />
-                  <h3 className="font-['Barlow_Condensed'] text-2xl font-bold italic text-white uppercase">
+                  <SlidersHorizontal className="h-5 w-5 text-[var(--ps-accent)]" />
+                  <h3 className="font-['Barlow_Condensed'] text-2xl font-bold italic text-[var(--ps-text)] uppercase">
                     Funções do Navegador
                   </h3>
                 </div>
                 <button
                   type="button"
                   onClick={() => setFunctionsOpen(false)}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg text-[#B5B5B5] hover:bg-zinc-800 hover:text-white"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--ps-muted)] hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)]"
                   aria-label="Fechar funções"
                 >
                   <X className="h-5 w-5" />
@@ -3480,28 +3483,28 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               </div>
 
               {/* Dados da Prova (Movidos do cabeçalho para cá) */}
-              <div className="mt-4 rounded-xl border border-zinc-800 bg-[#080B0D] p-3">
+              <div className="mt-4 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
                       className={`font-mono text-[10px] font-extrabold tracking-widest uppercase ${
-                        isRunning ? 'text-[#FF2A2A]' : 'text-[#C0C4C9]'
+                        isRunning ? 'text-[#FF2A2A]' : 'text-[var(--ps-muted)]'
                       }`}
                     >
                       {isRunning ? 'EM PROVA' : 'PRONTO'}
                     </span>
-                    <span className="truncate font-['Barlow_Condensed'] text-lg font-bold text-white">
+                    <span className="truncate font-['Barlow_Condensed'] text-lg font-bold text-[var(--ps-text)]">
                       {roadbook.eventName}
                     </span>
                   </div>
-                  <span className="font-mono text-xs font-bold text-[#C0C4C9] tabular-nums">
+                  <span className="font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
                     Hora: {formatClockMs(officialNowMs, false)}
                   </span>
                 </div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[11px] text-zinc-400">
+                <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[11px] text-[var(--ps-muted)]">
                   <span>
                     {driveSource === 'gps' ? 'GPS Real' : 'Simulador'} · Largada{' '}
-                    <strong className="text-[#F4F4F4]">{startTimeStr}</strong>
+                    <strong className="text-[var(--ps-text)]">{startTimeStr}</strong>
                   </span>
                   <span>
                     · {roadbook.sourceFormat || 'NBP'} ({roadbook.tulipas.length} refs ·{' '}
@@ -3509,15 +3512,15 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     {roadbook.raceParameters?.sectionsCount ?? '-'} seç.)
                   </span>
                   {driveSource === 'gps' && gpsStatus.state === 'active' && (
-                    <span className="text-emerald-400">· ±{gpsStatus.accuracyM ?? '--'}m</span>
+                    <span className="text-[var(--ps-emerald)]">· ±{gpsStatus.accuracyM ?? '--'}m</span>
                   )}
                 </div>
               </div>
 
               <div className="mt-4 space-y-5 text-sm">
                 {/* 1. Hora de Largada & Sincronização Hora do Dia */}
-                <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3.5">
-                  <label className="block text-xs font-semibold text-[#C0C4C9]">
+                <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5">
+                  <label className="block text-xs font-semibold text-[var(--ps-muted)]">
                     Hora Oficial de Largada &amp; Hora do Dia (GPS)
                   </label>
                   <div className="mt-1.5 flex flex-wrap gap-2">
@@ -3526,7 +3529,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       step="1"
                       value={startTimeStr}
                       onChange={(e) => setStartTimeStr(e.target.value)}
-                      className="flex-1 min-w-[140px] min-h-[40px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-3 font-mono text-sm font-semibold text-white focus:border-[#E10600] focus:outline-none"
+                      className="flex-1 min-w-[140px] min-h-[40px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 font-mono text-sm font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                     />
                     <button
                       type="button"
@@ -3537,48 +3540,48 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         setStartTimeStr(now);
                         setStartTimestampMs(parseRaceStartTimestampMs(d, now));
                       }}
-                      className="min-h-[40px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-3 text-xs font-semibold text-[#F4F4F4] hover:bg-zinc-800"
+                      className="min-h-[40px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-semibold text-[var(--ps-text)] hover:bg-[var(--ps-card)]"
                     >
-                      <Clock className="inline h-3.5 w-3.5 mr-1 text-[#C0C4C9]" />
+                      <Clock className="inline h-3.5 w-3.5 mr-1 text-[var(--ps-muted)]" />
                       Agora
                     </button>
                     <button
                       type="button"
                       onClick={handleSyncGpsClock}
-                      className="min-h-[40px] rounded-xl border border-[#E10600]/40 bg-[#E10600]/15 px-3 text-xs font-semibold text-red-300 hover:bg-[#E10600]/25"
+                      className="min-h-[40px] rounded-xl border border-[var(--ps-accent)]/50 bg-[var(--ps-accent-soft)] px-3 text-xs font-semibold text-[var(--ps-accent)] hover:brightness-110"
                     >
                       <Satellite className="inline h-3.5 w-3.5 mr-1" />
                       Sinc. Hora GPS
                     </button>
                   </div>
                   {clockSyncMsg && (
-                    <p className="mt-1.5 text-[11px] font-medium text-emerald-400">
+                    <p className="mt-1.5 text-[11px] font-medium text-[var(--ps-emerald)]">
                       {clockSyncMsg}
                     </p>
                   )}
                 </div>
 
                 {/* 2. W Fino (Totem Full Rally Calibration) */}
-                <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3.5">
+                <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <span className="text-xs font-bold tracking-wide text-white uppercase">
+                      <span className="text-xs font-bold tracking-wide text-[var(--ps-text)] uppercase">
                         W Fino / Fator CAL
                       </span>
-                      <p className="text-[11px] text-zinc-400">
+                      <p className="text-[11px] text-[var(--ps-muted)]">
                         {navSettings.sensorMode === 'blue'
                           ? 'Sensor Blue: toque no número para digitar W.'
                           : 'Modo GPS: ajuste fino de Fator CAL (%).'}
                       </p>
                     </div>
-                    <div className="inline-flex rounded-lg border border-zinc-800 bg-[#111214] p-0.5 text-[11px]">
+                    <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] p-0.5 text-[11px]">
                       <button
                         type="button"
                         onClick={() => updateNavSettings({ sensorMode: 'gps' })}
                         className={`rounded-md px-2.5 py-1 font-semibold ${
                           navSettings.sensorMode === 'gps'
-                            ? 'bg-[#E10600] text-white'
-                            : 'text-zinc-400'
+                            ? 'pitstop-btn-red'
+                            : 'text-[var(--ps-muted)]'
                         }`}
                       >
                         GPS (CAL%)
@@ -3588,8 +3591,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         onClick={() => updateNavSettings({ sensorMode: 'blue' })}
                         className={`rounded-md px-2.5 py-1 font-semibold ${
                           navSettings.sensorMode === 'blue'
-                            ? 'bg-[#E10600] text-white'
-                            : 'text-zinc-400'
+                            ? 'pitstop-btn-red'
+                            : 'text-[var(--ps-muted)]'
                         }`}
                       >
                         Sensor Blue (W)
@@ -3602,14 +3605,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     <button
                       type="button"
                       onClick={() => handleAdjustWFino(-1)}
-                      className="min-h-[42px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-2.5 font-mono text-xs font-extrabold text-[#C0C4C9] hover:bg-zinc-800"
+                      className="min-h-[42px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 font-mono text-xs font-extrabold text-[var(--ps-muted)] hover:bg-[var(--ps-card)]"
                     >
                       -1%
                     </button>
                     <button
                       type="button"
                       onClick={() => handleAdjustWFino(-0.1)}
-                      className="min-h-[42px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-3 font-mono text-sm font-black text-white hover:bg-zinc-800"
+                      className="min-h-[42px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 font-mono text-sm font-black text-[var(--ps-text)] hover:bg-[var(--ps-card)]"
                     >
                       −
                     </button>
@@ -3627,7 +3630,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                             if (e.key === 'Escape') setEditingWModal(false);
                           }}
                           onBlur={handleCommitWModalEdit}
-                          className="w-full min-h-[42px] rounded-xl border border-[#E10600] bg-black px-2 text-center font-mono text-base font-black text-white focus:outline-none"
+                          className="w-full min-h-[42px] rounded-xl border border-[var(--ps-accent)] bg-[var(--ps-surface)] px-2 text-center font-mono text-base font-black text-[var(--ps-text)] focus:outline-none"
                         />
                       </div>
                     ) : (
@@ -3635,14 +3638,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         type="button"
                         onClick={handleOpenWModalEdit}
                         title="Toque para digitar manualmente"
-                        className="flex min-h-[42px] flex-col items-center justify-center rounded-xl border border-[#E10600]/40 bg-black px-2 hover:border-[#FF2A2A]"
+                        className="flex min-h-[42px] flex-col items-center justify-center rounded-xl border border-[var(--ps-accent)]/50 bg-[var(--ps-surface)] px-2 hover:border-[var(--ps-accent)]"
                       >
-                        <span className="font-mono text-base font-black text-white tabular-nums">
+                        <span className="font-mono text-base font-black text-[var(--ps-text)] tabular-nums">
                           {navSettings.sensorMode === 'blue'
                             ? `W ${wValueFromCalibrationPct(calibrationPct, navSettings.wBaseValue)}`
                             : `${calibrationPct.toFixed(2)}%`}
                         </span>
-                        <span className="text-[9px] font-semibold text-zinc-400 uppercase">
+                        <span className="text-[9px] font-semibold text-[var(--ps-muted)] uppercase">
                           Toque p/ digitar
                         </span>
                       </button>
@@ -3651,14 +3654,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     <button
                       type="button"
                       onClick={() => handleAdjustWFino(0.1)}
-                      className="min-h-[42px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-3 font-mono text-sm font-black text-white hover:bg-zinc-800"
+                      className="min-h-[42px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 font-mono text-sm font-black text-[var(--ps-text)] hover:bg-[var(--ps-card)]"
                     >
                       +
                     </button>
                     <button
                       type="button"
                       onClick={() => handleAdjustWFino(1)}
-                      className="min-h-[42px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-2.5 font-mono text-xs font-extrabold text-[#C0C4C9] hover:bg-zinc-800"
+                      className="min-h-[42px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 font-mono text-xs font-extrabold text-[var(--ps-muted)] hover:bg-[var(--ps-card)]"
                     >
                       +1%
                     </button>
@@ -3671,12 +3674,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       placeholder="Km oficial do marco (ex: 10.00)"
                       value={officialMarcoKm}
                       onChange={(e) => setOfficialMarcoKm(e.target.value)}
-                      className="flex-1 min-h-[38px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-3 font-mono text-xs text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                      className="flex-1 min-h-[38px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 font-mono text-xs text-[var(--ps-text)] placeholder:text-[var(--ps-muted)] focus:border-[var(--ps-accent)] focus:outline-none"
                     />
                     <button
                       type="button"
                       onClick={handleCalibrateByMarco}
-                      className="min-h-[38px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-3 text-xs font-semibold text-white hover:bg-zinc-800 whitespace-nowrap"
+                      className="min-h-[38px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-semibold text-[var(--ps-text)] hover:bg-[var(--ps-card)] whitespace-nowrap"
                     >
                       Aferir pelo Marco
                     </button>
@@ -3684,8 +3687,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </div>
 
                 {/* 3. Road Book Digital & Cantada Regressiva */}
-                <div className="rounded-xl border border-zinc-800 bg-[#080B0D] p-3.5 space-y-3">
-                  <span className="block text-xs font-bold tracking-wide text-white uppercase">
+                <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5 space-y-3">
+                  <span className="block text-xs font-bold tracking-wide text-[var(--ps-text)] uppercase">
                     Road Book Digital &amp; Cantada de Voz
                   </span>
 
@@ -3695,8 +3698,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       onClick={() => updateNavSettings({ activeRowLine: 1 })}
                       className={`min-h-[36px] rounded-lg px-2.5 text-xs font-semibold ${
                         navSettings.activeRowLine === 1
-                          ? 'bg-[#E10600] text-white'
-                          : 'border border-zinc-700 bg-[#1E1E22] text-[#C0C4C9]'
+                          ? 'pitstop-btn-red'
+                          : 'border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
                       }`}
                     >
                       Ref. da Vez: Linha 1 (Topo)
@@ -3706,15 +3709,15 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       onClick={() => updateNavSettings({ activeRowLine: 2 })}
                       className={`min-h-[36px] rounded-lg px-2.5 text-xs font-semibold ${
                         navSettings.activeRowLine === 2
-                          ? 'bg-[#E10600] text-white'
-                          : 'border border-zinc-700 bg-[#1E1E22] text-[#C0C4C9]'
+                          ? 'pitstop-btn-red'
+                          : 'border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
                       }`}
                     >
                       Ref. da Vez: Linha 2
                     </button>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-[#C0C4C9]">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--ps-muted)]">
                     <label className="inline-flex cursor-pointer items-center gap-1.5">
                       <input
                         type="checkbox"
@@ -3722,7 +3725,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         onChange={(e) =>
                           updateNavSettings({ reducePassedRow: e.target.checked })
                         }
-                        className="h-3.5 w-3.5 accent-[#E10600]"
+                        className="h-3.5 w-3.5 accent-[var(--ps-accent)]"
                       />
                       <span>Reduzir passada</span>
                     </label>
@@ -3733,7 +3736,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         onChange={(e) =>
                           updateNavSettings({ showPassedTick: e.target.checked })
                         }
-                        className="h-3.5 w-3.5 accent-[#E10600]"
+                        className="h-3.5 w-3.5 accent-[var(--ps-accent)]"
                       />
                       <span>✓ Verde na passada</span>
                     </label>
@@ -3744,14 +3747,14 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         onChange={(e) =>
                           updateNavSettings({ voiceEnabled: e.target.checked })
                         }
-                        className="h-3.5 w-3.5 accent-[#E10600]"
+                        className="h-3.5 w-3.5 accent-[var(--ps-accent)]"
                       />
                       <span>Cantada de Voz (pt-BR)</span>
                     </label>
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-zinc-400">
+                    <span className="text-[11px] font-semibold text-[var(--ps-muted)]">
                       Tema da Referência:
                     </span>
                     <div className="flex items-center gap-1.5">
@@ -3766,8 +3769,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                           onClick={() => updateNavSettings({ highlightTheme: theme.id })}
                           className={`rounded-lg px-2.5 py-1 text-[11px] font-bold ${
                             navSettings.highlightTheme === theme.id
-                              ? 'bg-[#E10600] text-white'
-                              : 'border border-zinc-700 bg-[#1E1E22] text-[#C0C4C9]'
+                              ? 'pitstop-btn-red'
+                              : 'border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
                           }`}
                         >
                           {theme.label}
@@ -3779,7 +3782,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
                 {/* 4. Antecipação de Troca de Referência */}
                 <div>
-                  <div className="flex items-center justify-between text-xs font-semibold text-[#C0C4C9]">
+                  <div className="flex items-center justify-between text-xs font-semibold text-[var(--ps-muted)]">
                     <span>Troca Antecipada de Referência</span>
                     <span className="font-mono text-[#FF2A2A]">{transitionAdvanceM}m</span>
                   </div>
@@ -3791,8 +3794,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                         onClick={() => setTransitionAdvanceM(m)}
                         className={`min-h-[34px] rounded-lg font-mono text-xs font-semibold ${
                           transitionAdvanceM === m
-                            ? 'bg-[#E10600] text-white'
-                            : 'border border-zinc-700 bg-[#1E1E22] text-[#C0C4C9] hover:bg-zinc-800'
+                            ? 'pitstop-btn-red'
+                            : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                         }`}
                       >
                         {m}m
@@ -3803,7 +3806,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
 
                 {/* 5. Ir para Tulipa / Reposicionar */}
                 <div>
-                  <span className="block text-xs font-semibold text-[#C0C4C9]">
+                  <span className="block text-xs font-semibold text-[var(--ps-muted)]">
                     Ir para Referência / Reposicionar
                   </span>
                   <div className="mt-1.5 flex gap-2">
@@ -3812,12 +3815,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       placeholder="Nº da tulipa (ex: 27)"
                       value={jumpTulipaNum}
                       onChange={(e) => setJumpTulipaNum(e.target.value)}
-                      className="flex-1 min-h-[40px] rounded-xl border border-zinc-700 bg-[#080B0D] px-3 font-mono text-xs text-white placeholder:text-zinc-500 focus:border-[#E10600] focus:outline-none"
+                      className="flex-1 min-h-[40px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 font-mono text-xs text-[var(--ps-text)] placeholder:text-[var(--ps-muted)] focus:border-[var(--ps-accent)] focus:outline-none"
                     />
                     <button
                       type="button"
                       onClick={handleJumpToTulipa}
-                      className="min-h-[40px] rounded-xl border border-zinc-700 bg-[#1E1E22] px-4 text-xs font-semibold text-white hover:bg-zinc-800"
+                      className="min-h-[40px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-4 text-xs font-semibold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                     >
                       Ir e Sincronizar
                     </button>
@@ -3825,23 +3828,23 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </div>
 
                 {/* 6. Planilhas em Configurações */}
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ps-border)] pt-4">
                   <button
                     type="button"
                     onClick={() => {
                       setFunctionsOpen(false);
                       onOpenRoadbookSettings?.();
                     }}
-                    className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-zinc-700 bg-[#1E1E22] px-3.5 text-xs font-semibold text-[#F4F4F4] hover:bg-zinc-800"
+                    className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3.5 text-xs font-semibold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                   >
-                    <Database className="h-3.5 w-3.5 text-[#E10600]" />
+                    <Database className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                     <span>Configurações &gt; Planilhas</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setFunctionsOpen(false)}
-                    className="pitstop-btn-red min-h-[40px] rounded-xl px-5 text-xs font-extrabold tracking-wide text-white uppercase"
+                    className="pitstop-btn-red min-h-[40px] rounded-xl px-5 text-xs font-extrabold tracking-wide uppercase"
                   >
                     Concluir
                   </button>
@@ -3859,7 +3862,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
           onClick={() => setContextMenuIdx(null)}
         >
           <div
-            className="w-full max-w-md overflow-hidden rounded-xl border border-zinc-800 bg-[#111214] text-[#F4F4F4] shadow-2xl"
+            className="w-full max-w-md overflow-hidden rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-4 sm:p-5">
@@ -3867,12 +3870,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 const targetTul = roadbook.tulipas[contextMenuIdx];
                 return (
                   <>
-                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <div className="flex items-center justify-between border-b border-[var(--ps-border)] pb-3">
                       <div>
-                        <span className="font-mono text-[10px] font-bold tracking-widest text-[#E10600] uppercase">
+                        <span className="font-mono text-[10px] font-bold tracking-widest text-[var(--ps-accent)] uppercase">
                           Ações da Referência
                         </span>
-                        <h3 className="font-['Barlow_Condensed'] text-2xl font-extrabold italic text-white">
+                        <h3 className="font-['Barlow_Condensed'] text-2xl font-extrabold italic text-[var(--ps-text)]">
                           Tulipa #{targetTul.tulipa} ·{' '}
                           {(targetTul.displayKm ?? targetTul.totalKm).toFixed(3).replace('.', ',')} km
                         </h3>
@@ -3880,7 +3883,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       <button
                         type="button"
                         onClick={() => setContextMenuIdx(null)}
-                        className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                        className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--ps-muted)] hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)]"
                         aria-label="Fechar ações"
                       >
                         <X className="h-5 w-5" />
@@ -3894,12 +3897,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                           syncToTulipa(contextMenuIdx);
                           setContextMenuIdx(null);
                         }}
-                        className="pitstop-btn-red flex min-h-[46px] w-full items-center gap-3 rounded-xl px-4 text-left text-sm font-bold text-white"
+                        className="pitstop-btn-red flex min-h-[46px] w-full items-center gap-3 rounded-xl px-4 text-left text-sm font-bold"
                       >
                         <MapPin className="h-5 w-5 shrink-0" />
                         <div>
                           <div>Estou Aqui (AQUI)</div>
-                          <div className="text-[11px] font-normal text-red-100">
+                          <div className="text-[11px] font-normal opacity-85">
                             Zera o hodômetro para esta referência mantendo o cronômetro
                           </div>
                         </div>
@@ -3911,12 +3914,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                           syncHereAndIdealTime(contextMenuIdx);
                           setContextMenuIdx(null);
                         }}
-                        className="flex min-h-[46px] w-full items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-4 py-2 text-left text-sm font-bold text-emerald-200 hover:bg-emerald-950/70"
+                        className="flex min-h-[46px] w-full items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2 text-left text-sm font-bold text-[var(--ps-emerald)] hover:bg-emerald-500/25"
                       >
-                        <Clock className="h-5 w-5 shrink-0 text-emerald-400" />
+                        <Clock className="h-5 w-5 shrink-0" />
                         <div>
                           <div>Estou Aqui + Ajustar Tempo Ideal</div>
-                          <div className="text-[11px] font-normal text-emerald-300/80">
+                          <div className="text-[11px] font-normal opacity-80">
                             Alinha hodômetro e cronômetro ao tempo ideal desta tulipa
                           </div>
                         </div>
@@ -3928,12 +3931,12 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                           setMarkupTargetTulipa(targetTul);
                           setContextMenuIdx(null);
                         }}
-                        className="flex min-h-[46px] w-full items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-950/30 px-4 py-2 text-left text-sm font-bold text-amber-200 hover:bg-amber-950/60"
+                        className="flex min-h-[46px] w-full items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/15 px-4 py-2 text-left text-sm font-bold text-[var(--ps-amber)] hover:bg-amber-500/25"
                       >
-                        <PenTool className="h-5 w-5 shrink-0 text-amber-400" />
+                        <PenTool className="h-5 w-5 shrink-0" />
                         <div>
                           <div>Marcar Roubo / Marcações</div>
-                          <div className="text-[11px] font-normal text-amber-200/80">
+                          <div className="text-[11px] font-normal opacity-80">
                             Desenhar na tulipa, anotar texto ou gravar nota de voz
                           </div>
                         </div>
@@ -3942,7 +3945,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                       <button
                         type="button"
                         onClick={() => setContextMenuIdx(null)}
-                        className="min-h-[42px] w-full rounded-xl border border-zinc-700 bg-[#1E1E22] text-xs font-semibold text-[#C0C4C9] hover:bg-zinc-800"
+                        className="min-h-[42px] w-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-xs font-semibold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                       >
                         Cancelar
                       </button>

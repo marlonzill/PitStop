@@ -667,7 +667,10 @@ export function recalculateRunsForTrack(
       const curr = run.samples[i];
 
       if (startMs === null) {
-        const startHit = detectTrapCrossing(prev, curr, startTrap);
+        const startHit = detectTrapCrossing(prev, curr, startTrap, {
+          hdopAccuracyM: 25,
+          autoSnap: true,
+        });
         if (startHit) {
           startMs = startHit.crossTimestampMs;
           continue;
@@ -678,13 +681,19 @@ export function recalculateRunsForTrack(
 
       for (const sp of ordered) {
         if (sp.kind !== 'split' || splits[sp.id] !== undefined) continue;
-        const spHit = detectTrapCrossing(prev, curr, sp);
+        const spHit = detectTrapCrossing(prev, curr, sp, {
+          hdopAccuracyM: 30,
+          autoSnap: true,
+        });
         if (spHit && spHit.crossTimestampMs >= startMs) {
           splits[sp.id] = spHit.crossTimestampMs - startMs;
         }
       }
 
-      const finHit = detectTrapCrossing(prev, curr, finishTrap);
+      const finHit = detectTrapCrossing(prev, curr, finishTrap, {
+        hdopAccuracyM: 30,
+        autoSnap: true,
+      });
       const minLapMs = finishTrap.id === startTrap.id ? 6000 : 100;
       if (finHit && finHit.crossTimestampMs - startMs >= minLapMs) {
         finishMs = finHit.crossTimestampMs;
@@ -701,18 +710,53 @@ export function recalculateRunsForTrack(
         const curr = run.samples[i];
         for (const sp of ordered) {
           if (sp.kind !== 'split' || splits[sp.id] !== undefined) continue;
-          const spHit = detectTrapCrossing(prev, curr, sp);
+          const spHit = detectTrapCrossing(prev, curr, sp, {
+            hdopAccuracyM: 30,
+            autoSnap: true,
+          });
           if (spHit && spHit.crossTimestampMs >= fallbackStart) {
             splits[sp.id] = spHit.crossTimestampMs - fallbackStart;
           }
         }
-        const finHit = detectTrapCrossing(prev, curr, finishTrap);
+        const finHit = detectTrapCrossing(prev, curr, finishTrap, {
+          hdopAccuracyM: 30,
+          autoSnap: true,
+        });
         if (finHit && finHit.crossTimestampMs - fallbackStart >= 1000) {
           startMs = fallbackStart;
           finishMs = finHit.crossTimestampMs;
           splits[finishTrap.id] = finishMs - startMs;
           break;
         }
+      }
+    }
+
+    // Nearest-sample fallback for any intermediate split still missing when run completed cleanly
+    const resolvedTotalMs =
+      startMs !== null && finishMs !== null && finishMs > startMs ? finishMs - startMs : run.totalMs;
+    if (resolvedTotalMs > 0) {
+      const baseStart = startMs ?? run.startedAtMs ?? run.samples[0].timestampMs;
+      for (const sp of ordered) {
+        if (sp.kind !== 'split' || splits[sp.id] !== undefined) continue;
+        let minDistM = Infinity;
+        let nearestElapsedMs: number | null = null;
+        for (let i = 1; i < run.samples.length; i += 1) {
+          const s = run.samples[i];
+          const dM = haversineMetersVel(s.lat, s.lon, sp.lat, sp.lon);
+          if (dM < minDistM) {
+            minDistM = dM;
+            nearestElapsedMs =
+              Number.isFinite(s.stageElapsedMs) && s.stageElapsedMs > 0
+                ? s.stageElapsedMs
+                : Math.max(0, s.timestampMs - baseStart);
+          }
+        }
+        if (minDistM <= 140 && nearestElapsedMs !== null) {
+          splits[sp.id] = nearestElapsedMs;
+        }
+      }
+      if (splits[finishTrap.id] === undefined) {
+        splits[finishTrap.id] = resolvedTotalMs;
       }
     }
 
@@ -723,6 +767,13 @@ export function recalculateRunsForTrack(
         finishedAtMs: finishMs,
         totalMs: finishMs - startMs,
         splitTimesMs: splits,
+      };
+    }
+
+    if (Object.keys(splits).length > Object.keys(run.splitTimesMs ?? {}).length) {
+      return {
+        ...run,
+        splitTimesMs: { ...run.splitTimesMs, ...splits },
       };
     }
 
@@ -2766,4 +2817,428 @@ export function computeBrakePointOffsetNearDist(
     offsetM: Math.round(nearestCmp - nearestRef),
   };
 }
+
+export interface MapSpeedBadgePoint {
+  lat: number;
+  lon: number;
+  distM: number;
+  speedKmh: number;
+  kind: 'peak' | 'apex';
+}
+
+/**
+ * Extrai etiquetas numéricas de velocidade críticas para plotagem no mapa estilo RaceChrono:
+ * - peak (verde): picos de velocidade máxima antes de zonas de frenagem
+ * - apex (vermelho): pontos de menor velocidade no ápice de curvas
+ */
+export function extractMapSpeedBadges(
+  rawSamples: VelocitySample[]
+): MapSpeedBadgePoint[] {
+  const samples = ensureTraceGForces(rawSamples);
+  if (samples.length < 6) return [];
+
+  const totalDistM = Math.max(100, samples[samples.length - 1].distKm * 1000);
+  const minPeakSpacingM = Math.max(65, totalDistM * 0.085);
+  const badges: MapSpeedBadgePoint[] = [];
+
+  const peakCandidates: Array<{ idx: number; distM: number; speedKmh: number }> = [];
+  const apexCandidates: Array<{ idx: number; distM: number; speedKmh: number; drop: number }> = [];
+
+  for (let i = 2; i < samples.length - 2; i += 1) {
+    const curr = samples[i].speedKmh || 0;
+    const prev = samples[i - 1].speedKmh || 0;
+    const next = samples[i + 1].speedKmh || 0;
+
+    // Local peak before deceleration
+    if (curr >= prev && curr > next && curr >= 22) {
+      let minAfter = curr;
+      for (let f = i + 1; f < Math.min(samples.length, i + 14); f += 1) {
+        minAfter = Math.min(minAfter, samples[f].speedKmh || 0);
+      }
+      if (curr - minAfter >= 7) {
+        peakCandidates.push({
+          idx: i,
+          distM: Math.round(samples[i].distKm * 1000),
+          speedKmh: Math.round(curr),
+        });
+      }
+    }
+
+    // Local corner apex minimum after deceleration
+    if (curr <= prev && curr < next && curr >= 6) {
+      let maxBefore = curr;
+      for (let b = Math.max(0, i - 14); b < i; b += 1) {
+        maxBefore = Math.max(maxBefore, samples[b].speedKmh || 0);
+      }
+      const drop = maxBefore - curr;
+      if (drop >= 9) {
+        apexCandidates.push({
+          idx: i,
+          distM: Math.round(samples[i].distKm * 1000),
+          speedKmh: Math.round(curr),
+          drop,
+        });
+      }
+    }
+  }
+
+  // Always include global top speed if not already captured
+  let globalTopIdx = 0;
+  for (let i = 1; i < samples.length; i += 1) {
+    if ((samples[i].speedKmh || 0) > (samples[globalTopIdx].speedKmh || 0)) {
+      globalTopIdx = i;
+    }
+  }
+  if ((samples[globalTopIdx].speedKmh || 0) >= 20) {
+    peakCandidates.push({
+      idx: globalTopIdx,
+      distM: Math.round(samples[globalTopIdx].distKm * 1000),
+      speedKmh: Math.round(samples[globalTopIdx].speedKmh),
+    });
+  }
+
+  const chosenPeaks: MapSpeedBadgePoint[] = [];
+  for (const cand of peakCandidates.sort((a, b) => b.speedKmh - a.speedKmh)) {
+    if (chosenPeaks.length >= 6) break;
+    const s = samples[cand.idx];
+    const tooClose = chosenPeaks.some(
+      (p) => haversineMetersVel(p.lat, p.lon, s.lat, s.lon) < minPeakSpacingM
+    );
+    if (!tooClose) {
+      chosenPeaks.push({
+        lat: s.lat,
+        lon: s.lon,
+        distM: cand.distM,
+        speedKmh: cand.speedKmh,
+        kind: 'peak',
+      });
+    }
+  }
+
+  const chosenApexes: MapSpeedBadgePoint[] = [];
+  for (const cand of apexCandidates.sort((a, b) => b.drop - a.drop)) {
+    if (chosenApexes.length >= 6) break;
+    const s = samples[cand.idx];
+    const tooClose =
+      chosenApexes.some(
+        (p) => haversineMetersVel(p.lat, p.lon, s.lat, s.lon) < minPeakSpacingM
+      ) ||
+      chosenPeaks.some((p) => haversineMetersVel(p.lat, p.lon, s.lat, s.lon) < 35);
+    if (!tooClose) {
+      chosenApexes.push({
+        lat: s.lat,
+        lon: s.lon,
+        distM: cand.distM,
+        speedKmh: cand.speedKmh,
+        kind: 'apex',
+      });
+    }
+  }
+
+  badges.push(...chosenPeaks, ...chosenApexes);
+  return badges.sort((a, b) => a.distM - b.distM);
+}
+
+export interface FrictionCircleMetrics {
+  peakBrakeG: number;
+  peakAccelG: number;
+  peakLatG: number;
+  peakCombinedG: number;
+  trailBrakingPct: number;
+}
+
+/**
+ * Calcula picos e eficiência do Círculo de Atrito (Diagrama G-G) para uma volta.
+ */
+export function computeFrictionCircleMetrics(
+  rawSamples: VelocitySample[]
+): FrictionCircleMetrics {
+  const samples = ensureTraceGForces(rawSamples);
+  if (samples.length === 0) {
+    return {
+      peakBrakeG: 0,
+      peakAccelG: 0,
+      peakLatG: 0,
+      peakCombinedG: 0,
+      trailBrakingPct: 0,
+    };
+  }
+
+  let peakBrakeG = 0;
+  let peakAccelG = 0;
+  let peakLatG = 0;
+  let peakCombinedG = 0;
+  let cornerSamples = 0;
+  let trailBrakeSamples = 0;
+
+  for (const s of samples) {
+    const longG = s.accelLongG ?? 0;
+    const latG = s.accelLatG ?? 0;
+    const absLat = Math.abs(latG);
+    const combined = Math.hypot(latG, longG);
+
+    if (longG < peakBrakeG) peakBrakeG = longG;
+    if (longG > peakAccelG) peakAccelG = longG;
+    if (absLat > peakLatG) peakLatG = absLat;
+    if (combined > peakCombinedG) peakCombinedG = combined;
+
+    if (absLat >= 0.25 || longG <= -0.25) {
+      cornerSamples += 1;
+      if (absLat >= 0.2 && longG <= -0.15) {
+        trailBrakeSamples += 1;
+      }
+    }
+  }
+
+  return {
+    peakBrakeG: Number(peakBrakeG.toFixed(2)),
+    peakAccelG: Number(peakAccelG.toFixed(2)),
+    peakLatG: Number(peakLatG.toFixed(2)),
+    peakCombinedG: Number(peakCombinedG.toFixed(2)),
+    trailBrakingPct:
+      cornerSamples > 0 ? Math.round((trailBrakeSamples / cornerSamples) * 100) : 0,
+  };
+}
+
+export interface CornerBrakingLapEntry {
+  slot: 1 | 2 | 3;
+  runNumber: number;
+  brakeStartDistM: number;
+  entrySpeedKmh: number;
+  apexDistM: number;
+  apexSpeedKmh: number;
+  exitSpeedKmh: number;
+  deltaEntryKmh: number | null;
+  deltaApexKmh: number | null;
+  deltaExitKmh: number | null;
+  brakeShiftM: number | null; // >0 = freou mais tarde, <0 = freou antes
+}
+
+export interface TrackCornerAnalysis {
+  cornerIndex: number;
+  label: string;
+  refApexDistM: number;
+  refBrakeStartM: number;
+  entries: CornerBrakingLapEntry[];
+}
+
+function measureCornerWindowForSamples(
+  samples: VelocitySample[],
+  refApexDistKm: number,
+  maxLapDistKm: number
+): {
+  brakeStartDistM: number;
+  entrySpeedKmh: number;
+  apexDistM: number;
+  apexSpeedKmh: number;
+  exitSpeedKmh: number;
+} | null {
+  if (samples.length < 4) return null;
+
+  // 1. Ápice (velocidade mínima dentro de ±45m do ápice de referência)
+  const apexWinStartKm = Math.max(0, refApexDistKm - 0.045);
+  const apexWinEndKm = Math.min(maxLapDistKm, refApexDistKm + 0.045);
+
+  let apexSample = interpolateSampleAtDist(samples, refApexDistKm);
+  let apexMinSpd = apexSample ? apexSample.speedKmh : Infinity;
+
+  for (const s of samples) {
+    if (s.distKm >= apexWinStartKm && s.distKm <= apexWinEndKm) {
+      if (s.speedKmh < apexMinSpd) {
+        apexMinSpd = s.speedKmh;
+        apexSample = s;
+      }
+    }
+  }
+  if (!apexSample) return null;
+
+  const actualApexKm = apexSample.distKm;
+  const apexDistM = Math.round(actualApexKm * 1000);
+  const apexSpeedKmh = Math.round(apexSample.speedKmh);
+
+  // 2. Entrada / Início da Frenagem (busca até 180m antes do ápice)
+  const entryScanStartKm = Math.max(0, actualApexKm - 0.18);
+  const preCornerSamples = samples.filter(
+    (s) => s.distKm >= entryScanStartKm && s.distKm <= actualApexKm
+  );
+
+  let entryPeakSample = preCornerSamples[0] ?? apexSample;
+  for (const s of preCornerSamples) {
+    if (s.speedKmh > entryPeakSample.speedKmh) {
+      entryPeakSample = s;
+    }
+  }
+
+  // Procura onde a desaceleração forte começa após o pico de velocidade de entrada
+  let brakeStartSample = entryPeakSample;
+  for (const s of preCornerSamples) {
+    if (s.distKm >= entryPeakSample.distKm && (s.accelLongG ?? 0) <= -0.18) {
+      brakeStartSample = s;
+      break;
+    }
+  }
+
+  const brakeStartDistM = Math.round(brakeStartSample.distKm * 1000);
+  const entrySpeedKmh = Math.round(
+    Math.max(entryPeakSample.speedKmh, brakeStartSample.speedKmh)
+  );
+
+  // 3. Saída de Curva (velocidade atingida entre +35m e +85m após o ápice)
+  const exitTargetKm = Math.min(maxLapDistKm, actualApexKm + 0.065);
+  const exitWindowSamples = samples.filter(
+    (s) => s.distKm >= actualApexKm + 0.015 && s.distKm <= Math.min(maxLapDistKm, actualApexKm + 0.09)
+  );
+  let exitSpeedVal = interpolateSampleAtDist(samples, exitTargetKm)?.speedKmh ?? apexSample.speedKmh;
+  for (const s of exitWindowSamples) {
+    if (s.speedKmh > exitSpeedVal) {
+      exitSpeedVal = s.speedKmh;
+    }
+  }
+
+  return {
+    brakeStartDistM,
+    entrySpeedKmh,
+    apexDistM,
+    apexSpeedKmh,
+    exitSpeedKmh: Math.round(exitSpeedVal),
+  };
+}
+
+/**
+ * Identifica automaticamente as principais curvas e zonas de frenagem da volta de referência
+ * e compara Entrada (Início Frenagem), Ápice (Mínima) e Saída entre V1, V2 e V3.
+ */
+export function analyzeTrackCornersAndBraking(
+  laps: Array<{ slot: 1 | 2 | 3; runNumber: number; samples: VelocitySample[] }>
+): TrackCornerAnalysis[] {
+  const refLap = laps.find((l) => l.slot === 1) ?? laps[0];
+  if (!refLap || refLap.samples.length < 6) return [];
+
+  const normalizedLaps = laps.map((l) => ({
+    ...l,
+    samples: ensureTraceGForces(l.samples),
+  }));
+  const refSamples = normalizedLaps[0].samples;
+  const maxRefDistKm = refSamples[refSamples.length - 1].distKm;
+  const totalRefDistM = Math.max(100, maxRefDistKm * 1000);
+  const minCornerSpacingM = Math.max(60, totalRefDistM * 0.075);
+
+  // Detectar mínimos locais de velocidade (ápices reais de curva após desaceleração)
+  const rawApexes: Array<{ distKm: number; distM: number; drop: number }> = [];
+  for (let i = 2; i < refSamples.length - 2; i += 1) {
+    const curr = refSamples[i].speedKmh || 0;
+    const prev = refSamples[i - 1].speedKmh || 0;
+    const next = refSamples[i + 1].speedKmh || 0;
+    if (curr <= prev && curr < next && curr >= 6) {
+      let maxBefore = curr;
+      for (let b = Math.max(0, i - 14); b < i; b += 1) {
+        maxBefore = Math.max(maxBefore, refSamples[b].speedKmh || 0);
+      }
+      let maxAfter = curr;
+      for (let f = i + 1; f < Math.min(refSamples.length, i + 12); f += 1) {
+        maxAfter = Math.max(maxAfter, refSamples[f].speedKmh || 0);
+      }
+      const drop = maxBefore - curr;
+      const recovery = maxAfter - curr;
+      if (drop >= 8 && recovery >= 5) {
+        rawApexes.push({
+          distKm: refSamples[i].distKm,
+          distM: Math.round(refSamples[i].distKm * 1000),
+          drop,
+        });
+      }
+    }
+  }
+
+  // Fallback suave se o traçado tiver poucas curvas fortes
+  if (rawApexes.length === 0) {
+    for (let i = 2; i < refSamples.length - 2; i += 1) {
+      const curr = refSamples[i].speedKmh || 0;
+      const prev = refSamples[i - 1].speedKmh || 0;
+      const next = refSamples[i + 1].speedKmh || 0;
+      if (curr <= prev && curr < next && curr >= 6) {
+        let maxBefore = curr;
+        for (let b = Math.max(0, i - 12); b < i; b += 1) {
+          maxBefore = Math.max(maxBefore, refSamples[b].speedKmh || 0);
+        }
+        const drop = maxBefore - curr;
+        if (drop >= 5) {
+          rawApexes.push({
+            distKm: refSamples[i].distKm,
+            distM: Math.round(refSamples[i].distKm * 1000),
+            drop,
+          });
+        }
+      }
+    }
+  }
+
+  // Selecionar até 8 curvas principais sem sobreposição
+  const chosen: Array<{ distKm: number; distM: number; drop: number }> = [];
+  for (const cand of [...rawApexes].sort((a, b) => b.drop - a.drop)) {
+    if (chosen.length >= 8) break;
+    if (chosen.every((c) => Math.abs(c.distM - cand.distM) >= minCornerSpacingM)) {
+      chosen.push(cand);
+    }
+  }
+  chosen.sort((a, b) => a.distM - b.distM);
+
+  return chosen.map((corner, idx) => {
+    const refMeasured = measureCornerWindowForSamples(
+      refSamples,
+      corner.distKm,
+      maxRefDistKm
+    );
+
+    const entries: CornerBrakingLapEntry[] = normalizedLaps
+      .map((lap) => {
+        const lapMaxKm =
+          lap.samples.length > 0 ? lap.samples[lap.samples.length - 1].distKm : maxRefDistKm;
+        const measured = measureCornerWindowForSamples(
+          lap.samples,
+          corner.distKm,
+          lapMaxKm
+        );
+        if (!measured) return null;
+
+        const isRef = lap.slot === normalizedLaps[0].slot;
+        return {
+          slot: lap.slot,
+          runNumber: lap.runNumber,
+          brakeStartDistM: measured.brakeStartDistM,
+          entrySpeedKmh: measured.entrySpeedKmh,
+          apexDistM: measured.apexDistM,
+          apexSpeedKmh: measured.apexSpeedKmh,
+          exitSpeedKmh: measured.exitSpeedKmh,
+          deltaEntryKmh:
+            !isRef && refMeasured
+              ? measured.entrySpeedKmh - refMeasured.entrySpeedKmh
+              : null,
+          deltaApexKmh:
+            !isRef && refMeasured
+              ? measured.apexSpeedKmh - refMeasured.apexSpeedKmh
+              : null,
+          deltaExitKmh:
+            !isRef && refMeasured
+              ? measured.exitSpeedKmh - refMeasured.exitSpeedKmh
+              : null,
+          brakeShiftM:
+            !isRef && refMeasured
+              ? measured.brakeStartDistM - refMeasured.brakeStartDistM
+              : null,
+        };
+      })
+      .filter((e): e is CornerBrakingLapEntry => e !== null);
+
+    return {
+      cornerIndex: idx + 1,
+      label: `Curva ${idx + 1}`,
+      refApexDistM: refMeasured?.apexDistM ?? corner.distM,
+      refBrakeStartM: refMeasured?.brakeStartDistM ?? Math.max(0, corner.distM - 60),
+      entries,
+    };
+  });
+}
+
+
 

@@ -79,16 +79,16 @@ export const GoProBlePanel: React.FC = () => {
   return (
     <div className="space-y-3">
       {/* Top Action & BLE Pairing Bar */}
-      <section className="rounded-xl border border-zinc-800 bg-[#111214] p-3.5 sm:p-4 space-y-3">
+      <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 sm:p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="flex items-center gap-2">
-              <Camera className="h-4 w-4 text-[#E10600]" />
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-white uppercase">
+              <Camera className="h-4 w-4 text-[var(--ps-accent)]" />
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
                 GoPro BLE (HERO9 – HERO13)
               </h2>
             </div>
-            <p className="mt-0.5 text-xs text-[#B5B5B5]">
+            <p className="mt-0.5 text-xs text-[var(--ps-muted)]">
               Controle até 7 câmeras via Open GoPro BLE e nomeie cada câmera para uso rápido em Velocidade.
             </p>
           </div>
@@ -100,7 +100,7 @@ export const GoProBlePanel: React.FC = () => {
                 void scanAndAddGoProToFleet();
               }}
               disabled={scanning}
-              className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold text-white uppercase whitespace-nowrap"
+              className="pitstop-btn-red inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold uppercase whitespace-nowrap"
             >
               <Bluetooth className={`h-4 w-4 ${scanning ? 'animate-pulse' : ''}`} />
               <span>{scanning ? 'Buscando BLE...' : '+ Buscar Câmera BLE'}</span>
@@ -111,26 +111,26 @@ export const GoProBlePanel: React.FC = () => {
               onClick={() => activateSimulatedGoProFleet(5)}
               className="pitstop-btn-metal inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3 text-xs font-bold whitespace-nowrap"
             >
-              <Video className="h-3.5 w-3.5 text-emerald-400" />
+              <Video className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
               <span>Simular 5</span>
             </button>
           </div>
         </div>
 
         {!bleReady && (
-          <div className="rounded-lg border border-amber-500/40 bg-amber-950/25 px-3 py-2 text-xs text-amber-200">
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-[var(--ps-amber)]">
             Bluetooth BLE web indisponível neste navegador (use o App Android APK, Chrome no Android ou teste com{' '}
             <strong>Simular 5</strong>).
           </div>
         )}
 
         {errorMsg && (
-          <div className="flex items-center justify-between gap-2 rounded-lg border border-red-700/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-red-500/50 bg-red-500/15 px-3 py-2 text-xs text-red-400">
             <span>{errorMsg}</span>
             <button
               type="button"
               onClick={clearGoProFleetError}
-              className="shrink-0 p-0.5 text-red-300 hover:text-white"
+              className="shrink-0 p-0.5 text-red-400 hover:text-[var(--ps-text)]"
               aria-label="Fechar aviso"
             >
               <X className="h-3.5 w-3.5" />
@@ -140,8 +140,8 @@ export const GoProBlePanel: React.FC = () => {
 
         {/* Saved Devices Quick Reconnect / Wake + Inline Naming */}
         {savedNotShown.length > 0 && (
-          <div className="space-y-1.5 rounded-lg border border-zinc-800 bg-[#080B0D] p-2.5">
-            <p className="font-mono text-[10px] font-bold tracking-wider text-[#B5B5B5] uppercase">
+          <div className="space-y-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5">
+            <p className="font-mono text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
               Câmeras Salvas (Reconexão Rápida / Nomear)
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -151,7 +151,7 @@ export const GoProBlePanel: React.FC = () => {
                 return (
                   <div
                     key={sd.deviceId}
-                    className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-zinc-700 bg-[#111214] pl-2.5 pr-1 py-1"
+                    className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] pl-2.5 pr-1 py-1"
                   >
                     {isEditing ? (
                       <div className="flex items-center gap-1">
@@ -165,7 +165,7 @@ export const GoProBlePanel: React.FC = () => {
                           }}
                           placeholder="Ex: Capô, Para-brisa"
                           autoFocus
-                          className="h-7 w-32 rounded border border-zinc-600 bg-[#080B0D] px-2 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                          className="h-7 w-32 rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                         />
                         <button
                           type="button"
@@ -178,11 +178,11 @@ export const GoProBlePanel: React.FC = () => {
                       </div>
                     ) : (
                       <>
-                        <span className="text-xs font-bold text-white">{displayName}</span>
+                        <span className="text-xs font-bold text-[var(--ps-text)]">{displayName}</span>
                         <button
                           type="button"
                           onClick={() => beginRename(sd.deviceId, sd.alias || sd.name)}
-                          className="p-1 text-zinc-400 hover:text-white"
+                          className="p-1 text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                           aria-label={`Renomear ${displayName}`}
                           title="Dar nome para esta GoPro"
                         >
@@ -204,7 +204,7 @@ export const GoProBlePanel: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => forgetSavedGoProFromFleet(sd.deviceId)}
-                      className="p-1 text-zinc-500 hover:text-red-400"
+                      className="p-1 text-[var(--ps-muted)] hover:text-red-400"
                       aria-label={`Esquecer ${displayName}`}
                     >
                       <Trash2 className="h-3 w-3" />
@@ -218,14 +218,14 @@ export const GoProBlePanel: React.FC = () => {
 
         {/* Master Triggers Bar */}
         {cameras.length > 0 && (
-          <div className="space-y-2 border-t border-zinc-800 pt-3">
+          <div className="space-y-2 border-t border-[var(--ps-border)] pt-3">
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <button
                 type="button"
                 onClick={() => {
                   void shutterAllGoPro(true);
                 }}
-                className="pitstop-btn-red inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white uppercase"
+                className="pitstop-btn-red inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-extrabold uppercase"
               >
                 <Play className="h-4 w-4 fill-current" />
                 <span>Gravar ({cameras.length})</span>
@@ -236,9 +236,9 @@ export const GoProBlePanel: React.FC = () => {
                 onClick={() => {
                   void shutterAllGoPro(false);
                 }}
-                className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#1E1E22] px-3 text-xs font-extrabold text-white uppercase hover:bg-zinc-800"
+                className="pitstop-btn-metal inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-extrabold uppercase"
               >
-                <Square className="h-4 w-4 fill-current text-zinc-300" />
+                <Square className="h-4 w-4 fill-current text-[var(--ps-muted)]" />
                 <span>Parar ({recordingCount})</span>
               </button>
 
@@ -247,7 +247,7 @@ export const GoProBlePanel: React.FC = () => {
                 onClick={() => {
                   void wakeAllGoPro();
                 }}
-                className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/35 px-3 text-xs font-bold text-emerald-300 uppercase hover:bg-emerald-950/60"
+                className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-3 text-xs font-bold text-[var(--ps-emerald)] uppercase hover:bg-emerald-500/25"
               >
                 <Power className="h-4 w-4" />
                 <span>Ligar / Acordar</span>
@@ -258,9 +258,9 @@ export const GoProBlePanel: React.FC = () => {
                 onClick={() => {
                   void sleepAllGoPro();
                 }}
-                className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#080B0D] px-3 text-xs font-bold text-[#C0C4C9] uppercase hover:text-white"
+                className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-muted)] uppercase hover:text-[var(--ps-text)]"
               >
-                <Power className="h-4 w-4 text-zinc-500" />
+                <Power className="h-4 w-4 opacity-70" />
                 <span>Sleep</span>
               </button>
             </div>
@@ -271,9 +271,9 @@ export const GoProBlePanel: React.FC = () => {
                 onClick={() => {
                   void modeAllGoPro('video');
                 }}
-                className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-bold text-[#C0C4C9] hover:border-[#E10600] hover:text-white"
+                className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
               >
-                <Video className="h-3.5 w-3.5 text-[#E10600]" />
+                <Video className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                 <span>Modo Vídeo (Todas)</span>
               </button>
               <button
@@ -281,33 +281,33 @@ export const GoProBlePanel: React.FC = () => {
                 onClick={() => {
                   void modeAllGoPro('photo');
                 }}
-                className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-[#080B0D] text-xs font-bold text-[#C0C4C9] hover:border-[#E10600] hover:text-white"
+                className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
               >
-                <Image className="h-3.5 w-3.5 text-amber-400" />
+                <Image className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
                 <span>Modo Foto (Todas)</span>
               </button>
             </div>
           </div>
         )}
 
-        <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-[#080B0D] px-3.5 py-2.5 text-xs">
-          <span className="font-semibold text-[#F4F4F4]">
+        <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 text-xs">
+          <span className="font-semibold text-[var(--ps-text)]">
             Auto-REC na Largada (disparar todas ao iniciar cronômetro da prova)
           </span>
           <input
             type="checkbox"
             checked={settings.goproAutoRecOnStart}
             onChange={(e) => updateSettings({ goproAutoRecOnStart: e.target.checked })}
-            className="h-4 w-4 accent-[#E10600]"
+            className="h-4 w-4 accent-[var(--ps-accent)]"
           />
         </label>
       </section>
 
       {/* Batch Remote Config */}
       {cameras.length > 0 && (
-        <section className="rounded-xl border border-zinc-800 bg-[#111214] p-4 space-y-3">
+        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-mono text-xs font-bold text-[#C0C4C9] uppercase">
+            <span className="font-mono text-xs font-bold text-[var(--ps-muted)] uppercase">
               Ajuste em Lote (Todas Conectadas)
             </span>
             <button
@@ -331,7 +331,7 @@ export const GoProBlePanel: React.FC = () => {
               aria-label="Resolução GoPro"
               value={batchRes}
               onChange={(e) => setBatchRes(e.target.value as GoProResolution)}
-              className="min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-xs font-bold text-white"
+              className="min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-xs font-bold text-[var(--ps-text)]"
             >
               <option value="4K">Res: 4K UHD</option>
               <option value="2.7K">Res: 2.7K</option>
@@ -342,7 +342,7 @@ export const GoProBlePanel: React.FC = () => {
               aria-label="FPS GoPro"
               value={batchFps}
               onChange={(e) => setBatchFps(Number(e.target.value) as GoProFps)}
-              className="min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-xs font-bold text-white"
+              className="min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-xs font-bold text-[var(--ps-text)]"
             >
               <option value={30}>30 FPS</option>
               <option value={60}>60 FPS</option>
@@ -353,7 +353,7 @@ export const GoProBlePanel: React.FC = () => {
               aria-label="HyperSmooth"
               value={batchHs}
               onChange={(e) => setBatchHs(e.target.value as GoProHyperSmooth)}
-              className="min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-xs font-bold text-white"
+              className="min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-xs font-bold text-[var(--ps-text)]"
             >
               <option value="boost">HyperSmooth Boost</option>
               <option value="autoboost">AutoBoost</option>
@@ -365,7 +365,7 @@ export const GoProBlePanel: React.FC = () => {
               aria-label="Lente Digital"
               value={batchLens}
               onChange={(e) => setBatchLens(e.target.value as GoProLens)}
-              className="min-h-[38px] rounded-lg border border-zinc-700 bg-[#080B0D] px-2.5 font-mono text-xs font-bold text-white"
+              className="min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-xs font-bold text-[var(--ps-text)]"
             >
               <option value="wide">Lente Wide</option>
               <option value="superview">SuperView</option>
@@ -378,8 +378,8 @@ export const GoProBlePanel: React.FC = () => {
 
       {/* Multi-Camera Status Grid */}
       {cameras.length === 0 ? (
-        <div className="rounded-xl border border-zinc-800 bg-[#111214] p-6 text-center text-xs text-[#B5B5B5]">
-          Ligue o Bluetooth da GoPro e toque em <strong className="text-white">+ Buscar Câmera BLE</strong>.
+        <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-6 text-center text-xs text-[var(--ps-muted)]">
+          Ligue o Bluetooth da GoPro e toque em <strong className="text-[var(--ps-text)]">+ Buscar Câmera BLE</strong>.
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -394,10 +394,10 @@ export const GoProBlePanel: React.FC = () => {
                 key={cam.id}
                 className={`rounded-xl border p-3.5 space-y-2.5 ${
                   cam.recording
-                    ? 'border-[#E10600]/80 bg-[#1B0D0F]'
+                    ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)]'
                     : hasAlert
-                      ? 'border-amber-500/60 bg-[#17120B]'
-                      : 'border-zinc-800 bg-[#111214]'
+                      ? 'border-amber-500/60 bg-amber-500/10'
+                      : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -414,7 +414,7 @@ export const GoProBlePanel: React.FC = () => {
                           }}
                           placeholder="Nome (ex: Capô, Para-brisa)"
                           autoFocus
-                          className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-600 bg-[#080B0D] px-2.5 text-xs font-bold text-white focus:border-[#E10600] focus:outline-none"
+                          className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                         />
                         <button
                           type="button"
@@ -436,13 +436,13 @@ export const GoProBlePanel: React.FC = () => {
                                 : 'bg-emerald-400'
                           }`}
                         />
-                        <span className="truncate font-['Barlow_Condensed'] text-lg font-bold text-white uppercase">
+                        <span className="truncate font-['Barlow_Condensed'] text-lg font-bold text-[var(--ps-text)] uppercase">
                           {displayName}
                         </span>
                         <button
                           type="button"
                           onClick={() => beginRename(cam.id, cam.alias || cam.name)}
-                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--ps-muted)] hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)]"
                           aria-label={`Renomear ${displayName}`}
                           title="Renomear câmera"
                         >
@@ -450,7 +450,7 @@ export const GoProBlePanel: React.FC = () => {
                         </button>
                       </div>
                     )}
-                    <p className="font-mono text-[11px] text-[#B5B5B5] truncate">
+                    <p className="font-mono text-[11px] text-[var(--ps-muted)] truncate">
                       {cam.alias ? `${cam.name} · ` : ''}
                       {cam.captureMode === 'video' ? 'VÍDEO' : 'FOTO'} · {cam.resolution} · {cam.fps}fps ·{' '}
                       {cam.lens.toUpperCase()}
@@ -460,7 +460,7 @@ export const GoProBlePanel: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => disconnectGoProFromFleet(cam)}
-                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-[#080B0D] text-zinc-400 hover:text-red-400"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-red-400"
                     aria-label={`Desconectar ${displayName}`}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -469,15 +469,15 @@ export const GoProBlePanel: React.FC = () => {
 
                 {/* Live Telemetry Pills */}
                 <div className="grid grid-cols-3 gap-1.5 font-mono text-xs tabular-nums">
-                  <div className="rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5">
-                    <span className="text-[10px] text-[#B5B5B5] block">BATERIA</span>
+                  <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5">
+                    <span className="text-[10px] text-[var(--ps-muted)] block">BATERIA</span>
                     <span
                       className={`inline-flex items-center gap-1 font-bold ${
                         cam.batteryPct <= 15
                           ? 'text-[#FF2A2A]'
                           : cam.batteryPct <= 30
-                            ? 'text-amber-300'
-                            : 'text-emerald-400'
+                            ? 'text-[var(--ps-amber)]'
+                            : 'text-[var(--ps-emerald)]'
                       }`}
                     >
                       <Battery className="h-3 w-3" />
@@ -485,23 +485,23 @@ export const GoProBlePanel: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5">
-                    <span className="text-[10px] text-[#B5B5B5] block">CARTÃO SD</span>
-                    <span className="inline-flex items-center gap-1 font-bold text-white">
-                      <HardDrive className="h-3 w-3 text-[#C0C4C9]" />
+                  <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5">
+                    <span className="text-[10px] text-[var(--ps-muted)] block">CARTÃO SD</span>
+                    <span className="inline-flex items-center gap-1 font-bold text-[var(--ps-text)]">
+                      <HardDrive className="h-3 w-3 text-[var(--ps-muted)]" />
                       {cam.sdRemainingMin}m
                     </span>
                   </div>
 
-                  <div className="rounded-lg border border-zinc-800 bg-[#080B0D] px-2.5 py-1.5">
-                    <span className="text-[10px] text-[#B5B5B5] block">STATUS</span>
+                  <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5">
+                    <span className="text-[10px] text-[var(--ps-muted)] block">STATUS</span>
                     <span
                       className={`font-bold ${
                         disconnectedOrSleeping
-                          ? 'text-zinc-400'
+                          ? 'text-[var(--ps-muted)]'
                           : cam.recording
                             ? 'text-[#FF2A2A]'
-                            : 'text-emerald-400'
+                            : 'text-[var(--ps-emerald)]'
                       }`}
                     >
                       {cam.sleeping
@@ -516,7 +516,7 @@ export const GoProBlePanel: React.FC = () => {
                 </div>
 
                 {hasAlert && (
-                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-950/30 px-2.5 py-1.5 text-[11px] font-semibold text-amber-300">
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-[var(--ps-amber)]">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                     {cam.overheating && (
                       <span className="inline-flex items-center gap-1">
@@ -538,8 +538,8 @@ export const GoProBlePanel: React.FC = () => {
                     }}
                     className={`min-h-[34px] inline-flex items-center justify-center gap-1 rounded-lg border text-[11px] font-bold ${
                       cam.captureMode === 'video'
-                        ? 'border-[#E10600] bg-[#E10600]/20 text-white'
-                        : 'border-zinc-800 bg-[#080B0D] text-[#B5B5B5]'
+                        ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                     } disabled:opacity-40`}
                   >
                     <Video className="h-3 w-3" />
@@ -553,8 +553,8 @@ export const GoProBlePanel: React.FC = () => {
                     }}
                     className={`min-h-[34px] inline-flex items-center justify-center gap-1 rounded-lg border text-[11px] font-bold ${
                       cam.captureMode === 'photo'
-                        ? 'border-amber-400 bg-amber-500/20 text-amber-200'
-                        : 'border-zinc-800 bg-[#080B0D] text-[#B5B5B5]'
+                        ? 'border-amber-400 bg-amber-500/20 text-[var(--ps-amber)]'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
                     } disabled:opacity-40`}
                   >
                     <Image className="h-3 w-3" />
@@ -572,8 +572,8 @@ export const GoProBlePanel: React.FC = () => {
                     }}
                     className={`col-span-2 min-h-[40px] rounded-lg text-xs font-extrabold uppercase ${
                       cam.recording
-                        ? 'bg-zinc-800 text-white border border-zinc-600'
-                        : 'pitstop-btn-red text-white'
+                        ? 'pitstop-btn-metal'
+                        : 'pitstop-btn-red'
                     } disabled:opacity-40`}
                   >
                     {cam.recording ? 'Parar Gravação' : 'Iniciar Gravação'}
@@ -586,8 +586,8 @@ export const GoProBlePanel: React.FC = () => {
                     }}
                     className={`min-h-[40px] inline-flex items-center justify-center gap-1 rounded-lg border px-1.5 text-[11px] font-bold ${
                       disconnectedOrSleeping
-                        ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
-                        : 'border-zinc-700 bg-[#080B0D] text-[#C0C4C9] hover:text-white'
+                        ? 'border-emerald-500/50 bg-emerald-500/15 text-[var(--ps-emerald)]'
+                        : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                     }`}
                   >
                     {cam.reconnecting ? (
