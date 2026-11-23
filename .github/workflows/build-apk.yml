@@ -17,7 +17,6 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Configurar Java 21 (requisito Capacitor Android)
         uses: actions/setup-java@v5
