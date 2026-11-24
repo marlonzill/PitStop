@@ -29,6 +29,75 @@
   --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
 }
 
+[data-theme="pitstop_xl"] {
+  font-size: 120%;
+  --ps-bg: #090A0D;
+  --ps-surface: #0E1015;
+  --ps-card: #12141A;
+  --ps-card-deep: #050608;
+  --ps-header: rgba(9, 10, 13, 0.97);
+  --ps-border: rgba(255, 255, 255, 0.14);
+  --ps-border-strong: rgba(255, 255, 255, 0.28);
+  --ps-text: #FFFFFF;
+  --ps-muted: #CBD5E1;
+  --ps-accent: #E10600;
+  --ps-accent-2: #FF2A2A;
+  --ps-accent-soft: rgba(225, 6, 0, 0.18);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #FBBF24;
+  --ps-emerald: #10B981;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="pitstop_light"] {
+  font-size: 100%;
+  --ps-bg: #F5F7FA;
+  --ps-surface: #FFFFFF;
+  --ps-card: #FFFFFF;
+  --ps-card-deep: #EDF1F6;
+  --ps-header: rgba(255, 255, 255, 0.98);
+  --ps-border: #E2E8F0;
+  --ps-border-strong: #CBD5E1;
+  --ps-text: #090A0D;
+  --ps-muted: #475569;
+  --ps-accent: #E10600;
+  --ps-accent-2: #C80500;
+  --ps-accent-soft: rgba(225, 6, 0, 0.1);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #B45309;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
+}
+
+[data-theme="pitstop_light_xl"] {
+  font-size: 120%;
+  --ps-bg: #F5F7FA;
+  --ps-surface: #FFFFFF;
+  --ps-card: #FFFFFF;
+  --ps-card-deep: #EDF1F6;
+  --ps-header: rgba(255, 255, 255, 0.98);
+  --ps-border: #CBD5E1;
+  --ps-border-strong: #94A3B8;
+  --ps-text: #090A0D;
+  --ps-muted: #334155;
+  --ps-accent: #E10600;
+  --ps-accent-2: #C80500;
+  --ps-accent-soft: rgba(225, 6, 0, 0.12);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #B45309;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
+}
+
 [data-theme="gt"],
 [data-theme="neo"] {
   font-size: 100%;
@@ -925,6 +994,8 @@
     pitstopSloganPulse 3.2s ease-in-out infinite;
 }
 
+[data-theme="pitstop_light"] .pitstop-slogan-text,
+[data-theme="pitstop_light_xl"] .pitstop-slogan-text,
 [data-theme="solar"] .pitstop-slogan-text,
 [data-theme="daylight_pro"] .pitstop-slogan-text,
 [data-theme="daylight_xl"] .pitstop-slogan-text,

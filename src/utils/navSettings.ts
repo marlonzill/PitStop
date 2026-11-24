@@ -22,8 +22,11 @@ export type VoiceUnit = 'meters' | 'seconds';
 export type AlertStyle = 'voice' | 'beep_short' | 'beep_long' | 'vibration';
 export type ScreenOrientationLock = 'auto' | 'portrait' | 'landscape';
 export type AppThemeId =
-  | 'neo'
   | 'pitstop'
+  | 'pitstop_xl'
+  | 'pitstop_light'
+  | 'pitstop_light_xl'
+  | 'neo'
   | 'daylight_pro'
   | 'daylight_xl'
   | 'neo_xl'
@@ -70,6 +73,70 @@ export interface AppThemeOption {
 }
 
 export const APP_THEME_OPTIONS: AppThemeOption[] = [
+  {
+    id: 'pitstop',
+    name: 'PitStop Original',
+    tag: 'Oficial · Escuro',
+    scalePct: 100,
+    description: 'Preto carbono (#090A0D), cartões #12141A, textos brancos e Vermelho PitStop (#E10600).',
+    bg: '#090A0D',
+    surface: '#111318',
+    card: '#12141A',
+    accent: '#E10600',
+    accent2: '#FF2A2A',
+    text: '#F4F4F5',
+    muted: '#A1A1AA',
+    border: 'rgba(255,255,255,0.12)',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'pitstop_xl',
+    name: 'PitStop Original XL',
+    tag: 'Oficial · XL 120%',
+    scalePct: 120,
+    description: 'Cores oficiais PitStop Original (#090A0D / #12141A / #E10600) com fontes, menus e mostradores em 120%.',
+    bg: '#090A0D',
+    surface: '#0E1015',
+    card: '#12141A',
+    accent: '#E10600',
+    accent2: '#FF2A2A',
+    text: '#FFFFFF',
+    muted: '#CBD5E1',
+    border: 'rgba(255,255,255,0.18)',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'pitstop_light',
+    name: 'PitStop Light',
+    tag: 'Oficial · Claro',
+    scalePct: 100,
+    description: 'Versão diurna oficial PitStop: fundo claro (#F5F7FA), cartões brancos (#FFFFFF), texto #090A0D e Vermelho #E10600.',
+    bg: '#F5F7FA',
+    surface: '#FFFFFF',
+    card: '#FFFFFF',
+    accent: '#E10600',
+    accent2: '#C80500',
+    text: '#090A0D',
+    muted: '#475569',
+    border: '#E2E8F0',
+    fontClass: 'font-mono',
+  },
+  {
+    id: 'pitstop_light_xl',
+    name: 'PitStop Light XL',
+    tag: 'Claro · XL 120%',
+    scalePct: 120,
+    description: 'Paleta oficial clara (#FFFFFF / #090A0D / #E10600) com fontes, menus e números em 120% negrito.',
+    bg: '#F5F7FA',
+    surface: '#FFFFFF',
+    card: '#FFFFFF',
+    accent: '#E10600',
+    accent2: '#C80500',
+    text: '#090A0D',
+    muted: '#334155',
+    border: '#CBD5E1',
+    fontClass: 'font-mono',
+  },
   {
     id: 'neo',
     name: 'Neo',
@@ -231,22 +298,6 @@ export const APP_THEME_OPTIONS: AppThemeOption[] = [
     text: '#0C4A6E',
     muted: '#0369A1',
     border: 'rgba(12,74,110,0.26)',
-    fontClass: 'font-mono',
-  },
-  {
-    id: 'pitstop',
-    name: 'PitStop Original',
-    tag: 'FREE · Original',
-    scalePct: 100,
-    description: 'Preto carbono (#090A0D), superfícies foscas e Vermelho Racing (#E10600).',
-    bg: '#090A0D',
-    surface: '#111318',
-    card: '#181B22',
-    accent: '#E10600',
-    accent2: '#FF2A2A',
-    text: '#F4F4F5',
-    muted: '#A1A1AA',
-    border: 'rgba(255,255,255,0.12)',
     fontClass: 'font-mono',
   },
   {
@@ -751,8 +802,11 @@ export function applyAppThemeToDocument(themeId: AppThemeId): void {
   const metaTheme = document.querySelector('meta[name="theme-color"]');
   if (metaTheme) {
     const colorMap: Record<AppThemeId, string> = {
-      neo: '#090A0D',
       pitstop: '#090A0D',
+      pitstop_xl: '#090A0D',
+      pitstop_light: '#F5F7FA',
+      pitstop_light_xl: '#F5F7FA',
+      neo: '#090A0D',
       daylight_pro: '#F4F6F8',
       daylight_xl: '#F4F6F8',
       neo_xl: '#090A0D',

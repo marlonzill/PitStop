@@ -1924,7 +1924,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       })
                     }
                     placeholder="PIN"
-                    className="flex-1 min-w-[74px] min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-sm font-black tracking-wider text-emerald-300 uppercase focus:border-[var(--ps-accent)] focus:outline-none"
+                    className="flex-1 min-w-[74px] min-h-[38px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-sm font-black tracking-wider text-[var(--ps-emerald)] uppercase focus:border-[var(--ps-accent)] focus:outline-none"
                   />
                   <button
                     type="button"
@@ -2012,7 +2012,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   onClick={() => playPairingBell()}
                   className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-bold whitespace-nowrap"
                 >
-                  <Bell className="h-3.5 w-3.5 text-amber-300" />
+                  <Bell className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
                   <span>Testar Sinetinha</span>
                 </button>
                 <button
@@ -2073,7 +2073,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                           onClick={() => handleToggleBondedBtDevice(dev)}
                           className={`rounded-md border px-2.5 py-1 font-mono text-[11px] font-bold transition-colors ${
                             selected
-                              ? 'border-emerald-400 bg-emerald-950/50 text-emerald-300'
+                              ? 'border-emerald-500/60 bg-emerald-500/15 text-[var(--ps-emerald)]'
                               : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
                           }`}
                         >
@@ -2093,7 +2093,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   </p>
                 )}
 
-                {btStatusMsg && <p className="text-[11px] text-amber-300">{btStatusMsg}</p>}
+                {btStatusMsg && <p className="text-[11px] text-[var(--ps-amber)]">{btStatusMsg}</p>}
               </div>
 
               <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 flex flex-col justify-between gap-2">
@@ -2894,7 +2894,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <span className="truncate">Lat: {gps.lat !== null ? gps.lat.toFixed(6) : '--'}</span>
                 <span className="truncate text-right">Lon: {gps.lon !== null ? gps.lon.toFixed(6) : '--'}</span>
               </div>
-              {gps.message && <p className="mt-2 text-xs text-amber-300">{gps.message}</p>}
+              {gps.message && <p className="mt-2 text-xs text-[var(--ps-amber)]">{gps.message}</p>}
             </div>
 
             <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
@@ -3006,10 +3006,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     <span
                       className={`font-bold uppercase ${
                         status === 'granted'
-                          ? 'text-emerald-400'
+                          ? 'text-[var(--ps-emerald)]'
                           : status === 'denied'
                             ? 'text-[#FF2A2A]'
-                            : 'text-amber-300'
+                            : 'text-[var(--ps-amber)]'
                       }`}
                     >
                       {status === 'granted'
@@ -3073,7 +3073,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             {healthState.message && (
               <p
                 className={`flex items-center gap-1.5 text-xs ${
-                  healthState.ok ? 'text-emerald-400' : 'text-amber-300'
+                  healthState.ok ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-amber)]'
                 }`}
               >
                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
@@ -3237,7 +3237,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 type="button"
                 onClick={handleClearVelocityRuns}
                 disabled={velocityStats.runsCount === 0}
-                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-40"
+                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-amber-500/60 hover:text-[var(--ps-amber)] disabled:opacity-40"
               >
                 <Trash2 className="h-4 w-4" />
                 <span>Limpar Passagens de Velocidade</span>

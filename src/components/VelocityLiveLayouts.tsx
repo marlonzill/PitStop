@@ -617,7 +617,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                     </span>
                   </>
                 ) : (
-                  <span className="mt-1 text-xs font-black leading-none text-white sm:text-sm">
+                  <span className="mt-1 text-xs font-black leading-none text-[var(--ps-text)] sm:text-sm">
                     {sp.sectorMs !== null ? formatSplitCompactTime(sp.sectorMs) : '--'}
                   </span>
                 )
