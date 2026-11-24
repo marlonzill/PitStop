@@ -610,7 +610,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
             <div
               key={sp.id}
               title={sp.name}
-              className={`flex ${compact ? 'min-h-[48px] py-1' : 'min-h-[58px] py-1.5'} min-w-0 flex-col items-center justify-center rounded-xl border px-1 text-center font-mono tabular-nums transition-colors ${
+              className={`flex ${compact ? 'min-h-[52px] py-1' : 'min-h-[60px] py-1.5'} min-w-0 flex-col items-center justify-center rounded-xl border px-1 text-center font-mono tabular-nums transition-colors ${
                 sp.isActive
                   ? 'animate-pulse border-amber-400 bg-amber-500/15 text-[var(--ps-amber)]'
                   : sp.crossed
@@ -625,7 +625,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               }`}
             >
               <span
-                className={`text-[10px] font-black leading-none uppercase ${
+                className={`text-xs font-black leading-none uppercase ${
                   sp.isActive ? 'text-[var(--ps-amber)]' : 'text-[var(--ps-muted)]'
                 }`}
               >
@@ -635,28 +635,28 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                 sp.diffSec !== null ? (
                   <>
                     <span
-                      className={`mt-0.5 text-xs font-black leading-none sm:text-sm ${
+                      className={`mt-1 text-sm font-black leading-none tracking-tight sm:text-base ${
                         isBetter ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-danger)]'
                       }`}
                     >
                       {sp.diffSec > 0 ? '+' : ''}
                       {sp.diffSec.toFixed(1)}s
                     </span>
-                    <span className="mt-0.5 text-[10px] font-bold leading-none text-[var(--ps-muted)]">
+                    <span className="mt-0.5 text-[11px] font-bold leading-none text-[var(--ps-muted)]">
                       {sp.sectorMs !== null ? formatSplitCompactTime(sp.sectorMs) : '--'}
                     </span>
                   </>
                 ) : (
-                  <span className="mt-1 text-xs font-black leading-none text-[var(--ps-text)] sm:text-sm">
+                  <span className="mt-1 text-sm font-black leading-none text-[var(--ps-text)] sm:text-base">
                     {sp.sectorMs !== null ? formatSplitCompactTime(sp.sectorMs) : '--'}
                   </span>
                 )
               ) : sp.isActive ? (
-                <span className="mt-1 text-[11px] font-black leading-none text-[var(--ps-amber)] uppercase">
+                <span className="mt-1 text-xs font-black leading-none text-[var(--ps-amber)] uppercase">
                   ATUAL
                 </span>
               ) : (
-                <span className="mt-1 text-xs font-bold leading-none opacity-60">--</span>
+                <span className="mt-1 text-sm font-bold leading-none opacity-60">--</span>
               )}
             </div>
           );
@@ -788,7 +788,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
 
             {/* Bloco Delta Time */}
             <div
-              className={`flex flex-1 min-h-[78px] flex-col items-center justify-center rounded-xl border-2 px-3 py-2 text-center transition-colors ${
+              className={`flex shrink-0 flex-col items-center justify-center rounded-xl border-2 px-3 py-1.5 text-center transition-colors ${
                 isFaster
                   ? 'border-[#10B981] bg-emerald-600/20 text-[var(--ps-emerald)]'
                   : isSlower
@@ -796,14 +796,14 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                     : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-text)]'
               }`}
             >
-              <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-black leading-tight tracking-wider uppercase sm:text-xs">
+              <div className="flex items-center justify-center gap-1.5 font-mono text-[11px] font-black leading-tight tracking-wider uppercase sm:text-xs">
                 <span>{isFaster ? '▲' : isSlower ? '▼' : '●'}</span>
                 <span>{isFaster ? 'MAIS RÁPIDO' : isSlower ? 'MAIS LENTO' : 'DELTA TIME'}</span>
               </div>
-              <div className="mt-0.5 font-mono text-3xl font-black leading-none tracking-tight tabular-nums sm:text-5xl">
+              <div className="my-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums">
                 {formattedCompactDelta}
               </div>
-              <p className="mt-1 max-w-full truncate font-mono text-[10px] font-bold leading-tight opacity-85 uppercase">
+              <p className="max-w-full truncate font-mono text-[10px] font-bold leading-tight opacity-85 uppercase">
                 {bestRun ? `vs Volta #${bestRun.runNumber}` : 'Sem referência'}
               </p>
             </div>
@@ -811,13 +811,13 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
             {renderSplitsGrid(false)}
 
             {/* Velocidade + Metros */}
-            <div className="grid shrink-0 grid-cols-2 gap-1.5">
-              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-2 text-center">
+            <div className="grid flex-1 min-h-0 grid-cols-2 gap-1.5">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center">
                 <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                   Velocidade
                 </span>
-                <div className="mt-1 flex items-baseline justify-center gap-1 font-mono tabular-nums">
-                  <span className="text-3xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-4xl">
+                <div className="mt-0.5 flex items-baseline justify-center gap-1 font-mono tabular-nums">
+                  <span className="text-5xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-6xl">
                     {Math.round(speedKmh)}
                   </span>
                   <span className="text-xs font-extrabold text-[var(--ps-accent)] sm:text-sm">
@@ -831,18 +831,18 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                   Metros (Odômetro)
                 </span>
                 {renderTripEditorOrValue(
-                  'text-3xl sm:text-4xl text-[var(--ps-amber)]',
+                  'text-4xl sm:text-5xl text-[var(--ps-amber)]',
                   'text-sm text-[var(--ps-amber)]',
-                  'text-[10px] text-[var(--ps-muted)]'
+                  'text-[11px] text-[var(--ps-muted)]'
                 )}
               </div>
             </div>
 
             {/* Cronômetro Principal + CH / MELHOR / ÚLTIMA */}
-            <div className="shrink-0 space-y-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 sm:px-3">
+            <div className="flex flex-1 min-h-0 flex-col justify-center space-y-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 sm:px-3">
               <div className="flex flex-col items-center text-center">
-                <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-bold uppercase text-[var(--ps-muted)]">
-                  <span className="max-w-[180px] truncate text-[var(--ps-text)]">
+                <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 font-mono text-[10px] font-bold uppercase text-[var(--ps-muted)]">
+                  <span className="text-[var(--ps-text)]">
                     {activeTrackName}
                   </span>
                   <span aria-hidden="true">·</span>
@@ -859,7 +859,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                   </span>
                 </div>
                 <div
-                  className={`mt-0.5 font-mono text-4xl font-black leading-none tracking-tight tabular-nums sm:text-5xl ${
+                  className={`mt-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums ${
                     stageState === 'running'
                       ? 'text-[var(--ps-text)]'
                       : stageState === 'finished'
@@ -872,27 +872,27 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               </div>
 
               <div className="grid grid-cols-3 gap-1.5">
-                <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1 text-center">
-                  <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1 py-1 text-center">
+                  <p className="font-mono text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                     CH
                   </p>
-                  <p className="font-mono text-sm font-extrabold leading-tight text-[var(--ps-text)] tabular-nums sm:text-base">
+                  <p className="font-mono text-lg font-extrabold leading-tight tracking-tighter text-[var(--ps-text)] tabular-nums sm:text-xl">
                     {formatClockTime(clockAdjustedNow)}
                   </p>
                 </div>
-                <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1 text-center">
-                  <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-emerald)] uppercase">
+                <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1 py-1 text-center">
+                  <p className="font-mono text-[10px] font-bold tracking-wider text-[var(--ps-emerald)] uppercase">
                     MELHOR
                   </p>
-                  <p className="font-mono text-sm font-extrabold leading-tight text-[var(--ps-emerald)] tabular-nums sm:text-base">
+                  <p className="font-mono text-lg font-extrabold leading-tight tracking-tighter text-[var(--ps-emerald)] tabular-nums sm:text-xl">
                     {formatStageDuration(optimalSummary.bestRunTotalMs)}
                   </p>
                 </div>
-                <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1 text-center">
-                  <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1 py-1 text-center">
+                  <p className="font-mono text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                     ÚLTIMA
                   </p>
-                  <p className="font-mono text-sm font-extrabold leading-tight text-[var(--ps-text)] tabular-nums sm:text-base">
+                  <p className="font-mono text-lg font-extrabold leading-tight tracking-tighter text-[var(--ps-text)] tabular-nums sm:text-xl">
                     {formatStageDuration(optimalSummary.lastRunTotalMs)}
                   </p>
                 </div>
@@ -906,7 +906,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
         return (
           <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 sm:p-3">
             <div
-              className={`flex flex-1 min-h-[78px] flex-col items-center justify-center rounded-xl border-2 px-3 py-2 text-center transition-colors ${
+              className={`flex shrink-0 flex-col items-center justify-center rounded-xl border-2 px-3 py-1.5 text-center transition-colors ${
                 isFaster
                   ? 'border-[#10B981] bg-emerald-600/20 text-[var(--ps-emerald)]'
                   : isSlower
@@ -914,29 +914,29 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                     : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-text)]'
               }`}
             >
-              <div className="flex items-center gap-1.5 font-mono text-[10px] font-black tracking-wider uppercase sm:text-xs">
+              <div className="flex items-center gap-1.5 font-mono text-[11px] font-black tracking-wider uppercase sm:text-xs">
                 <span>{isFaster ? '▲ MAIS RÁPIDO' : isSlower ? '▼ MAIS LENTO' : '● DELTA TIME'}</span>
               </div>
-              <div className="mt-0.5 font-mono text-3xl font-black leading-none tracking-tight tabular-nums sm:text-5xl">
+              <div className="my-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums">
                 {formattedCompactDelta}
               </div>
-              <p className="mt-1 font-mono text-[10px] font-bold opacity-80 uppercase">
+              <p className="font-mono text-[10px] font-bold opacity-80 uppercase">
                 {bestRun ? `vs Volta #${bestRun.runNumber}` : 'Sem referência'}
               </p>
             </div>
 
             {renderSplitsGrid(false)}
 
-            <div className="grid shrink-0 grid-cols-2 gap-1.5">
-              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-2 text-center">
+            <div className="grid flex-1 min-h-0 grid-cols-2 gap-1.5">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center">
                 <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                   Velocidade
                 </span>
                 <div className="mt-0.5 flex items-baseline gap-1 font-mono tabular-nums">
-                  <span className="text-3xl font-black leading-none text-[var(--ps-text)] sm:text-4xl">
+                  <span className="text-5xl font-black leading-none text-[var(--ps-text)] sm:text-6xl">
                     {Math.round(speedKmh)}
                   </span>
-                  <span className="text-xs font-extrabold text-[var(--ps-accent)]">km/h</span>
+                  <span className="text-xs font-extrabold text-[var(--ps-accent)] sm:text-sm">km/h</span>
                 </div>
               </div>
               <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center">
@@ -944,22 +944,22 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                   Metros
                 </span>
                 {renderTripEditorOrValue(
-                  'text-3xl sm:text-4xl text-[var(--ps-amber)]',
+                  'text-4xl sm:text-5xl text-[var(--ps-amber)]',
                   'text-sm text-[var(--ps-amber)]',
-                  'text-[10px] text-[var(--ps-muted)]'
+                  'text-[11px] text-[var(--ps-muted)]'
                 )}
               </div>
             </div>
 
-            <div className="shrink-0 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2 text-center">
-              <div className="flex items-center justify-between font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
-                <span>CH {formatClockTime(clockAdjustedNow)}</span>
+            <div className="flex flex-1 min-h-0 flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2 text-center">
+              <div className="flex items-center justify-between font-mono text-xs font-extrabold tracking-tight text-[var(--ps-muted)] uppercase tabular-nums">
+                <span>CH <strong className="text-[var(--ps-text)]">{formatClockTime(clockAdjustedNow)}</strong></span>
                 <span className="text-[var(--ps-text)]">{statusHeadline}</span>
                 <span className="text-[var(--ps-emerald)]">
                   MEL {formatStageDuration(optimalSummary.bestRunTotalMs)}
                 </span>
               </div>
-              <div className="mt-0.5 font-mono text-4xl font-black leading-none tracking-tight text-[var(--ps-text)] tabular-nums sm:text-5xl">
+              <div className="mt-1 font-mono text-6xl font-black leading-none tracking-tighter text-[var(--ps-text)] tabular-nums">
                 {formatStageDuration(currentStageElapsedMs)}
               </div>
             </div>
@@ -1444,12 +1444,12 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       case 'night_stage':
         return (
           <div className="flex flex-1 min-h-0 flex-col justify-between gap-2 overflow-hidden">
-            <div className="flex flex-1 min-h-0 flex-col items-center justify-center rounded-2xl border border-white/10 bg-[#050608] p-3 text-center">
+            <div className="flex shrink-0 flex-col items-center justify-center rounded-2xl border border-white/10 bg-[#050608] px-3 py-2 text-center">
               <span className="font-mono text-[10px] font-bold tracking-widest text-slate-500 uppercase">
                 {isFaster ? '▲ MAIS RÁPIDO' : isSlower ? '▼ MAIS LENTO' : 'DELTA NOTURNO'}
               </span>
               <span
-                className={`mt-1 font-mono text-4xl font-black leading-none tabular-nums sm:text-5xl ${
+                className={`my-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums ${
                   isFaster
                     ? 'text-emerald-400/90'
                     : isSlower
@@ -1459,47 +1459,47 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               >
                 {formattedCompactDelta}
               </span>
-              <span className="mt-1.5 font-mono text-[10px] text-slate-500 uppercase">
+              <span className="font-mono text-[10px] text-slate-500 uppercase">
                 {bestRun ? `vs Volta #${bestRun.runNumber}` : 'Sem referência'}
               </span>
             </div>
 
             {renderSplitsGrid(true)}
 
-            <div className="grid shrink-0 grid-cols-2 gap-2">
-              <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-[#050608] p-3 text-center">
+            <div className="grid flex-1 min-h-0 grid-cols-2 gap-2">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-[#050608] p-2 text-center">
                 <span className="font-mono text-[10px] font-bold text-slate-500 uppercase">
                   Velocidade
                 </span>
-                <div className="mt-1 flex items-baseline gap-1 font-mono tabular-nums">
-                  <span className="text-4xl font-black leading-none text-slate-100">
+                <div className="mt-0.5 flex items-baseline gap-1 font-mono tabular-nums">
+                  <span className="text-5xl font-black leading-none text-slate-100 sm:text-6xl">
                     {Math.round(speedKmh)}
                   </span>
                   <span className="text-xs font-bold text-amber-400/80">km/h</span>
                 </div>
               </div>
 
-              <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-[#050608] p-3 text-center">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-[#050608] p-2 text-center">
                 <span className="font-mono text-[10px] font-bold text-slate-500 uppercase">
                   Metros
                 </span>
                 {renderTripEditorOrValue(
-                  'text-4xl text-amber-300/90',
+                  'text-4xl sm:text-5xl text-amber-300/90',
                   'text-sm text-amber-300/90',
                   'text-[10px] text-slate-500'
                 )}
               </div>
             </div>
 
-            <div className="shrink-0 rounded-xl border border-white/10 bg-[#050608] px-3 py-2.5 text-center">
-              <div className="flex items-center justify-between font-mono text-[10px] text-slate-500 uppercase">
+            <div className="flex flex-1 min-h-0 flex-col justify-center rounded-xl border border-white/10 bg-[#050608] px-3 py-2 text-center">
+              <div className="flex items-center justify-between font-mono text-xs font-bold text-slate-400 uppercase tabular-nums">
                 <span>CH {formatClockTime(clockAdjustedNow)}</span>
                 <span>{statusHeadline}</span>
                 <span className="text-emerald-400/80">
                   MEL {formatStageDuration(optimalSummary.bestRunTotalMs)}
                 </span>
               </div>
-              <div className="mt-1 font-mono text-4xl font-black leading-none text-slate-100 tabular-nums sm:text-5xl">
+              <div className="mt-1 font-mono text-6xl font-black leading-none tracking-tighter text-slate-100 tabular-nums">
                 {formatStageDuration(currentStageElapsedMs)}
               </div>
             </div>
@@ -1960,7 +1960,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                   return (
                     <div
                       key="delta"
-                      className={`${flexCls} flex flex-col justify-center rounded-xl border-2 px-3 py-1.5 ${
+                      className={`${flexCls} flex flex-col justify-center rounded-xl border-2 px-3 py-1 ${
                         isFaster
                           ? 'border-[#10B981] bg-emerald-600/20 text-[var(--ps-emerald)]'
                           : isSlower
@@ -1987,7 +1987,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                       )}
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-left">
-                          <p className="font-mono text-[10px] font-black uppercase">
+                          <p className="font-mono text-[11px] font-black uppercase">
                             {isFaster
                               ? '▲ MAIS RÁPIDO'
                               : isSlower
@@ -2004,12 +2004,12 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                           </p>
                         </div>
                         <span
-                          className={`font-mono font-black leading-none tabular-nums ${
+                          className={`font-mono font-black leading-none tracking-tighter tabular-nums ${
                             widget.size === 'G'
-                              ? 'text-4xl sm:text-5xl'
+                              ? 'text-5xl sm:text-6xl'
                               : widget.size === 'M'
-                                ? 'text-3xl sm:text-4xl'
-                                : 'text-2xl'
+                                ? 'text-4xl sm:text-5xl'
+                                : 'text-3xl'
                           }`}
                         >
                           {formattedCompactDelta}
@@ -2035,7 +2035,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                         <p className="font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
                           Velocidade
                         </p>
-                        <p className="font-mono text-[10px] font-bold text-[var(--ps-accent)] uppercase">
+                        <p className="font-mono text-xs font-bold text-[var(--ps-accent)] uppercase">
                           km/h
                         </p>
                       </div>
@@ -2044,8 +2044,8 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                           widget.size === 'G'
                             ? 'text-5xl sm:text-6xl'
                             : widget.size === 'M'
-                              ? 'text-4xl'
-                              : 'text-3xl'
+                              ? 'text-5xl'
+                              : 'text-4xl'
                         }`}
                       >
                         {Math.round(speedKmh)}
@@ -2072,8 +2072,8 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                           widget.size === 'G'
                             ? 'text-4xl sm:text-5xl text-[var(--ps-amber)]'
                             : widget.size === 'M'
-                              ? 'text-3xl sm:text-4xl text-[var(--ps-amber)]'
-                              : 'text-2xl text-[var(--ps-amber)]',
+                              ? 'text-4xl text-[var(--ps-amber)]'
+                              : 'text-3xl text-[var(--ps-amber)]',
                           'text-xs text-[var(--ps-amber)]',
                           'text-[10px] text-[var(--ps-muted)]'
                         )}
@@ -2093,30 +2093,30 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                             Cronômetro · {statusHeadline}
                           </p>
                           <p
-                            className={`font-mono font-black leading-none text-[var(--ps-text)] tabular-nums ${
+                            className={`font-mono font-black leading-none tracking-tighter text-[var(--ps-text)] tabular-nums ${
                               widget.size === 'G'
-                                ? 'text-4xl sm:text-5xl'
+                                ? 'text-5xl sm:text-6xl'
                                 : widget.size === 'M'
-                                  ? 'text-3xl sm:text-4xl'
-                                  : 'text-2xl'
+                                  ? 'text-4xl sm:text-5xl'
+                                  : 'text-3xl'
                             }`}
                           >
                             {formatStageDuration(currentStageElapsedMs)}
                           </p>
                         </div>
-                        <div className="text-right font-mono text-[10px] tabular-nums">
+                        <div className="text-right font-mono text-xs tabular-nums">
                           <p className="text-[var(--ps-muted)]">
                             CH{' '}
-                            <strong className="text-[var(--ps-text)]">
+                            <strong className="text-sm font-extrabold text-[var(--ps-text)]">
                               {formatClockTime(clockAdjustedNow)}
                             </strong>
                           </p>
                           <p className="text-[var(--ps-emerald)]">
-                            MEL <strong>{formatStageDuration(optimalSummary.bestRunTotalMs)}</strong>
+                            MEL <strong className="text-sm font-extrabold">{formatStageDuration(optimalSummary.bestRunTotalMs)}</strong>
                           </p>
                           {widget.size !== 'P' && (
                             <p className="text-[var(--ps-muted)]">
-                              ÚLT <strong>{formatStageDuration(optimalSummary.lastRunTotalMs)}</strong>
+                              ÚLT <strong className="text-sm font-extrabold">{formatStageDuration(optimalSummary.lastRunTotalMs)}</strong>
                             </p>
                           )}
                         </div>
@@ -2191,7 +2191,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               <span>Voltar</span>
             </button>
 
-            <p className="min-w-0 flex-1 truncate text-center font-['Barlow_Condensed'] text-base font-black tracking-wide uppercase sm:text-lg">
+            <p className="min-w-0 flex-1 text-center font-['Barlow_Condensed'] text-base font-black leading-tight tracking-wide uppercase sm:text-lg">
               {activeTrackName}
             </p>
 

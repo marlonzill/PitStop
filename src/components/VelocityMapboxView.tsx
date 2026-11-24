@@ -75,6 +75,8 @@ interface VelocityMapboxViewProps {
   fullscreenOverlay?: React.ReactNode;
   onFullscreenToggle?: () => void;
   isExternalFullscreen?: boolean;
+  mapStyleIndex?: number;
+  onCycleMapStyle?: () => void;
 }
 
 function trapColorByKind(kind: TrapKind): string {
@@ -310,6 +312,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   fullscreenOverlay,
   onFullscreenToggle,
   isExternalFullscreen,
+  mapStyleIndex,
+  onCycleMapStyle,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -360,7 +364,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       ? -navHeadingDeg
       : 0;
 
-  const currentStyle = MAP_STYLES[styleIndex];
+  const effectiveStyleIndex =
+    mapStyleIndex !== undefined ? mapStyleIndex % MAP_STYLES.length : styleIndex;
+  const currentStyle = MAP_STYLES[effectiveStyleIndex];
+  const externalFs = Boolean(isExternalFullscreen);
 
   // Inicializa Leaflet em Modo Satélite
   useEffect(() => {
@@ -1010,6 +1017,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   }, [navigationMode, currentPos]);
 
   const cycleMapStyle = () => {
+    if (onCycleMapStyle) {
+      onCycleMapStyle();
+      return;
+    }
     setStyleIndex((prev) => (prev + 1) % MAP_STYLES.length);
   };
 
@@ -1066,9 +1077,15 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         </button>
       )}
 
-      {/* Legenda / Overlay superior esquerdo customizável (ex: Replay Volta A vs Volta B) */}
+      {/* Legenda / Overlay superior esquerdo customizável (ex: Barra única em Tela Cheia) */}
       {!navigationMode && topLeftOverlay && (
-        <div className="pointer-events-none absolute top-2.5 left-2.5 z-[405] max-w-[65%]">
+        <div
+          className={
+            externalFs
+              ? 'pointer-events-none absolute top-2.5 left-2.5 right-[136px] z-[405]'
+              : 'pointer-events-none absolute top-2.5 left-2.5 z-[405] max-w-[65%]'
+          }
+        >
           {topLeftOverlay}
         </div>
       )}
@@ -1084,63 +1101,77 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       )}
 
       {/* Controles superiores direitos */}
-      <div className="absolute top-2.5 right-2.5 z-[400] flex flex-wrap items-center gap-1.5">
-        {(editableTrace.length > 0 || orderedTraps.length > 0) && (
+      {externalFs ? (
+        onFullscreenToggle ? (
+          <div className="absolute top-2.5 right-2.5 z-[410]">
+            <button
+              type="button"
+              onClick={() => onFullscreenToggle()}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/95 px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+              aria-label="Sair da tela cheia"
+            >
+              <Minimize2 className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+              <span>Sair Tela Cheia</span>
+            </button>
+          </div>
+        ) : null
+      ) : (
+        <div className="absolute top-2.5 right-2.5 z-[400] flex flex-wrap items-center gap-1.5">
+          {(editableTrace.length > 0 || orderedTraps.length > 0) && (
+            <button
+              type="button"
+              onClick={() => fitMapToTrackOrCenter(true)}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+              title="Enquadrar Pista"
+            >
+              <LocateFixed className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+              <span>Rota</span>
+            </button>
+          )}
+
           <button
             type="button"
-            onClick={() => fitMapToTrackOrCenter(true)}
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-            title="Enquadrar Pista"
+            onClick={centerOnGpsOrErechim}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-muted)] shadow-lg backdrop-blur-xs hover:text-[var(--ps-text)]"
+            title={currentPos ? 'Centralizar no GPS' : 'Centralizar em Erechim, RS'}
           >
-            <LocateFixed className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-            <span>Rota</span>
+            <Navigation className="h-3 w-3 text-[var(--ps-emerald)]" />
+            <span>{currentPos ? 'GPS' : 'Erechim'}</span>
           </button>
-        )}
 
-        <button
-          type="button"
-          onClick={centerOnGpsOrErechim}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-muted)] shadow-lg backdrop-blur-xs hover:text-[var(--ps-text)]"
-          title={currentPos ? 'Centralizar no GPS' : 'Centralizar em Erechim, RS'}
-        >
-          <Navigation className="h-3 w-3 text-[var(--ps-emerald)]" />
-          <span>{currentPos ? 'GPS' : 'Erechim'}</span>
-        </button>
+          <button
+            type="button"
+            onClick={cycleMapStyle}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+            aria-label="Alternar camada do mapa"
+          >
+            <Layers className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+            <span>{currentStyle.label}</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={cycleMapStyle}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-          aria-label="Alternar camada do mapa"
-        >
-          <Layers className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
-          <span>{currentStyle.label}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            if (onFullscreenToggle) {
-              onFullscreenToggle();
-            } else {
-              setIsFullscreen((v) => !v);
-            }
-          }}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-          aria-label={
-            (isExternalFullscreen ?? isFullscreen) ? 'Sair da tela cheia' : 'Mapa em tela cheia'
-          }
-        >
-          {(isExternalFullscreen ?? isFullscreen) ? (
-            <Minimize2 className="h-4 w-4" />
-          ) : (
-            <Maximize2 className="h-4 w-4" />
-          )}
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (onFullscreenToggle) {
+                onFullscreenToggle();
+              } else {
+                setIsFullscreen((v) => !v);
+              }
+            }}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+            aria-label={isFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
+          >
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+        </div>
+      )}
 
       {/* Controles de Zoom + / - estilo RaceChrono */}
-      <div className="absolute right-2.5 bottom-14 z-[400] flex flex-col overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 shadow-lg backdrop-blur-xs">
+      <div
+        className={`absolute right-2.5 z-[400] flex flex-col overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 shadow-lg backdrop-blur-xs ${
+          externalFs ? 'bottom-2.5' : 'bottom-14'
+        }`}
+      >
         <button
           type="button"
           onClick={() => mapRef.current?.zoomIn()}

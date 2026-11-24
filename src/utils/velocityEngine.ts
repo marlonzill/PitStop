@@ -1083,12 +1083,25 @@ export function formatDeltaSeconds(deltaSec: number | null): string {
   return `${sign}${Math.abs(deltaSec).toFixed(2)}s`;
 }
 
+export function formatCleanTrackName(rawName: string): string {
+  if (!rawName) return '';
+  return rawName
+    .replace(/\s*\((?:ponto-a-ponto|circuito)\)\s*/gi, ' ')
+    .replace(/\s*[-–·]?\s*ponto-a-ponto\s*$/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export function loadVelocityTracks(): VelocityTrack[] {
   try {
     const raw = localStorage.getItem(TRACKS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as VelocityTrack[];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((t) => ({
+      ...t,
+      name: formatCleanTrackName(t.name) || t.name,
+    }));
   } catch {
     return [];
   }
@@ -1711,7 +1724,7 @@ export function createDemoSpecialStage(): {
 
   const track: VelocityTrack = {
     id: 'demo_ss_graciosa',
-    name: 'SS-01 Serra Velha (Ponto-a-Ponto)',
+    name: 'SS-01 Serra Velha',
     mode: 'point-to-point',
     createdAtMs: now,
     referenceDistanceKm: accKm,

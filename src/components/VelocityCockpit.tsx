@@ -32,7 +32,6 @@ import {
   Trophy,
   Upload,
   X,
-  Zap,
 } from 'lucide-react';
 import { CockpitSelect } from './CockpitSelect';
 import { FuelTechAnalysisPanel } from './FuelTechAnalysisPanel';
@@ -64,8 +63,6 @@ import {
 } from '../utils/externalGpsBle';
 import {
   addGoProHiLightTag,
-  autoStartGoProRecording,
-  autoStopGoProRecording,
   clearGoProFleetError,
   getGoProDisplayName,
   renameGoProInFleet,
@@ -92,6 +89,7 @@ import {
   ensureTraceGForces,
   exportTrackGeoJson,
   exportTrackGpx,
+  formatCleanTrackName,
   formatDeltaSeconds,
   formatStageDuration,
   getCapacitorGpsWatchOptions,
@@ -390,11 +388,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   tracksRef.current = tracks;
   const calFactorRef = useRef(navSettings.calibrationPct / 100);
   calFactorRef.current = navSettings.calibrationPct / 100;
-  const autoRecGoProRef = useRef(navSettings.goproAutoRecOnStart);
-  useEffect(() => {
-    autoRecGoProRef.current = navSettings.goproAutoRecOnStart;
-  }, [navSettings.goproAutoRecOnStart]);
-  autoRecGoProRef.current = navSettings.goproAutoRecOnStart;
   const velPrefsRef = useRef(velPrefs);
   velPrefsRef.current = velPrefs;
   const screenRef = useRef(screen);
@@ -526,7 +519,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   );
 
   useEffect(() => {
-    setMapTrackNameDraft(activeTrack?.name ?? '');
+    setMapTrackNameDraft(activeTrack ? formatCleanTrackName(activeTrack.name) : '');
   }, [activeTrack?.id, activeTrack?.name]);
 
   const trackRuns = useMemo(() => {
@@ -575,7 +568,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
     for (const run of runs) {
       const trk = tracks.find((t) => t.id === run.trackId);
-      const trackName = trk?.name || 'Especial Avulsa';
+      const trackName = formatCleanTrackName(trk?.name || 'Especial Avulsa');
       const existing = byTrack.get(run.trackId);
       const runSizeKb = Math.max(12, Math.round((run.samples.length * 140) / 1024));
       if (!existing) {
@@ -661,9 +654,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       }
 
       void addGoProHiLightTag();
-      if (!continueNextLap && autoRecGoProRef.current) {
-        void autoStopGoProRecording();
-      }
 
       setLastFinishedMs(elapsedTotal);
       if (continueNextLap) {
@@ -951,9 +941,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               setCurrentSplitTimesMs({});
               setLiveSamples([seededStartSample]);
               void addGoProHiLightTag();
-              if (autoRecGoProRef.current) {
-                void autoStartGoProRecording();
-              }
               window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
               showToast(`Largada automática (${trap.name})`);
               break;
@@ -1397,9 +1384,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       setSimPlaying(true);
     }
     void addGoProHiLightTag();
-    if (autoRecGoProRef.current) {
-      void autoStartGoProRecording();
-    }
     window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
     showToast('Largada manual acionada! Cronômetro rodando.');
   };
@@ -1455,9 +1439,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       setStageState('running');
       setIsRecording(true);
       void addGoProHiLightTag();
-      if (autoRecGoProRef.current) {
-        void autoStartGoProRecording();
-      }
       window.dispatchEvent(new CustomEvent('pitstop:stage-started'));
       showToast('Cronômetro iniciado!');
     }
@@ -2092,7 +2073,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     home: 'Velocidade',
     live: liveMode === 'timer' ? 'Cronômetro SS' : 'Mostradores',
     sessions: 'Sessões',
-    'session-detail': sessionTrack?.name || 'Telemetria',
+    'session-detail': sessionTrack ? formatCleanTrackName(sessionTrack.name) : 'Telemetria',
     tracks: 'Pistas',
     'track-editor': 'Editor de Pista',
     settings: 'Configurações GPS',
@@ -2117,13 +2098,12 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const renderLiveGoProCompactButton = () => {
     const isConnectedReady = activeGoProsReady.length > 0;
     const isRec = recordingGoProCount > 0;
-    const autoActive = navSettings.goproAutoRecOnStart && isPro;
 
     const handleOpenGoProModal = () => {
       if (!isPro) {
         openProUpgradeModal(
           'Automação de Câmeras GoPro BLE',
-          'O controle, pareamento e disparo automático de câmeras GoPro via Bluetooth fazem parte do Plano PRO.'
+          'O controle e pareamento de câmeras GoPro via Bluetooth fazem parte do Plano PRO.'
         );
         return;
       }
@@ -2145,11 +2125,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               ? formatGoProRecTimer(recordingGoPros[0].encodingDurationSec)
               : `(${recordingGoProCount})`}
           </span>
-          {autoActive && (
-            <span className="shrink-0 rounded bg-emerald-500/25 px-1.5 py-0.5 font-mono text-[9px] font-black text-emerald-300">
-              AUTO
-            </span>
-          )}
         </button>
       );
     }
@@ -2164,11 +2139,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         >
           <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--ps-emerald)]" />
           <span className="truncate">GOPRO PRONTA</span>
-          {autoActive && (
-            <span className="shrink-0 rounded bg-emerald-500/25 px-1.5 py-0.5 font-mono text-[9px] font-black text-[var(--ps-emerald)]">
-              AUTO
-            </span>
-          )}
         </button>
       );
     }
@@ -2211,7 +2181,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </div>
           )}
 
-          {/* Linha 1: Comando Mestre (flex-1) + Auto Largada */}
+          {/* Linha 1: Comando Mestre Manual */}
           <div className="flex items-center gap-1.5">
             {hasAnyGoPro ? (
               <button
@@ -2220,15 +2190,11 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   if (!isPro) {
                     openProUpgradeModal(
                       'Automação de Câmeras GoPro BLE',
-                      'O disparo multi-câmera e Auto-REC na largada/chegada são recursos exclusivos do Plano PRO.'
+                      'O disparo multi-câmera via Bluetooth é um recurso exclusivo do Plano PRO.'
                     );
                     return;
                   }
-                  if (recordingGoProCount > 0) {
-                    void autoStopGoProRecording();
-                  } else {
-                    void autoStartGoProRecording();
-                  }
+                  void shutterAllGoPro(recordingGoProCount === 0);
                 }}
                 className={`inline-flex h-[36px] flex-1 items-center justify-center gap-2 rounded-lg px-3 font-mono text-xs font-black uppercase tracking-wide whitespace-nowrap transition-colors ${
                   recordingGoProCount > 0
@@ -2267,31 +2233,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 <span>Parear GoPro {!isPro ? '(PRO)' : ''}</span>
               </button>
             )}
-
-            <button
-              type="button"
-              onClick={() => {
-                if (!isPro) {
-                  openProUpgradeModal(
-                    'Auto-REC GoPro na Largada',
-                    'A gravação automática sincronizada com largada e chegada requer Plano PRO.'
-                  );
-                  return;
-                }
-                const next = !navSettings.goproAutoRecOnStart;
-                autoRecGoProRef.current = next;
-                updateNavSettings({ goproAutoRecOnStart: next });
-              }}
-              title="Auto-REC na Largada e Stop na Chegada"
-              className={`inline-flex h-[36px] shrink-0 items-center gap-1 rounded-lg border px-2 font-mono text-[10px] font-extrabold uppercase whitespace-nowrap transition-colors ${
-                navSettings.goproAutoRecOnStart && isPro
-                  ? 'border-[var(--ps-emerald)] bg-emerald-500/15 text-[var(--ps-emerald)]'
-                  : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-              }`}
-            >
-              <Zap className="h-3.5 w-3.5" />
-              <span>Auto</span>
-            </button>
           </div>
 
           {/* Linha 2: Câmeras Conectadas Lado a Lado em Grid Fixo (sem scroll horizontal) */}
@@ -2446,29 +2387,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </button>
 
           <div className="flex flex-wrap items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                if (!isPro) {
-                  openProUpgradeModal(
-                    'Automação de Câmeras GoPro BLE',
-                    'O disparo automático na largada e chegada requer Plano PRO.'
-                  );
-                  return;
-                }
-                updateNavSettings({ goproAutoRecOnStart: !navSettings.goproAutoRecOnStart });
-              }}
-              title="Grava automaticamente na Largada e para na Chegada"
-              className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[10px] font-extrabold uppercase transition-colors ${
-                navSettings.goproAutoRecOnStart && isPro
-                  ? 'border-[var(--ps-emerald)]/70 bg-emerald-500/15 text-[var(--ps-emerald)]'
-                  : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-              }`}
-            >
-              <span>Auto-REC Largada/Chegada:</span>
-              <span>{navSettings.goproAutoRecOnStart && isPro ? 'ON' : 'OFF'}</span>
-            </button>
-
             {hasAnyGoPro &&
               (activeGoProsReady.length > 0 ? (
                 <>
@@ -3135,7 +3053,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   <ArrowLeft className="h-4 w-4 text-[var(--ps-accent)]" />
                 </button>
                 <div className="min-w-0">
-                  <h2 className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide uppercase truncate sm:text-xl">
+                  <h2 className="font-['Barlow_Condensed'] text-lg font-extrabold leading-tight tracking-wide uppercase sm:text-xl">
                     {screenTitleMap[screen]}
                   </h2>
                 </div>
@@ -3215,14 +3133,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 }`}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-extrabold leading-tight text-[var(--ps-text)]">
-                    {activeTrack ? activeTrack.name : 'Especial Livre'}
+                  <p className="text-sm font-extrabold leading-tight text-[var(--ps-text)]">
+                    {activeTrack ? formatCleanTrackName(activeTrack.name) : 'Especial Livre'}
                   </p>
                   <p className="mt-0.5 truncate font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
                     {activeTrack
                       ? activeTrack.mode === 'circuit'
                         ? 'Circuito'
-                        : 'Ponto-a-Ponto'
+                        : activeTrack.referenceDistanceKm > 0
+                          ? `Especial · ${activeTrack.referenceDistanceKm.toFixed(1)} km`
+                          : 'Especial'
                       : 'Sem traps fixos'}
                   </p>
                 </div>
@@ -3330,12 +3250,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           : 'border border-transparent hover:bg-[var(--ps-surface)]'
                       }`}
                     >
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-extrabold text-[var(--ps-text)]">
-                          {t.name}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-extrabold leading-tight text-[var(--ps-text)]">
+                          {formatCleanTrackName(t.name)}
                         </p>
                         <p className="font-mono text-[10px] text-[var(--ps-muted)] uppercase">
-                          {t.mode === 'circuit' ? 'Circuito' : 'Ponto-a-Ponto'}
+                          {t.mode === 'circuit'
+                            ? 'Circuito'
+                            : t.referenceDistanceKm > 0
+                              ? `Especial · ${t.referenceDistanceKm.toFixed(1)} km`
+                              : 'Especial'}
                         </p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
@@ -3478,7 +3402,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       {screen === 'live' && (() => {
         const liveMapTrace =
           liveSamples.length > 0 ? liveSamples : activeTrack?.baseTrace ?? [];
-        const activeStageBannerName = activeTrack ? activeTrack.name : 'Especial Livre';
+        const activeStageBannerName = activeTrack ? formatCleanTrackName(activeTrack.name) : 'Especial Livre';
         const liveReferenceDistanceKm = (() => {
           if (activeTrack?.referenceDistanceKm && activeTrack.referenceDistanceKm > 0.05) {
             return activeTrack.referenceDistanceKm;
@@ -3921,8 +3845,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 >
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-sm font-extrabold text-[var(--ps-text)] sm:text-base">
-                        {sess.trackName}
+                      <span className="text-sm font-extrabold leading-tight text-[var(--ps-text)] sm:text-base">
+                        {formatCleanTrackName(sess.trackName)}
                       </span>
                       <span className="shrink-0 font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
                         {sess.approxSizeKb} kB
@@ -4073,6 +3997,11 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               lap2Samples={lap2Samples}
               lap3Samples={lap3Samples}
               lapSelectorSlot={lapSelectorElement}
+              onSelectRefRun={(runId) => {
+                setLap1Id(runId);
+                if (lap2Id === runId) setLap2Id('');
+                if (lap3Id === runId) setLap3Id('');
+              }}
               onDeleteSession={() => {
                 setRuns((prev) =>
                   prev.filter((r) => r.trackId !== selectedSessionTrackId)
@@ -4250,8 +4179,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       ) : (
                         <div>
                           <div className="flex items-start justify-between gap-2">
-                            <p className="font-bold text-sm text-[var(--ps-text)] leading-tight truncate">
-                              {tr.name}
+                            <p className="font-bold text-sm text-[var(--ps-text)] leading-tight">
+                              {formatCleanTrackName(tr.name)}
                             </p>
                             {isAct && (
                               <span className="font-mono text-[10px] font-extrabold text-[var(--ps-accent)] uppercase shrink-0">
@@ -4260,7 +4189,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             )}
                           </div>
                           <p className="mt-1 font-mono text-[11px] text-[var(--ps-muted)]">
-                            {tr.mode === 'circuit' ? 'Circuito' : 'Ponto-a-Ponto'} ·{' '}
+                            {tr.mode === 'circuit' ? 'Circuito' : 'Especial'} ·{' '}
                             {tr.traps.length} traps · {tr.referenceDistanceKm.toFixed(2)} km ·{' '}
                             {passCount} voltas
                           </p>
@@ -4286,7 +4215,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                             setActiveTrackId(tr.id);
                             setUserPickedTrackManually(true);
                             setScreen('home');
-                            showToast(`Pista "${tr.name}" selecionada!`);
+                            showToast(`Pista "${formatCleanTrackName(tr.name)}" selecionada!`);
                           }}
                           className="min-h-[34px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-emerald)]"
                         >
@@ -4916,7 +4845,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     : 'text-[var(--ps-muted)]'
                 }`}
               >
-                Ponto-a-Ponto (SS)
+                Especial (SS)
               </button>
             </div>
             <div className="flex justify-end gap-2 pt-1">
@@ -5026,7 +4955,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     Controle GoPro BLE
                   </h3>
                   <p className="truncate text-[11px] text-[var(--ps-muted)]">
-                    Pareamento, gravação sincronizada, bateria e Auto-REC na largada
+                    Controle manual de gravação, bateria e conexão BLE
                   </p>
                 </div>
               </div>

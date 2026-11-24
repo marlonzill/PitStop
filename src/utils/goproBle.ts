@@ -141,6 +141,31 @@ interface NavigatorWithWebBluetooth extends Navigator {
   };
 }
 
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+let bleOperationQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueBleOperation<T>(fn: () => Promise<T>): Promise<T> {
+  const next = bleOperationQueue.then(fn, fn);
+  bleOperationQueue = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+function isGatt133Error(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  return (
+    msg.includes('133') ||
+    msg.includes('gatt_error') ||
+    msg.includes('gatt error') ||
+    msg.includes('connection failed')
+  );
+}
+
 function withBleTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -510,74 +535,110 @@ async function isWebDeviceGattConnected(deviceId: string): Promise<boolean | nul
   }
 }
 
+async function connectGattOnce(
+  deviceId: string,
+  onTelemetryUpdate: (camId: string, patch: Partial<GoProCameraState>) => void
+): Promise<void> {
+  try {
+    await BleClient.connect(
+      deviceId,
+      (disconnectedId) => {
+        markCameraDisconnected(disconnectedId, onTelemetryUpdate);
+      },
+      { timeout: 10000 }
+    );
+  } catch (err) {
+    if (!isGatt133Error(err)) {
+      throw err;
+    }
+    // Retry 1x on Android status 133 (GATT_ERROR) after clean disconnect & 500ms cooldown
+    await BleClient.disconnect(deviceId).catch(() => {});
+    await delayMs(500);
+    await BleClient.connect(
+      deviceId,
+      (disconnectedId) => {
+        markCameraDisconnected(disconnectedId, onTelemetryUpdate);
+      },
+      { timeout: 10000 }
+    );
+  }
+}
+
 async function connectGattAndSubscribe(
   deviceId: string,
   onTelemetryUpdate: (camId: string, patch: Partial<GoProCameraState>) => void
 ): Promise<void> {
-  telemetryCallbacks.set(deviceId, onTelemetryUpdate);
+  return enqueueBleOperation(async () => {
+    telemetryCallbacks.set(deviceId, onTelemetryUpdate);
 
-  // On Web Bluetooth, populate Capacitor BLE plugin map for saved deviceIds if already authorized
-  if (!Capacitor.isNativePlatform()) {
-    await BleClient.getDevices([deviceId]).catch(() => {});
-  }
-
-  await BleClient.connect(
-    deviceId,
-    (disconnectedId) => {
-      markCameraDisconnected(disconnectedId, onTelemetryUpdate);
-    },
-    { timeout: 10000 }
-  );
-
-  connectedDeviceIds.add(deviceId);
-  consecutivePollFailures.set(deviceId, 0);
-  qryRxBuffers.delete(deviceId);
-
-  await attachWebBluetoothDisconnectListener(deviceId, onTelemetryUpdate);
-
-  if (Capacitor.isNativePlatform()) {
-    await BleClient.discoverServices(deviceId).catch(() => {});
-  }
-
-  await BleClient.startNotifications(
-    deviceId,
-    GOPRO_SERVICE_UUID,
-    GOPRO_CMD_RSP_UUID,
-    () => {
-      onTelemetryUpdate(deviceId, { lastSeenMs: Date.now(), connected: true, sleeping: false });
+    // On Web Bluetooth, populate Capacitor BLE plugin map for saved deviceIds if already authorized
+    if (!Capacitor.isNativePlatform()) {
+      await BleClient.getDevices([deviceId]).catch(() => {});
     }
-  ).catch(() => {});
 
-  // Subscribe to Open GoPro Query Response Characteristic (GP-0077 / 0x0077)
-  await BleClient.startNotifications(
-    deviceId,
-    GOPRO_SERVICE_UUID,
-    GOPRO_QRY_RSP_UUID,
-    (value) => parseQueryNotification(deviceId, value, onTelemetryUpdate)
-  ).catch(() => {});
+    await connectGattOnce(deviceId, onTelemetryUpdate);
 
-  await BleClient.write(
-    deviceId,
-    GOPRO_SERVICE_UUID,
-    GOPRO_CMD_REQ_UUID,
-    numbersToDataView(CMD_KEEP_ALIVE)
-  ).catch(() => {});
+    connectedDeviceIds.add(deviceId);
+    consecutivePollFailures.set(deviceId, 0);
+    qryRxBuffers.delete(deviceId);
 
-  // Register for Status Value Updates (0x53) via GP-0076 for IDs [8, 10, 13, 2, 70, 35, 6]
-  await BleClient.write(
-    deviceId,
-    GOPRO_SERVICE_UUID,
-    GOPRO_QRY_REQ_UUID,
-    numbersToDataView(QRY_REGISTER_STATUS)
-  ).catch(() => {});
+    await attachWebBluetoothDisconnectListener(deviceId, onTelemetryUpdate);
 
-  // Initial Get Status Poll (0x13) to populate live state immediately
-  await BleClient.write(
-    deviceId,
-    GOPRO_SERVICE_UUID,
-    GOPRO_QRY_REQ_UUID,
-    numbersToDataView(QRY_STATUS_POLL)
-  ).catch(() => {});
+    if (Capacitor.isNativePlatform()) {
+      await BleClient.discoverServices(deviceId).catch(() => {});
+    }
+
+    await BleClient.startNotifications(
+      deviceId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_CMD_RSP_UUID,
+      () => {
+        onTelemetryUpdate(deviceId, { lastSeenMs: Date.now(), connected: true, sleeping: false });
+      }
+    ).catch(() => {});
+
+    // Subscribe to Open GoPro Query Response Characteristic (GP-0077 / 0x0077)
+    await BleClient.startNotifications(
+      deviceId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_QRY_RSP_UUID,
+      (value) => parseQueryNotification(deviceId, value, onTelemetryUpdate)
+    ).catch(() => {});
+
+    await BleClient.write(
+      deviceId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_CMD_REQ_UUID,
+      numbersToDataView(CMD_KEEP_ALIVE)
+    ).catch(() => {});
+
+    // Ensure camera is placed in Video mode automatically upon BLE connection
+    await BleClient.write(
+      deviceId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_CMD_REQ_UUID,
+      numbersToDataView(CMD_MODE_VIDEO)
+    ).catch(() => {});
+
+    // Register for Status Value Updates (0x53) via GP-0076 for IDs [8, 10, 13, 2, 70, 35, 6]
+    await BleClient.write(
+      deviceId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_QRY_REQ_UUID,
+      numbersToDataView(QRY_REGISTER_STATUS)
+    ).catch(() => {});
+
+    // Initial Get Status Poll (0x13) to populate live state immediately
+    await BleClient.write(
+      deviceId,
+      GOPRO_SERVICE_UUID,
+      GOPRO_QRY_REQ_UUID,
+      numbersToDataView(QRY_STATUS_POLL)
+    ).catch(() => {});
+
+    // Maintain 400ms spacing before any queued next camera GATT connection
+    await delayMs(400);
+  });
 }
 
 export async function scanAndConnectGoProBle(
@@ -842,8 +903,12 @@ export async function pollAllGoProKeepAlive(): Promise<void> {
       connectedSet = undefined;
     }
 
-    for (const camId of Array.from(connectedDeviceIds)) {
-      await sendGoProKeepAliveAndPoll(camId, connectedSet);
+    const camIds = Array.from(connectedDeviceIds);
+    for (let i = 0; i < camIds.length; i += 1) {
+      await sendGoProKeepAliveAndPoll(camIds[i], connectedSet);
+      if (i < camIds.length - 1) {
+        await delayMs(200);
+      }
     }
   } finally {
     heartbeatInFlight = false;
@@ -1128,53 +1193,52 @@ export async function modeSingleGoPro(
 }
 
 export async function shutterAllGoPro(start: boolean): Promise<void> {
-  for (const cam of fleetState.cameras) {
-    if (!cam.connected || cam.sleeping) continue;
-    if (start && cam.recording) continue;
-    if (!start && !cam.recording) continue;
-    if (!cam.isSimulated) {
-      try {
-        await sendGoProShutter(cam.id, start);
-      } catch {
-        continue;
+  return enqueueBleOperation(async () => {
+    const targets = fleetState.cameras.filter((cam) => {
+      if (!cam.connected || cam.sleeping) return false;
+      if (start && cam.recording) return false;
+      if (!start && !cam.recording) return false;
+      return true;
+    });
+
+    for (let i = 0; i < targets.length; i += 1) {
+      const cam = targets[i];
+      if (!cam.isSimulated) {
+        try {
+          await sendGoProShutter(cam.id, start);
+        } catch (err) {
+          fleetState.errorMsg =
+            err instanceof Error ? err.message : 'Erro ao enviar comando em lote para GoPro.';
+          notifyFleet();
+          if (i < targets.length - 1) await delayMs(400);
+          continue;
+        }
+      }
+      updateCameraInFleet(cam.id, {
+        recording: start,
+        encodingDurationSec: start ? 0 : cam.encodingDurationSec,
+      });
+      if (!cam.isSimulated && i < targets.length - 1) {
+        await delayMs(400);
       }
     }
-    updateCameraInFleet(cam.id, {
-      recording: start,
-      encodingDurationSec: start ? 0 : cam.encodingDurationSec,
-    });
-  }
-}
-
-export async function autoStartGoProRecording(): Promise<void> {
-  if (fleetState.cameras.length === 0 && fleetState.savedDevices.length === 0) return;
-  const needsWake =
-    fleetState.cameras.some((c) => c.sleeping || !c.connected) ||
-    fleetState.savedDevices.some((sd) => !fleetState.cameras.some((c) => c.id === sd.deviceId));
-  const hasRealBleCamera =
-    fleetState.cameras.some((c) => !c.isSimulated) || fleetState.savedDevices.length > 0;
-  if (needsWake) {
-    await wakeAllGoPro().catch(() => {});
-    if (hasRealBleCamera) {
-      await new Promise((resolve) => window.setTimeout(resolve, 350));
-    }
-  }
-  await shutterAllGoPro(true);
-}
-
-export async function autoStopGoProRecording(): Promise<void> {
-  if (fleetState.cameras.length === 0) return;
-  await shutterAllGoPro(false);
+  });
 }
 
 export async function modeAllGoPro(mode: GoProCaptureMode): Promise<void> {
-  for (const cam of fleetState.cameras) {
-    if (!cam.connected || cam.sleeping) continue;
-    if (!cam.isSimulated) {
-      await sendGoProCaptureMode(cam.id, mode).catch(() => {});
+  return enqueueBleOperation(async () => {
+    const targets = fleetState.cameras.filter((c) => c.connected && !c.sleeping);
+    for (let i = 0; i < targets.length; i += 1) {
+      const cam = targets[i];
+      if (!cam.isSimulated) {
+        await sendGoProCaptureMode(cam.id, mode).catch(() => {});
+      }
+      updateCameraInFleet(cam.id, { captureMode: mode });
+      if (!cam.isSimulated && i < targets.length - 1) {
+        await delayMs(400);
+      }
     }
-    updateCameraInFleet(cam.id, { captureMode: mode });
-  }
+  });
 }
 
 export async function wakeSingleGoPro(cam: GoProCameraState): Promise<void> {
@@ -1192,7 +1256,9 @@ export async function wakeSingleGoPro(cam: GoProCameraState): Promise<void> {
 
 export async function sleepSingleGoPro(cam: GoProCameraState): Promise<void> {
   if (cam.sleeping && !cam.connected) return;
-  if (!cam.isSimulated) await sendGoProSleep(cam.id).catch(() => {});
+  if (!cam.isSimulated) {
+    await enqueueBleOperation(() => sendGoProSleep(cam.id).catch(() => {}));
+  }
   updateCameraInFleet(cam.id, { sleeping: true, connected: false, recording: false });
 }
 
@@ -1206,23 +1272,36 @@ export async function toggleSingleGoProPower(cam: GoProCameraState): Promise<voi
 }
 
 export async function sleepAllGoPro(): Promise<void> {
-  for (const cam of fleetState.cameras) {
-    if (!cam.isSimulated) await sendGoProSleep(cam.id).catch(() => {});
-    updateCameraInFleet(cam.id, { sleeping: true, connected: false, recording: false });
-  }
+  return enqueueBleOperation(async () => {
+    const targets = [...fleetState.cameras];
+    for (let i = 0; i < targets.length; i += 1) {
+      const cam = targets[i];
+      if (!cam.isSimulated) {
+        await sendGoProSleep(cam.id).catch(() => {});
+      }
+      updateCameraInFleet(cam.id, { sleeping: true, connected: false, recording: false });
+      if (!cam.isSimulated && i < targets.length - 1) {
+        await delayMs(400);
+      }
+    }
+  });
 }
 
 export async function wakeAllGoPro(): Promise<void> {
-  // Wake connected sleeping cameras first
-  for (const cam of fleetState.cameras) {
-    if (!cam.sleeping && cam.connected) continue;
+  // Wake connected sleeping cameras sequentially (connectGattAndSubscribe enforces 400ms spacing)
+  const sleepingCams = fleetState.cameras.filter((c) => c.sleeping || !c.connected);
+  for (const cam of sleepingCams) {
     if (!cam.isSimulated) {
-      await wakeOrReconnectGoProById(cam.id, cam.name, updateCameraInFleet).catch(() => {});
+      await wakeOrReconnectGoProById(cam.id, cam.name, updateCameraInFleet).catch((err) => {
+        fleetState.errorMsg =
+          err instanceof Error ? err.message : 'Falha ao acordar GoPro.';
+        notifyFleet();
+      });
     } else {
       updateCameraInFleet(cam.id, { sleeping: false, connected: true, reconnecting: false });
     }
   }
-  // Also wake saved devices not currently in active cameras list
+  // Also wake saved devices not currently in active cameras list, one by one
   const savedMissing = fleetState.savedDevices.filter(
     (sd) => !fleetState.cameras.some((c) => c.id === sd.deviceId)
   );
@@ -1237,12 +1316,19 @@ export async function applyBatchSettingsToFleet(opts: {
   hypersmooth: GoProHyperSmooth;
   lens: GoProLens;
 }): Promise<void> {
-  for (const cam of fleetState.cameras) {
-    if (!cam.isSimulated && cam.connected && !cam.sleeping) {
-      await applyGoProRemoteSettings(cam.id, opts).catch(() => {});
+  return enqueueBleOperation(async () => {
+    const targets = [...fleetState.cameras];
+    for (let i = 0; i < targets.length; i += 1) {
+      const cam = targets[i];
+      if (!cam.isSimulated && cam.connected && !cam.sleeping) {
+        await applyGoProRemoteSettings(cam.id, opts).catch(() => {});
+      }
+      updateCameraInFleet(cam.id, opts);
+      if (!cam.isSimulated && cam.connected && !cam.sleeping && i < targets.length - 1) {
+        await delayMs(400);
+      }
     }
-    updateCameraInFleet(cam.id, opts);
-  }
+  });
 }
 
 export function disconnectGoProFromFleet(cam: GoProCameraState): void {
@@ -1374,8 +1460,11 @@ export async function addGoProHiLightTag(camId?: string): Promise<number> {
     : fleetState.cameras;
 
   let taggedCount = 0;
-  for (const cam of candidates) {
-    if (!cam.connected || cam.sleeping || !cam.recording) continue;
+  const activeRecording = candidates.filter(
+    (c) => c.connected && !c.sleeping && c.recording
+  );
+  for (let i = 0; i < activeRecording.length; i += 1) {
+    const cam = activeRecording[i];
     if (cam.isSimulated) {
       taggedCount += 1;
       continue;
@@ -1385,6 +1474,9 @@ export async function addGoProHiLightTag(camId?: string): Promise<number> {
       taggedCount += 1;
     } catch {
       // Nunca interrompe fluxo de cronometragem se comando BLE falhar
+    }
+    if (i < activeRecording.length - 1) {
+      await delayMs(400);
     }
   }
   return taggedCount;

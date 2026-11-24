@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  ArrowLeft,
   Award,
   Crosshair,
+  Layers,
+  Minimize2,
   Pause,
   Play,
   RotateCcw,
@@ -191,6 +193,8 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string | null>(null);
   const [proFullscreen, setProFullscreen] = useState(false);
   const [proReplayPlaying, setProReplayPlaying] = useState(false);
+  const [fsMapStyleIdx, setFsMapStyleIdx] = useState(0);
+  const fsMapStyleLabels = ['Satélite', 'Híbrido', 'Ruas'] as const;
 
   const activeSectorLaps = useMemo(() => {
     const list: Array<{ slot: 1 | 2 | 3; run: VelocityRun }> = [];
@@ -236,6 +240,18 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       return prev;
     });
   }, [viewStartM, viewEndM, proFullscreen]);
+
+  useEffect(() => {
+    if (!proFullscreen) return;
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevBodyOverflow;
+      document.documentElement.style.overflow = prevHtmlOverflow;
+    };
+  }, [proFullscreen]);
 
   useEffect(() => {
     if (!proReplayPlaying) return;
@@ -2325,277 +2341,224 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         )}
       </div>
 
-      {/* MODO ANÁLISE PRO EM TELA CHEIA (MAPA ~45% + TELEMETRIA/GRÁFICO + CONTROLES ~55%) */}
-      {proFullscreen && lap1Samples.length > 1 && (
-        <div
-          className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--ps-bg)] text-[var(--ps-text)]"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Análise Pro em Tela Cheia"
-        >
-          {/* Barra Superior Compacta */}
-          <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2 font-mono text-[11px] tabular-nums">
-            <div className="flex items-center gap-2">
+      {/* MODO ANÁLISE PRO EM TELA CHEIA (Portal direto no document.body) */}
+      {proFullscreen && lap1Samples.length > 1 && typeof document !== 'undefined' && (() => {
+        const activeTimeDelta = showLap2
+          ? scrubPoint.timeDelta2vs1Sec
+          : showLap3
+            ? scrubPoint.timeDelta3vs1Sec
+            : null;
+        return createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex h-[100dvh] w-screen flex-col overflow-hidden bg-[#090A0D] text-[var(--ps-text)]"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Análise Pro em Tela Cheia"
+          >
+            {/* Barra Única Superior (Esquerda: Voltas/Vel/Freio/Picos/Parciais/Satélite | Direita: Sair Tela Cheia) */}
+            <header className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 bg-[#11141B] px-2.5 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+              <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap font-mono text-[10px] font-bold [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {(
+                  [
+                    { id: 'laps', label: 'Voltas' },
+                    { id: 'speed', label: 'Vel.' },
+                    { id: 'accel', label: 'Freio/Acel' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={`fs_layer_${opt.id}`}
+                    type="button"
+                    onClick={() => setMapLayerMode(opt.id)}
+                    className={`shrink-0 rounded-md px-2 py-1.5 font-extrabold transition-colors ${
+                      mapLayerMode === opt.id
+                        ? 'pitstop-btn-red'
+                        : 'bg-white/5 text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+                <span className="mx-0.5 h-3.5 w-px shrink-0 bg-white/15" />
+                <button
+                  type="button"
+                  aria-pressed={showMapPeaks}
+                  onClick={() => setShowMapPeaks((v) => !v)}
+                  className={`shrink-0 rounded-md px-2 py-1.5 font-extrabold transition-colors ${
+                    showMapPeaks
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : 'bg-white/5 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Picos
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={showMapSplits}
+                  onClick={() => setShowMapSplits((v) => !v)}
+                  className={`shrink-0 rounded-md px-2 py-1.5 font-extrabold transition-colors ${
+                    showMapSplits
+                      ? 'bg-sky-500/20 text-sky-300'
+                      : 'bg-white/5 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Parciais
+                </button>
+                <span className="mx-0.5 h-3.5 w-px shrink-0 bg-white/15" />
+                <button
+                  type="button"
+                  onClick={() => setFsMapStyleIdx((v) => (v + 1) % 3)}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md bg-white/5 px-2 py-1.5 font-extrabold text-white hover:bg-white/10"
+                  aria-label="Alternar camada do mapa"
+                >
+                  <Layers className="h-3 w-3 text-amber-400" />
+                  <span>{fsMapStyleLabels[fsMapStyleIdx % 3]}</span>
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => {
                   setProFullscreen(false);
                   setProReplayPlaying(false);
                 }}
-                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-white/15 bg-[#1B1F2A] px-2.5 text-[11px] font-extrabold text-white hover:border-[#E10600]"
+                aria-label="Sair da tela cheia"
               >
-                <ArrowLeft className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-                <span>Voltar</span>
+                <Minimize2 className="h-3.5 w-3.5 text-[#E10600]" />
+                <span>Sair Tela Cheia</span>
               </button>
-              <span className="font-bold text-[var(--ps-text)]">
-                Dist: <strong className="text-[var(--ps-amber)]">{scrubPoint.distKmStr} km</strong>
-              </span>
+            </header>
+
+            {/* Mapa Satélite Interativo Fixo no Topo (apenas controle único + / - no canto inferior direito) */}
+            <div className="relative h-[34dvh] w-full shrink-0 overflow-hidden border-b border-white/10 bg-[#000000] sm:h-[38dvh]">
+              <VelocityMapboxView
+                trackId={`${sessionTrack?.id || 'session'}_pro_fs`}
+                editableTrace={lap1Samples}
+                ghostTrace={showLap2 ? lap2Samples : undefined}
+                thirdTrace={showLap3 ? lap3Samples : undefined}
+                offsetGhostTrace={showLap2 || showLap3}
+                orderedTraps={showMapSplits && sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+                postEditIdx={0}
+                vehicleStyle="lap1"
+                currentPos={
+                  scrubPoint.s1
+                    ? { lat: scrubPoint.s1.lat, lon: scrubPoint.s1.lon }
+                    : null
+                }
+                navHeadingDeg={scrubPoint.s1?.headingDeg ?? null}
+                ghostCar={
+                  showLap2 && scrubPoint.s2
+                    ? {
+                        lat: scrubPoint.s2.lat,
+                        lon: scrubPoint.s2.lon,
+                        headingDeg: scrubPoint.s2.headingDeg,
+                      }
+                    : null
+                }
+                thirdCar={
+                  showLap3 && scrubPoint.s3
+                    ? {
+                        lat: scrubPoint.s3.lat,
+                        lon: scrubPoint.s3.lon,
+                        headingDeg: scrubPoint.s3.headingDeg,
+                      }
+                    : null
+                }
+                heatmapMode={mapLayerMode}
+                showSpeedBadges={showMapPeaks}
+                isExternalFullscreen={true}
+                mapStyleIndex={fsMapStyleIdx}
+                onCycleMapStyle={() => setFsMapStyleIdx((v) => (v + 1) % 3)}
+                containerClassName="relative h-full w-full overflow-hidden bg-[#000000]"
+              />
             </div>
 
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-extrabold">
-              <span>
-                <span className="text-[var(--ps-emerald)]">V1: {scrubPoint.speed1 ?? '--'}</span>
-                {showLap2 && (
-                  <>
-                    <span className="text-[var(--ps-muted)]"> vs </span>
-                    <span className="text-[#FF2A2A]">V2: {scrubPoint.speed2 ?? '--'}</span>
-                  </>
-                )}
-                {showLap3 && (
-                  <>
-                    <span className="text-[var(--ps-muted)]"> vs </span>
-                    <span className="text-[#38BDF8]">V3: {scrubPoint.speed3 ?? '--'}</span>
-                  </>
-                )}
-                <span className="text-[var(--ps-muted)]"> km/h</span>
-              </span>
-
-              {showLap2 && scrubPoint.timeDelta2vs1Sec !== null && (
-                <span
-                  className={
-                    scrubPoint.timeDelta2vs1Sec <= 0
-                      ? 'text-[var(--ps-emerald)]'
-                      : 'text-[#FF2A2A]'
-                  }
-                >
-                  Δ Tempo V2: {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
-                </span>
-              )}
-            </div>
-          </header>
-
-          {/* Metade Superior (~44%): Mapa Satélite Interativo Fixo */}
-          <div className="relative h-[44dvh] shrink-0 border-b border-[var(--ps-border)] bg-[#000000]">
-            <VelocityMapboxView
-              trackId={`${sessionTrack?.id || 'session'}_pro_fs`}
-              editableTrace={lap1Samples}
-              ghostTrace={showLap2 ? lap2Samples : undefined}
-              thirdTrace={showLap3 ? lap3Samples : undefined}
-              offsetGhostTrace={showLap2 || showLap3}
-              orderedTraps={showMapSplits && sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
-              postEditIdx={0}
-              vehicleStyle="lap1"
-              currentPos={
-                scrubPoint.s1
-                  ? { lat: scrubPoint.s1.lat, lon: scrubPoint.s1.lon }
-                  : null
-              }
-              navHeadingDeg={scrubPoint.s1?.headingDeg ?? null}
-              ghostCar={
-                showLap2 && scrubPoint.s2
-                  ? {
-                      lat: scrubPoint.s2.lat,
-                      lon: scrubPoint.s2.lon,
-                      headingDeg: scrubPoint.s2.headingDeg,
-                    }
-                  : null
-              }
-              thirdCar={
-                showLap3 && scrubPoint.s3
-                  ? {
-                      lat: scrubPoint.s3.lat,
-                      lon: scrubPoint.s3.lon,
-                      headingDeg: scrubPoint.s3.headingDeg,
-                    }
-                  : null
-              }
-              heatmapMode={mapLayerMode}
-              showSpeedBadges={showMapPeaks}
-              isExternalFullscreen={true}
-              onFullscreenToggle={() => {
-                setProFullscreen(false);
-                setProReplayPlaying(false);
-              }}
-              topLeftOverlay={
-                <div className="pointer-events-auto inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 p-1 font-mono text-[9px] font-bold backdrop-blur-xs">
-                  {(
-                    [
-                      { id: 'laps', label: 'Voltas' },
-                      { id: 'speed', label: 'Vel.' },
-                      { id: 'accel', label: 'Freio/Acel' },
-                    ] as const
-                  ).map((opt) => (
-                    <button
-                      key={`fs_layer_${opt.id}`}
-                      type="button"
-                      onClick={() => setMapLayerMode(opt.id)}
-                      className={`rounded px-1.5 py-0.5 font-extrabold transition-colors ${
-                        mapLayerMode === opt.id
-                          ? 'pitstop-btn-red'
-                          : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                  <span className="mx-0.5 h-3 w-px bg-[var(--ps-border)]" />
-                  <button
-                    type="button"
-                    aria-pressed={showMapPeaks}
-                    onClick={() => setShowMapPeaks((v) => !v)}
-                    className={`rounded px-1.5 py-0.5 font-extrabold transition-colors ${
-                      showMapPeaks
-                        ? 'bg-amber-500/20 text-[var(--ps-amber)]'
-                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-                    }`}
-                  >
-                    Picos
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={showMapSplits}
-                    onClick={() => setShowMapSplits((v) => !v)}
-                    className={`rounded px-1.5 py-0.5 font-extrabold transition-colors ${
-                      showMapSplits
-                        ? 'bg-sky-500/20 text-sky-400'
-                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-                    }`}
-                  >
-                    Parciais
-                  </button>
-                </div>
-              }
-              containerClassName="relative h-full w-full overflow-hidden bg-[#000000]"
-            />
-          </div>
-
-          {/* Metade Inferior (~56%): Leituras instantâneas + Gráfico + Controles ergonômicos */}
-          <div className="flex min-h-0 flex-1 flex-col bg-[var(--ps-bg)]">
-            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
-              {/* Card de Leitura Instantânea */}
-              <div className="grid grid-cols-2 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-[10px] tabular-nums lg:grid-cols-4 sm:text-[11px]">
-                <div>
-                  <span className="text-[var(--ps-muted)] uppercase">
-                    Velocidade @ {scrubPoint.distKmStr} km
+            {/* Metade Inferior: 3 Cards Numéricos Grandes + Gráficos Confortáveis + Controles */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#090A0D]">
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden p-2.5">
+                {/* 3 Cards Lado a Lado com Números Grandes (Estilo AiM / RaceChrono) */}
+                <div className="grid grid-cols-3 gap-2 font-mono tabular-nums">
+                  {/* Card 1: VELOCIDADE (KM/H) */}
+                  <div className="min-w-0 flex flex-col justify-between rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2">
+                  <span className="truncate text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                    VELOCIDADE (KM/H)
                   </span>
-                  <p className="mt-0.5 font-extrabold">
-                    <span className="text-[var(--ps-emerald)]">V1 {scrubPoint.speed1 ?? '--'}</span>
-                    {showLap2 && (
-                      <>
-                        <span className="text-[var(--ps-muted)]"> vs </span>
-                        <span className="text-[#FF2A2A]">V2 {scrubPoint.speed2 ?? '--'}</span>
-                        <span
-                          className={`ml-1 ${
-                            (scrubPoint.speedDelta2vs1 ?? 0) >= 0
-                              ? 'text-[var(--ps-emerald)]'
-                              : 'text-[#FF2A2A]'
-                          }`}
-                        >
-                          ({formatSignedKmh(scrubPoint.speedDelta2vs1)} km/h)
-                        </span>
-                      </>
-                    )}
-                    {showLap3 && (
-                      <span className="ml-1.5 text-[#38BDF8]">
-                        · V3 {scrubPoint.speed3 ?? '--'} ({formatSignedKmh(scrubPoint.speedDelta3vs1)})
-                      </span>
-                    )}
-                  </p>
-                </div>
-
-                <div>
-                  <span className="text-[var(--ps-muted)] uppercase">
-                    Time Slip (ΔT) @ {scrubPoint.distM}m
-                  </span>
-                  <p className="mt-0.5 font-extrabold">
-                    {showLap2 && scrubPoint.timeDelta2vs1Sec !== null ? (
-                      <span
-                        className={
-                          scrubPoint.timeDelta2vs1Sec <= 0
-                            ? 'text-[var(--ps-emerald)]'
-                            : 'text-[#FF2A2A]'
-                        }
-                      >
-                        V2 {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
-                      </span>
-                    ) : showLap3 && scrubPoint.timeDelta3vs1Sec !== null ? (
-                      <span
-                        className={
-                          scrubPoint.timeDelta3vs1Sec <= 0
-                            ? 'text-[var(--ps-emerald)]'
-                            : 'text-[#FF2A2A]'
-                        }
-                      >
-                        V3 {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
-                      </span>
-                    ) : (
-                      <span className="text-[var(--ps-muted)]">--.--s</span>
-                    )}
-                    {showLap2 && showLap3 && scrubPoint.timeDelta3vs1Sec !== null && (
-                      <span className="ml-1.5 text-[#38BDF8]">
-                        · V3 {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
-                      </span>
-                    )}
-                  </p>
-                </div>
-
-                <div>
-                  <span className="text-[var(--ps-muted)] uppercase">
-                    Acel / Frenagem &amp; Lat G
-                  </span>
-                  <p className="mt-0.5 font-extrabold">
-                    <span className="text-[var(--ps-emerald)]">
-                      {scrubPoint.longG1 >= 0 ? '+' : ''}
-                      {scrubPoint.longG1.toFixed(2)}G
+                  <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="text-xl font-extrabold leading-none text-[var(--ps-emerald)]">
+                      {scrubPoint.speed1 ?? '--'}
                     </span>
                     {showLap2 && (
-                      <span className="text-[var(--ps-amber)]">
-                        {' '}
-                        / V2 {scrubPoint.longG2 >= 0 ? '+' : ''}
-                        {scrubPoint.longG2.toFixed(2)}G
+                      <span className="text-xl font-extrabold leading-none text-[#FF2A2A]">
+                        {scrubPoint.speed2 ?? '--'}
                       </span>
                     )}
+                    {!showLap2 && showLap3 && (
+                      <span className="text-xl font-extrabold leading-none text-[#38BDF8]">
+                        {scrubPoint.speed3 ?? '--'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-1 text-[10px] font-bold">
                     <span className="text-[var(--ps-muted)]">
-                      {' '}
-                      · Lat {Math.abs(scrubPoint.latG1).toFixed(2)}G
-                      {showLap2 ? `/${Math.abs(scrubPoint.latG2).toFixed(2)}G` : ''}
+                      V1{showLap2 ? ' / V2' : showLap3 ? ' / V3' : ''}
                     </span>
-                  </p>
+                    {showLap2 && scrubPoint.speedDelta2vs1 !== null && (
+                      <span
+                        className={`rounded px-1 py-0.5 text-[9px] font-black ${
+                          scrubPoint.speedDelta2vs1 >= 0
+                            ? 'bg-emerald-500/20 text-[var(--ps-emerald)]'
+                            : 'bg-red-500/20 text-[#FF2A2A]'
+                        }`}
+                      >
+                        {formatSignedKmh(scrubPoint.speedDelta2vs1)} km/h
+                      </span>
+                    )}
+                  </div>
                 </div>
 
-                <div>
-                  <span className="text-[var(--ps-muted)] uppercase">
-                    Ponto de Frenagem (V2 vs V1)
+                {/* Card 2: DELTA TEMPO (ΔT) */}
+                <div className="min-w-0 flex flex-col justify-between rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2">
+                  <span className="truncate text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                    DELTA TEMPO (ΔT)
                   </span>
-                  <p className="mt-0.5 font-extrabold">
-                    {!showLap2 ? (
-                      <span className="text-[var(--ps-muted)]">Selecione V2 para comparar</span>
-                    ) : scrubPoint.brakeOffset2 ? (
-                      scrubPoint.brakeOffset2.offsetM > 0 ? (
-                        <span className="text-[var(--ps-emerald)]">
-                          V2 freou +{scrubPoint.brakeOffset2.offsetM}m mais tarde
-                        </span>
-                      ) : scrubPoint.brakeOffset2.offsetM < 0 ? (
-                        <span className="text-[#FF2A2A]">
-                          V2 freou {Math.abs(scrubPoint.brakeOffset2.offsetM)}m antes
-                        </span>
-                      ) : (
-                        <span className="text-[var(--ps-amber)]">Mesmo ponto de freada (0m)</span>
-                      )
-                    ) : (
-                      <span className="text-[var(--ps-muted)]">Sem freada próxima</span>
-                    )}
-                  </p>
+                  <div
+                    className={`mt-1 text-xl font-extrabold leading-none ${
+                      activeTimeDelta === null
+                        ? 'text-[var(--ps-muted)]'
+                        : activeTimeDelta <= 0
+                          ? 'text-[var(--ps-emerald)]'
+                          : 'text-[#FF2A2A]'
+                    }`}
+                  >
+                    {activeTimeDelta !== null ? formatSignedSec(activeTimeDelta) : '--.--s'}
+                  </div>
+                  <div className="mt-1 truncate text-[10px] font-bold text-[var(--ps-muted)]">
+                    {showLap2
+                      ? `V2 vs V1 @ ${scrubPoint.distM}m`
+                      : showLap3
+                        ? `V3 vs V1 @ ${scrubPoint.distM}m`
+                        : `@ ${scrubPoint.distKmStr} km`}
+                  </div>
+                </div>
+
+                {/* Card 3: FORÇA G / PEDAL */}
+                <div className="min-w-0 flex flex-col justify-between rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2">
+                  <span className="truncate text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                    FORÇA G / PEDAL
+                  </span>
+                  <div
+                    className={`mt-1 text-xl font-extrabold leading-none ${
+                      scrubPoint.longG1 >= 0 ? 'text-[var(--ps-emerald)]' : 'text-[#FF2A2A]'
+                    }`}
+                  >
+                    {scrubPoint.longG1 >= 0 ? '+' : ''}
+                    {scrubPoint.longG1.toFixed(2)}G
+                  </div>
+                  <div className="mt-1 truncate text-[10px] font-bold text-[var(--ps-muted)]">
+                    {showLap2
+                      ? `V2 ${scrubPoint.longG2 >= 0 ? '+' : ''}${scrubPoint.longG2.toFixed(2)}G`
+                      : `Lat ${Math.abs(scrubPoint.latG1).toFixed(2)}G`}
+                  </div>
                 </div>
               </div>
 
@@ -2614,7 +2577,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 <svg
                   ref={fsPanelRef}
                   viewBox={`0 0 ${chartW} ${p1H}`}
-                  className="h-44 w-full touch-none select-none cursor-crosshair sm:h-52"
+                  className="h-[148px] min-h-[140px] w-full touch-none select-none cursor-crosshair sm:h-52"
                   onPointerDown={(e) => {
                     isDraggingRef.current = true;
                     e.currentTarget.setPointerCapture(e.pointerId);
@@ -2837,7 +2800,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   <svg
                     ref={fsTimeSlipRef}
                     viewBox={`0 0 ${chartW} ${pTsH}`}
-                    className="h-24 w-full touch-none select-none cursor-crosshair sm:h-28"
+                    className="h-[140px] min-h-[140px] w-full touch-none select-none cursor-crosshair sm:h-40"
                     onPointerDown={(e) => {
                       isDraggingRef.current = true;
                       e.currentTarget.setPointerCapture(e.pointerId);
@@ -3048,8 +3011,10 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               </div>
             </div>
           </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        );
+      })()}
     </div>
   );
 };
