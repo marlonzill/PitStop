@@ -550,25 +550,24 @@
   animation-direction: reverse;
 }
 
-/* Dark Minimalist Motorsport Canvas for Home Screen (Carbon + Technical Grid + Soft Red Glow) */
+/* Dark Minimalist Motorsport Canvas for Home Screen (Uniform Dark Diagonal Carbon Fiber) */
 .pitstop-home-motorsport-bg {
-  background-color: #07080b;
+  background-color: #07080a;
   background-image:
-    radial-gradient(ellipse 90% 80% at 50% 48%, transparent 32%, rgba(2, 3, 5, 0.78) 100%),
-    linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(45deg, rgba(255, 255, 255, 0.018) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.018) 75%),
-    linear-gradient(-45deg, rgba(0, 0, 0, 0.34) 25%, transparent 25%, transparent 75%, rgba(0, 0, 0, 0.34) 75%);
-  background-size: 100% 100%, 36px 36px, 36px 36px, 8px 8px, 8px 8px;
-}
-
-.pitstop-home-radial-glow {
-  background: radial-gradient(
-    circle at 50% 48%,
-    rgba(225, 6, 0, 0.16) 0%,
-    rgba(225, 6, 0, 0.06) 30%,
-    transparent 62%
-  );
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.022) 0px,
+      rgba(255, 255, 255, 0.022) 2px,
+      transparent 2px,
+      transparent 6px
+    ),
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.012) 0px,
+      rgba(255, 255, 255, 0.012) 2px,
+      rgba(0, 0, 0, 0.34) 2px,
+      rgba(0, 0, 0, 0.34) 6px
+    );
 }
 
 .pitstop-home-motorsport-bg .pitstop-slogan-text {
