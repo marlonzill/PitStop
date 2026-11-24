@@ -26,6 +26,7 @@ import {
   Eye,
   FileSearch,
   FileText,
+  Flag,
   HardDrive,
   Keyboard,
   Link2,
@@ -34,6 +35,7 @@ import {
   Radio,
   RefreshCw,
   RotateCcw,
+  Route,
   Ruler,
   Satellite,
   Server,
@@ -49,7 +51,7 @@ import {
 } from 'lucide-react';
 import { VelocityCockpitLayoutEditor } from './VelocityCockpitLayoutEditor';
 import type { SettingsSubMenu } from '../App';
-import type { ParsedRoadbook } from '../types/rally';
+import type { ParsedRoadbook, RallyMode } from '../types/rally';
 import {
   checkBaseServerHealth,
   getPendingSubmissions,
@@ -108,6 +110,7 @@ import {
 } from '../utils/velocityStorage';
 import type { VelocityTrack } from '../utils/velocityEngine';
 import {
+  ENABLE_SUBSCRIPTION_GATE,
   isThemeUnlockedForPlan,
   openProUpgradeModal,
   useAuthSession,
@@ -120,6 +123,8 @@ import { SettingsWireframeArt } from './SettingsWireframeArt';
 interface SettingsTabProps {
   initialMenu?: SettingsSubMenu;
   onMenuChange?: (menu: SettingsSubMenu) => void;
+  rallyMode?: RallyMode;
+  onSelectRallyMode?: (mode: RallyMode) => void;
   onOpenNavigation?: () => void;
   onOpenApuracao?: () => void;
 }
@@ -421,6 +426,8 @@ function testAlertSound(style: AlertStyle) {
 export const SettingsTab: React.FC<SettingsTabProps> = ({
   initialMenu = 'hub',
   onMenuChange,
+  rallyMode = 'regularidade',
+  onSelectRallyMode,
   onOpenNavigation,
   onOpenApuracao,
 }) => {
@@ -1284,6 +1291,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     APP_THEME_OPTIONS.find((t) => t.id === settings.appTheme) ?? APP_THEME_OPTIONS[0];
 
   const menuTitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
+    modality: 'Modalidade do Rally',
     account: 'Conta & Assinatura (FREE / PRO)',
     theme: 'Temas & Visual do Painel',
     collector: 'Coletor & Envio para Admin',
@@ -1332,17 +1340,32 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         <div className="grid grid-cols-2 gap-2">
           {[
             {
+              id: 'modality' as const,
+              accentColor: '#FF2A2A',
+              title: 'MODALIDADE DO RALLY',
+              subtitle:
+                rallyMode === 'velocidade' ? 'Rally Velocidade' : 'Rally Regularidade',
+            },
+            {
               id: 'account' as const,
               accentColor: '#38BDF8',
-              title: 'CONTA & PRO',
-              subtitle: isAdmin
-                ? 'Admin / PRO'
-                : isPro
-                  ? 'PRO Ativo'
-                  : user
-                    ? 'Plano FREE'
-                    : 'Entrar / Plano',
-              badge: isAdmin ? 'ADMIN' : isPro ? 'PRO' : 'FREE',
+              title: !ENABLE_SUBSCRIPTION_GATE ? 'CONTA & ASSINATURA' : 'CONTA & PRO',
+              subtitle: !ENABLE_SUBSCRIPTION_GATE
+                ? 'Recursos PRO liberados'
+                : isAdmin
+                  ? 'Admin / PRO'
+                  : isPro
+                    ? 'PRO Ativo'
+                    : user
+                      ? 'Plano FREE'
+                      : 'Entrar / Plano',
+              badge: !ENABLE_SUBSCRIPTION_GATE
+                ? 'DESATIVADO / MODO DEV'
+                : isAdmin
+                  ? 'ADMIN'
+                  : isPro
+                    ? 'PRO'
+                    : 'FREE',
             },
             {
               id: 'theme' as const,
@@ -1433,25 +1456,25 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             >
               <SettingsWireframeArt menuId={item.id} color={item.accentColor} />
 
-              <div className="relative z-10 flex min-w-0 max-w-[78%] flex-col items-end justify-center text-right">
-                <div className="flex items-center justify-end gap-1.5">
-                  {'badge' in item && item.badge && (
-                    <span
-                      className={`rounded px-1 py-0.5 font-mono text-[8px] font-black leading-none uppercase ${
-                        item.badge === 'ADMIN'
-                          ? 'bg-cyan-500/25 text-cyan-300'
-                          : item.badge === 'PRO'
-                            ? 'bg-emerald-500/25 text-emerald-300'
+              <div className="relative z-10 flex min-w-0 max-w-[82%] flex-col items-end justify-center text-right">
+                {'badge' in item && item.badge && (
+                  <span
+                    className={`mb-0.5 rounded px-1.5 py-0.5 font-mono text-[8px] font-black leading-none uppercase ${
+                      item.badge === 'ADMIN'
+                        ? 'bg-cyan-500/25 text-cyan-300'
+                        : item.badge === 'PRO'
+                          ? 'bg-emerald-500/25 text-emerald-300'
+                          : item.badge.includes('DEV')
+                            ? 'border border-amber-400/35 bg-amber-500/15 text-amber-300'
                             : 'bg-amber-500/25 text-amber-300'
-                      }`}
-                    >
-                      {item.badge}
-                    </span>
-                  )}
-                  <span className="whitespace-nowrap text-[11px] font-black tracking-wider text-white uppercase leading-tight sm:text-xs">
-                    {item.title}
+                    }`}
+                  >
+                    {item.badge}
                   </span>
-                </div>
+                )}
+                <span className="max-w-full truncate text-[11px] font-black tracking-wider text-white uppercase leading-tight sm:text-xs">
+                  {item.title}
+                </span>
 
                 <div className="mt-0.5 max-w-full truncate text-[10px] font-medium text-slate-400 leading-tight">
                   {item.subtitle}
@@ -1484,6 +1507,94 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </div>
       )}
 
+      {/* SUBMENU: MODALIDADE DO RALLY */}
+      {activeMenu === 'modality' && (
+        <div className="space-y-3">
+          <section className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                  Modalidade do Rally
+                </h2>
+                <p className="text-xs text-[var(--ps-muted)]">
+                  Escolha a disciplina ativa. A aba correspondente na barra superior será atualizada imediatamente.
+                </p>
+              </div>
+              <span className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-1.5 font-mono text-[11px] font-bold text-[var(--ps-accent)]">
+                Ativa: {rallyMode === 'velocidade' ? 'Rally Velocidade' : 'Rally Regularidade'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {[
+                {
+                  id: 'regularidade' as const,
+                  title: 'Rally Regularidade',
+                  tabLabel: 'Regul.',
+                  description:
+                    'Navegação por planilha (.NBP/.TXT), cálculos de TNAV/PMM, alertas de voz, hodômetro aferido e pareamento Droid Piloto.',
+                  icon: Route,
+                },
+                {
+                  id: 'velocidade' as const,
+                  title: 'Rally Velocidade',
+                  tabLabel: 'Veloc.',
+                  description:
+                    'Cronômetro de Especiais (SS), parciais ao vivo com Delta Time, Satcron, Datalogger de 3 voltas, mapa e GoPro BLE.',
+                  icon: Flag,
+                },
+              ].map((option) => {
+                const isSelected = rallyMode === option.id;
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => onSelectRallyMode?.(option.id)}
+                    className={`group relative flex flex-col justify-between gap-3 overflow-hidden rounded-2xl border p-4 text-left transition-all active:scale-[0.99] ${
+                      isSelected
+                        ? 'border-[var(--ps-accent)] ring-1 ring-[var(--ps-accent)]/50 bg-[var(--ps-card)]'
+                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
+                            isSelected
+                              ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-accent)]'
+                              : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
+                          }`}
+                        >
+                          <Icon className="h-5 w-5" />
+                        </span>
+                        <div>
+                          <p className="font-['Barlow_Condensed'] text-lg font-black tracking-wide text-[var(--ps-text)] uppercase leading-tight">
+                            {option.title}
+                          </p>
+                          <p className="font-mono text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                            Aba no topo: {option.tabLabel}
+                          </p>
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--ps-accent)] text-[var(--ps-accent-text)]">
+                          <Check className="h-3.5 w-3.5 stroke-[3]" />
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs leading-relaxed text-[var(--ps-muted)]">
+                      {option.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      )}
+
       {/* SUBMENU 00: CONTA & ASSINATURA + ADMIN */}
       {activeMenu === 'account' && <AccountSubscriptionPanel />}
 
@@ -1497,9 +1608,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   Escolha o Tema do Cockpit (10 Modelos)
                 </h2>
                 <p className="text-xs text-[var(--ps-muted)]">
-                  {isPro
-                    ? 'Plano PRO ativo: todos os 10 temas visuais desbloqueados offline e online.'
-                    : 'Plano FREE: PitStop Original e Solar Dia liberados. Os demais 8 temas requerem Plano PRO.'}
+                  {!ENABLE_SUBSCRIPTION_GATE
+                    ? 'Modo Dev ativo: todos os 10 temas visuais estão 100% liberados.'
+                    : isPro
+                      ? 'Plano PRO ativo: todos os 10 temas visuais desbloqueados offline e online.'
+                      : 'Plano FREE: PitStop Original e Solar Dia liberados. Os demais 8 temas requerem Plano PRO.'}
                 </p>
               </div>
               <span className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-1.5 font-mono text-[11px] font-bold text-[var(--ps-accent)]">
@@ -1507,7 +1620,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-2.5">
               {APP_THEME_OPTIONS.map((themeOpt) => {
                 const isActive = settings.appTheme === themeOpt.id;
                 const unlocked = isThemeUnlockedForPlan(themeOpt.id, isPro);
@@ -1525,22 +1638,23 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       }
                       updateSettings({ appTheme: themeOpt.id });
                     }}
-                    className={`group flex flex-col justify-between gap-3 rounded-2xl border p-3.5 text-left transition-all active:scale-[0.99] ${
+                    title={themeOpt.description}
+                    className={`group relative flex flex-col justify-between gap-2 overflow-hidden rounded-xl border p-2.5 text-left transition-all active:scale-[0.98] ${
                       isActive
-                        ? 'border-[var(--ps-accent)] ring-2 ring-[var(--ps-accent)]/30 bg-[var(--ps-card)]'
+                        ? 'border-[var(--ps-accent)] ring-1 ring-[var(--ps-accent)]/50 bg-[var(--ps-card)]'
                         : unlocked
                           ? 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
                           : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] opacity-80 hover:border-amber-500/50'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-                            {themeOpt.name}
-                          </span>
+                    <div className="flex items-start justify-between gap-1.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-['Barlow_Condensed'] text-sm font-black tracking-wide text-[var(--ps-text)] uppercase leading-tight sm:text-base">
+                          {themeOpt.name}
+                        </p>
+                        <div className="mt-0.5 flex items-center gap-1.5">
                           <span
-                            className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase"
+                            className="rounded px-1.5 py-0.5 font-mono text-[8px] font-extrabold leading-none uppercase"
                             style={{
                               backgroundColor: themeOpt.accent,
                               color: themeOpt.darkAccentText ? '#090D16' : '#FFFFFF',
@@ -1549,65 +1663,50 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                             {themeOpt.tag}
                           </span>
                         </div>
-                        <p className="mt-1 text-xs leading-snug text-[var(--ps-muted)]">
-                          {themeOpt.description}
-                        </p>
                       </div>
                       {isActive ? (
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--ps-accent)] text-[var(--ps-accent-text)]">
-                          <Check className="h-3.5 w-3.5" />
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--ps-accent)] text-[var(--ps-accent-text)]">
+                          <Check className="h-3 w-3 stroke-[3]" />
                         </span>
                       ) : !unlocked ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-500/45 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-black text-amber-400 uppercase">
-                          <Crown className="h-3 w-3" />
+                        <span className="inline-flex shrink-0 items-center gap-0.5 rounded border border-amber-500/45 bg-amber-500/15 px-1 py-0.5 font-mono text-[8px] font-black text-amber-400 uppercase">
+                          <Crown className="h-2.5 w-2.5" />
                           <span>PRO</span>
                         </span>
                       ) : null}
                     </div>
 
-                    {/* Mini Live Telemetry Preview Card */}
+                    {/* Mini Preview Compacto + Amostras */}
                     <div
-                      className="w-full rounded-xl border p-2.5"
+                      className="w-full rounded-lg border p-1.5"
                       style={{
                         backgroundColor: themeOpt.bg,
                         borderColor: themeOpt.border,
                         color: themeOpt.text,
                       }}
                     >
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center justify-between gap-1.5">
                         <div
-                          className="rounded-lg border px-2.5 py-1.5"
+                          className="rounded border px-1.5 py-1"
                           style={{
                             backgroundColor: themeOpt.surface,
                             borderColor: themeOpt.border,
                           }}
                         >
-                          <div
-                            className="text-[9px] font-semibold tracking-widest uppercase"
-                            style={{ color: themeOpt.muted }}
-                          >
-                            VELOCIDADE
-                          </div>
-                          <div className={`${themeOpt.fontClass} text-xl font-black leading-none tabular-nums`}>
-                            124 <span className="text-[10px] font-bold" style={{ color: themeOpt.muted }}>km/h</span>
+                          <div className={`${themeOpt.fontClass} text-xs font-black leading-none tabular-nums sm:text-sm`}>
+                            124 <span className="text-[8px] font-bold" style={{ color: themeOpt.muted }}>km/h</span>
                           </div>
                         </div>
 
                         <div
-                          className="rounded-lg border px-2.5 py-1.5 text-right"
+                          className="rounded border px-1.5 py-1 text-right"
                           style={{
                             backgroundColor: themeOpt.card,
                             borderColor: themeOpt.accent,
                           }}
                         >
                           <div
-                            className="text-[9px] font-semibold tracking-widest uppercase"
-                            style={{ color: themeOpt.muted }}
-                          >
-                            DELTA
-                          </div>
-                          <div
-                            className={`${themeOpt.fontClass} text-xl font-black leading-none tabular-nums`}
+                            className={`${themeOpt.fontClass} text-xs font-black leading-none tabular-nums sm:text-sm`}
                             style={{ color: themeOpt.accent2 }}
                           >
                             -0.42s
@@ -1615,21 +1714,31 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                         </div>
                       </div>
 
-                      <div className="mt-2 flex items-center justify-between gap-2 pt-1.5" style={{ borderTop: `1px solid ${themeOpt.border}` }}>
-                        <span className="text-[10px] font-semibold" style={{ color: themeOpt.muted }}>
-                          Paleta do Painel
+                      <div className="mt-1.5 flex items-center justify-between gap-1 pt-1" style={{ borderTop: `1px solid ${themeOpt.border}` }}>
+                        <span className="truncate font-mono text-[8px] font-semibold uppercase" style={{ color: themeOpt.muted }}>
+                          Paleta
                         </span>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1">
                           {[themeOpt.bg, themeOpt.surface, themeOpt.card, themeOpt.accent, themeOpt.accent2].map((hex, idx) => (
                             <span
                               key={idx}
-                              className="h-3.5 w-3.5 rounded-full border border-white/20 shadow-xs"
+                              className="h-2.5 w-2.5 rounded-full border border-white/25"
                               style={{ backgroundColor: hex }}
                             />
                           ))}
                         </div>
                       </div>
                     </div>
+
+                    {/* Barra LED inferior estilo FT */}
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px]"
+                      style={{
+                        backgroundColor: themeOpt.accent,
+                        opacity: isActive ? 1 : 0.45,
+                      }}
+                    />
                   </button>
                 );
               })}

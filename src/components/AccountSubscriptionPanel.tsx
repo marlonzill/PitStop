@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import {
   type AuthUser,
+  ENABLE_SUBSCRIPTION_GATE,
   fetchAdminUsersList,
   getEffectiveUserPlan,
   loginUserAccount,
@@ -76,7 +77,7 @@ export const AccountSubscriptionPanel: React.FC = () => {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (isAdmin) {
+    if (ENABLE_SUBSCRIPTION_GATE && isAdmin) {
       void loadAdminUsers();
     }
   }, [isAdmin, loadAdminUsers]);
@@ -134,6 +135,55 @@ export const AccountSubscriptionPanel: React.FC = () => {
       (u) => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
     );
   }, [adminUsers, adminSearch]);
+
+  if (!ENABLE_SUBSCRIPTION_GATE) {
+    return (
+      <div className="space-y-3.5">
+        <section className="rounded-xl border border-amber-500/35 bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="space-y-1">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 font-mono text-[10px] font-black tracking-wider text-amber-300 uppercase">
+                DESATIVADO / MODO DEV
+              </span>
+              <h2 className="font-['Barlow_Condensed'] text-2xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                Conta &amp; Assinatura (Em Breve)
+              </h2>
+            </div>
+
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 font-mono text-xs font-black text-emerald-400 uppercase">
+              <Crown className="h-3.5 w-3.5" />
+              <span>100% PRO LIBERADO</span>
+            </span>
+          </div>
+
+          <p className="text-xs leading-relaxed text-[var(--ps-muted)]">
+            Todos os recursos PRO estão <strong className="text-[var(--ps-text)]">temporariamente liberados</strong> enquanto o aplicativo está em fase final de desenvolvimento e testes em pista. Nenhuma autenticação ou verificação online está sendo exigida no momento.
+          </p>
+
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3.5 space-y-2">
+            <p className="font-mono text-[10px] font-extrabold tracking-wider text-[var(--ps-emerald)] uppercase">
+              Recursos Liberados para Testes
+            </p>
+            <div className="grid grid-cols-1 gap-1.5 text-xs text-[var(--ps-text)] sm:grid-cols-2">
+              {[
+                'Navegação & Planilha T15 (.NBP/.TXT)',
+                'Droid Piloto & Pareamento Sala/BLE',
+                'Cronômetro SS & 11 Layouts de Cockpit',
+                'Datalogger 3 Voltas & Vídeo Overlay HUD',
+                'Controle de Câmeras GoPro BLE',
+                'Satcron Ao Vivo & Todos os 10 Temas',
+              ].map((feat) => (
+                <div key={feat} className="flex items-center gap-2">
+                  <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ps-emerald)]" />
+                  <span>{feat}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3.5">

@@ -32,6 +32,18 @@ export const SettingsWireframeArt: React.FC<SettingsWireframeArtProps> = ({ menu
           <path d="M8 20 H18 M8 74 H18" opacity="0.5" />
         </svg>
       );
+    case 'modality':
+      return (
+        <svg {...commonProps}>
+          {/* Checkered Rally Flag + Route Selector Wireframe */}
+          <path d="M22 76 V20" />
+          <path d="M22 22 C36 16 48 28 62 22 V48 C48 54 36 42 22 48" />
+          <path d="M34 21 V47 M48 23 V49 M22 35 C36 29 48 41 62 35" strokeDasharray="3 2" />
+          <path d="M62 68 C72 68 72 52 84 52" />
+          <circle cx="62" cy="68" r="3" />
+          <circle cx="86" cy="52" r="3.5" />
+        </svg>
+      );
     case 'theme':
       return (
         <svg {...commonProps}>

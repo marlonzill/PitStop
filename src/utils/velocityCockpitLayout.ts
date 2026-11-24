@@ -13,14 +13,15 @@ export type VelocityCockpitLayoutId =
   | 'landscape_3col'
   | 'custom';
 
+export type VelocityMenuPosition = 'bottom' | 'top';
+
 export type CustomWidgetId =
   | 'delta'
   | 'splits'
   | 'speed'
   | 'meters'
   | 'chrono'
-  | 'minimap'
-  | 'gopro';
+  | 'minimap';
 
 export type CustomWidgetSize = 'P' | 'M' | 'G';
 
@@ -34,6 +35,7 @@ export interface CustomWidgetConfig {
 
 export interface VelocityCockpitLayoutConfig {
   layoutId: VelocityCockpitLayoutId;
+  menuPosition: VelocityMenuPosition;
   customWidgets: CustomWidgetConfig[];
 }
 
@@ -65,9 +67,9 @@ export const VELOCITY_COCKPIT_PRESETS: VelocityCockpitLayoutPreset[] = [
     code: '02',
     name: 'Ergonomia Thumb-Zone',
     shortName: 'Thumb-Zone',
-    tag: 'Polegar na Base',
+    tag: 'Equilibrado',
     accentColor: '#10B981',
-    description: 'Topo limpo só com Voltar, progresso e Especial; dados no centro e todos os botões na base.',
+    description: 'Dados centrais limpos e compactos: Delta Time, Parciais, Velocidade, Metros e Cronômetro.',
   },
   {
     id: 'coralba',
@@ -76,7 +78,7 @@ export const VELOCITY_COCKPIT_PRESETS: VelocityCockpitLayoutPreset[] = [
     shortName: 'Coralba Rally',
     tag: 'Navegador',
     accentColor: '#F59E0B',
-    description: 'Odômetro Parcial (Trip) e botão Zerar Trip gigantes, Odômetro Total, CH e Velocidade.',
+    description: 'Odômetro Parcial (Trip) gigante em destaque, Odômetro Total, Hora CH, Velocidade e SS.',
   },
   {
     id: 'split_map',
@@ -112,7 +114,7 @@ export const VELOCITY_COCKPIT_PRESETS: VelocityCockpitLayoutPreset[] = [
     shortName: "Harry's Delta",
     tag: 'Visão Periférica',
     accentColor: '#22C55E',
-    description: 'Bloco gigante de Delta ocupando ~45% da tela em verde ou vermelho vivo.',
+    description: 'Bloco gigante de Delta ocupando ~45% do centro em verde ou vermelho vivo.',
   },
   {
     id: 'wrc_pacenote',
@@ -148,7 +150,7 @@ export const VELOCITY_COCKPIT_PRESETS: VelocityCockpitLayoutPreset[] = [
     shortName: 'Customizado',
     tag: 'Editor Visual',
     accentColor: '#A855F7',
-    description: 'Ative/desative widgets, ordene com Subir/Descer e escolha tamanho P, M ou G.',
+    description: 'Ative/desative widgets de dados, ordene com Subir/Descer e escolha tamanho P, M ou G.',
   },
 ];
 
@@ -196,19 +198,13 @@ export function getDefaultCustomWidgets(): CustomWidgetConfig[] {
       enabled: false,
       size: 'M',
     },
-    {
-      id: 'gopro',
-      label: 'Barra GoPro',
-      description: 'Comando rápido de gravação e Auto-REC',
-      enabled: true,
-      size: 'P',
-    },
   ];
 }
 
 export function getDefaultVelocityCockpitLayout(): VelocityCockpitLayoutConfig {
   return {
     layoutId: 'classic',
+    menuPosition: 'bottom',
     customWidgets: getDefaultCustomWidgets(),
   };
 }
@@ -254,8 +250,13 @@ export function loadVelocityCockpitLayout(): VelocityCockpitLayoutConfig {
     const validIds = new Set(VELOCITY_COCKPIT_PRESETS.map((p) => p.id));
     const layoutId: VelocityCockpitLayoutId =
       parsed.layoutId && validIds.has(parsed.layoutId) ? parsed.layoutId : defaults.layoutId;
+    const menuPosition: VelocityMenuPosition =
+      parsed.menuPosition === 'top' || parsed.menuPosition === 'bottom'
+        ? parsed.menuPosition
+        : defaults.menuPosition;
     return {
       layoutId,
+      menuPosition,
       customWidgets: normalizeCustomWidgets(parsed.customWidgets),
     };
   } catch {
@@ -317,6 +318,14 @@ export function useVelocityCockpitLayout() {
     });
   }, []);
 
+  const setMenuPosition = useCallback((menuPosition: VelocityMenuPosition) => {
+    setConfig((prev) => {
+      const next: VelocityCockpitLayoutConfig = { ...prev, menuPosition };
+      saveVelocityCockpitLayout(next);
+      return next;
+    });
+  }, []);
+
   const updateCustomWidgets = useCallback(
     (updater: (prev: CustomWidgetConfig[]) => CustomWidgetConfig[]) => {
       setConfig((prev) => {
@@ -346,6 +355,7 @@ export function useVelocityCockpitLayout() {
     config,
     preset: getPresetMeta(config.layoutId),
     setLayoutId,
+    setMenuPosition,
     updateCustomWidgets,
     resetCustomWidgets,
   };

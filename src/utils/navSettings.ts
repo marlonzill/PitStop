@@ -9,6 +9,13 @@ import {
   type PairingTransportMode,
 } from './pairingClient';
 
+/**
+ * Chave mestra do sistema de Conta & Assinatura PRO.
+ * - false: libera 100% das funções PRO sem exigir login ou chamadas /api/auth/*.
+ * - true: reativa login, verificação de assinatura e bloqueios FREE/PRO.
+ */
+export const ENABLE_SUBSCRIPTION_GATE = false;
+
 export type HighlightTheme = 'yellow' | 'blue' | 'green';
 export type SensorMode = 'gps' | 'blue';
 export type VoiceUnit = 'meters' | 'seconds';

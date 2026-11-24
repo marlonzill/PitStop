@@ -17,7 +17,6 @@ import {
   Flame,
   FolderOpen,
   History,
-  LayoutGrid,
   Map as MapIcon,
   Pause,
   Pencil,
@@ -85,7 +84,6 @@ import {
   getOrderedTrackTraps,
   haversineMetersVel,
   inferNearestBaseTraceBearing,
-  interpolateSampleAtDist,
   interpolateSampleAtElapsedMs,
   parseTrackFileToTrack,
   recalculateRunsForTrack,
@@ -225,561 +223,6 @@ function estimateSatellites(accuracyM: number | null, gpsActive: boolean): numbe
   if (accuracyM <= 25) return 7;
   return 4;
 }
-
-interface VelocityLiveStagePanelProps {
-  activeTrackName: string;
-  hasTraps: boolean;
-  orderedTraps: VelocityTrap[];
-  currentSplitTimesMs: Record<string, number>;
-  stageState: 'idle' | 'armed' | 'running' | 'finished';
-  stageStartMs: number | null;
-  lastFinishedMs: number | null;
-  clockOffsetMs: number;
-  speedKmh: number;
-  displayedTripKm: number;
-  totalDistKm: number;
-  bestRun: VelocityRun | null;
-  fallbackRuns: VelocityRun[];
-  optimalSummary: OptimalStageSummary;
-  lapNumber: number;
-  liveSamples: VelocitySample[];
-  onEditTripDistanceKm: (nextDisplayedKm: number) => void;
-}
-
-function resolveTrapElapsedMsInRun(run: VelocityRun, trap: VelocityTrap): number | null {
-  const recorded = run.splitTimesMs?.[trap.id];
-  if (typeof recorded === 'number' && Number.isFinite(recorded) && recorded >= 0) {
-    return recorded;
-  }
-  if ((trap.kind === 'finish' || trap.kind === 'start_finish') && Number.isFinite(run.totalMs) && run.totalMs > 0) {
-    return run.totalMs;
-  }
-  const samples = run.samples;
-  if (!samples || samples.length < 2) return null;
-
-  const baseStartMs = run.startedAtMs || samples[0].timestampMs;
-  for (let i = 1; i < samples.length; i += 1) {
-    const prev = samples[i - 1];
-    const curr = samples[i];
-    const hit = detectTrapCrossing(
-      { lat: prev.lat, lon: prev.lon, timestampMs: prev.timestampMs },
-      { lat: curr.lat, lon: curr.lon, timestampMs: curr.timestampMs },
-      trap,
-      { hdopAccuracyM: 45, autoSnap: true }
-    );
-    if (hit && hit.crossTimestampMs >= baseStartMs) {
-      if (
-        Number.isFinite(prev.stageElapsedMs) &&
-        Number.isFinite(curr.stageElapsedMs) &&
-        curr.stageElapsedMs >= prev.stageElapsedMs &&
-        curr.stageElapsedMs > 0
-      ) {
-        return Math.round(prev.stageElapsedMs + hit.t * (curr.stageElapsedMs - prev.stageElapsedMs));
-      }
-      return Math.max(0, hit.crossTimestampMs - baseStartMs);
-    }
-  }
-
-  let bestDistM = Infinity;
-  let bestElapsedMs: number | null = null;
-  const startIndex = trap.kind === 'start' ? 0 : Math.min(1, samples.length - 1);
-  for (let i = startIndex; i < samples.length; i += 1) {
-    const s = samples[i];
-    const dM = haversineMetersVel(s.lat, s.lon, trap.lat, trap.lon);
-    if (dM < bestDistM) {
-      bestDistM = dM;
-      bestElapsedMs =
-        Number.isFinite(s.stageElapsedMs) && s.stageElapsedMs > 0
-          ? s.stageElapsedMs
-          : Math.max(0, s.timestampMs - baseStartMs);
-    }
-  }
-  return bestDistM <= 250 && bestElapsedMs !== null ? bestElapsedMs : null;
-}
-
-function formatSplitCompactTime(ms: number): string {
-  const sec = ms / 1000;
-  if (sec < 60) return `${sec.toFixed(1)}s`;
-  const mins = Math.floor(sec / 60);
-  const remSec = sec - mins * 60;
-  return `${mins}:${remSec < 10 ? '0' : ''}${remSec.toFixed(1)}`;
-}
-
-const VelocityLiveStagePanel: React.FC<VelocityLiveStagePanelProps> = ({
-  activeTrackName,
-  hasTraps,
-  orderedTraps,
-  currentSplitTimesMs,
-  stageState,
-  stageStartMs,
-  lastFinishedMs,
-  clockOffsetMs,
-  speedKmh,
-  displayedTripKm,
-  totalDistKm,
-  bestRun,
-  fallbackRuns,
-  optimalSummary,
-  lapNumber,
-  liveSamples,
-  onEditTripDistanceKm,
-}) => {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [editingTrip, setEditingTrip] = useState(false);
-  const [tripInput, setTripInput] = useState('');
-  const [tripUnit, setTripUnit] = useState<'m' | 'km'>('m');
-
-  useEffect(() => {
-    const intervalMs = stageState === 'running' ? 80 : 500;
-    const id = window.setInterval(() => setNowMs(Date.now()), intervalMs);
-    return () => window.clearInterval(id);
-  }, [stageState]);
-
-  const currentStageElapsedMs =
-    stageState === 'running' && stageStartMs !== null
-      ? Math.max(0, nowMs - stageStartMs)
-      : stageState === 'finished' && lastFinishedMs !== null
-        ? lastFinishedMs
-        : 0;
-
-  const predictiveDeltaSec =
-    stageState === 'running' && bestRun
-      ? computePredictiveDeltaSec(totalDistKm, currentStageElapsedMs, bestRun)
-      : null;
-
-  const deltaTrend = useMemo<'improving' | 'worsening' | null>(() => {
-    if (stageState !== 'running' || !bestRun || predictiveDeltaSec === null) return null;
-    if (liveSamples.length >= 2 && totalDistKm > 0.03) {
-      const lookbackDistKm = Math.max(0, totalDistKm - 0.08);
-      const earlierSample = interpolateSampleAtDist(liveSamples, lookbackDistKm);
-      if (earlierSample) {
-        const earlierDelta = computePredictiveDeltaSec(
-          earlierSample.distKm,
-          earlierSample.stageElapsedMs,
-          bestRun
-        );
-        if (earlierDelta !== null) {
-          const shift = predictiveDeltaSec - earlierDelta;
-          if (shift <= -0.04) return 'improving';
-          if (shift >= 0.04) return 'worsening';
-        }
-      }
-    }
-    const refSample = interpolateSampleAtDist(bestRun.samples, totalDistKm);
-    if (refSample) {
-      const speedDiff = speedKmh - refSample.speedKmh;
-      if (speedDiff >= 2) return 'improving';
-      if (speedDiff <= -2) return 'worsening';
-    }
-    return null;
-  }, [stageState, bestRun, predictiveDeltaSec, liveSamples, totalDistKm, speedKmh]);
-
-  const splitTrapItems = useMemo(() => {
-    const checkpoints = orderedTraps.filter((t) => t.kind !== 'start');
-    if (checkpoints.length === 0) return [];
-
-    // Lista ordenada de voltas completas válidas para referência: bestRun primeiro, depois última volta válida
-    const candidateRuns: VelocityRun[] = [];
-    if (bestRun && bestRun.totalMs > 0) candidateRuns.push(bestRun);
-    for (let i = fallbackRuns.length - 1; i >= 0; i -= 1) {
-      const r = fallbackRuns[i];
-      if (r.totalMs > 0 && r.id !== bestRun?.id) {
-        candidateRuns.push(r);
-      }
-    }
-
-    let foundActive = false;
-    return checkpoints.map((trap, idx) => {
-      const currMs = currentSplitTimesMs[trap.id] ?? null;
-      const prevCurrMs =
-        idx === 0 ? 0 : currentSplitTimesMs[checkpoints[idx - 1].id] ?? null;
-      const hasSectorCurr = currMs !== null && prevCurrMs !== null && currMs >= prevCurrMs;
-      const displayMs = hasSectorCurr ? currMs - prevCurrMs : currMs;
-
-      // Resolve referência em bestRun; se faltar alguma parcial nela, usa a última volta completa válida
-      let refSectorMs: number | null = null;
-      let refCumulMs: number | null = null;
-      for (const refRun of candidateRuns) {
-        const cMs = resolveTrapElapsedMsInRun(refRun, trap);
-        const pMs = idx === 0 ? 0 : resolveTrapElapsedMsInRun(refRun, checkpoints[idx - 1]);
-        if (cMs !== null && refCumulMs === null) {
-          refCumulMs = cMs;
-        }
-        if (cMs !== null && pMs !== null && cMs >= pMs) {
-          refSectorMs = cMs - pMs;
-          refCumulMs = cMs;
-          break;
-        }
-      }
-
-      let diffSec: number | null = null;
-      if (currMs !== null) {
-        if (hasSectorCurr && refSectorMs !== null) {
-          diffSec = (currMs - prevCurrMs - refSectorMs) / 1000;
-        } else if (refCumulMs !== null) {
-          diffSec = (currMs - refCumulMs) / 1000;
-        }
-      }
-
-      const crossed = currMs !== null;
-      let isActive = false;
-      if (!crossed && !foundActive && stageState === 'running') {
-        isActive = true;
-        foundActive = true;
-      }
-      return {
-        id: trap.id,
-        code: `P${idx + 1}`,
-        name: trap.name,
-        crossed,
-        isActive,
-        sectorMs: displayMs,
-        diffSec,
-      };
-    });
-  }, [orderedTraps, currentSplitTimesMs, bestRun, fallbackRuns, stageState]);
-
-  const visibleSplitItems = useMemo(() => {
-    const total = splitTrapItems.length;
-    if (total <= 4) return splitTrapItems;
-
-    const activeIdx = splitTrapItems.findIndex((s) => s.isActive);
-    let startIdx = 0;
-    if (activeIdx >= 0) {
-      startIdx = Math.max(0, Math.min(total - 4, activeIdx - 2));
-    } else {
-      let lastCrossedIdx = -1;
-      for (let i = total - 1; i >= 0; i -= 1) {
-        if (splitTrapItems[i].crossed) {
-          lastCrossedIdx = i;
-          break;
-        }
-      }
-      if (lastCrossedIdx >= 0) {
-        startIdx = Math.max(0, Math.min(total - 4, lastCrossedIdx - 1));
-      }
-    }
-    return splitTrapItems.slice(startIdx, startIdx + 4);
-  }, [splitTrapItems]);
-
-  const deltaClampedPct =
-    predictiveDeltaSec === null
-      ? 0
-      : Math.min(50, Math.max(6, (Math.abs(predictiveDeltaSec) / 5) * 50));
-  const isFaster = predictiveDeltaSec !== null && predictiveDeltaSec < -0.05;
-  const isSlower = predictiveDeltaSec !== null && predictiveDeltaSec > 0.05;
-  const clockAdjustedNow = nowMs + clockOffsetMs;
-
-  const statusHeadline =
-    stageState === 'armed'
-      ? hasTraps
-        ? 'WAITING FOR START'
-        : 'WAITING FOR TRAP'
-      : stageState === 'running'
-        ? `VOLTA ${lapNumber}`
-        : stageState === 'finished'
-          ? 'FINALIZADA'
-          : 'PRONTO';
-
-  const commitTripEdit = () => {
-    const parsed = Number(tripInput.replace(',', '.'));
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      onEditTripDistanceKm(tripUnit === 'm' ? parsed / 1000 : parsed);
-    }
-    setEditingTrip(false);
-  };
-
-  const formattedCompactDelta =
-    predictiveDeltaSec === null
-      ? '--.--s'
-      : `${predictiveDeltaSec > 0 ? '+' : ''}${predictiveDeltaSec.toFixed(2)}s`;
-
-  return (
-    <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-[var(--ps-text)] shadow-xl sm:p-3">
-      {/* 1. BARRA SUPERIOR DE DELTA EM TEMPO REAL */}
-      <div className="shrink-0">
-        <div className="flex items-center justify-between font-mono text-[10px] sm:text-xs tabular-nums">
-          <span className="font-bold text-[var(--ps-emerald)]">RÁPIDO (-s)</span>
-          <span
-            className={`inline-flex items-center gap-1 text-xs font-black sm:text-sm ${
-              isFaster
-                ? 'text-[var(--ps-emerald)]'
-                : isSlower
-                  ? 'text-[#FF2A2A]'
-                  : 'text-[var(--ps-muted)]'
-            }`}
-          >
-            <span>DELTA {formatDeltaSeconds(predictiveDeltaSec)}</span>
-            {deltaTrend === 'improving' && (
-              <span className="text-[var(--ps-emerald)]" aria-label="Ritmo melhorando">
-                ▲
-              </span>
-            )}
-            {deltaTrend === 'worsening' && (
-              <span className="text-[#FF2A2A]" aria-label="Ritmo piorando">
-                ▼
-              </span>
-            )}
-          </span>
-          <span className="font-bold text-[#FF2A2A]">LENTO (+s)</span>
-        </div>
-
-        <div className="relative mt-1 h-2 w-full overflow-hidden rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
-          <div className="absolute inset-y-0 left-1/2 z-10 w-[2px] -translate-x-1/2 bg-[var(--ps-muted)]/70" />
-          {isFaster && (
-            <div
-              className="absolute inset-y-0 right-1/2 bg-[#10B981] transition-all duration-150"
-              style={{ width: `${deltaClampedPct}%` }}
-            />
-          )}
-          {isSlower && (
-            <div
-              className="absolute inset-y-0 left-1/2 bg-[#E10600] transition-all duration-150"
-              style={{ width: `${deltaClampedPct}%` }}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* 2. CORPO PRINCIPAL: DELTA LARGURA TOTAL -> JANELA 4 COLUNAS PARCIAIS -> VELOCIDADE/ODÔMETRO -> CRONÔMETRO */}
-      <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5">
-        {/* Bloco 1: DELTA TIME em largura total */}
-        <div
-          className={`flex flex-1 min-h-[84px] flex-col items-center justify-center rounded-xl border-2 px-3 py-2 text-center transition-colors ${
-            isFaster
-              ? 'border-[#10B981] bg-emerald-600/25 text-[var(--ps-emerald)]'
-              : isSlower
-                ? 'border-[#FF2A2A] bg-red-600/25 text-[#FF2A2A]'
-                : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-text)]'
-          }`}
-        >
-          <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-black leading-tight tracking-wider uppercase sm:text-xs">
-            <span>{isFaster ? '▲' : isSlower ? '▼' : '●'}</span>
-            <span>{isFaster ? 'MAIS RÁPIDO' : isSlower ? 'MAIS LENTO' : 'DELTA TIME'}</span>
-          </div>
-          <div className="mt-0.5 font-mono text-3xl font-black leading-none tracking-tight tabular-nums sm:text-5xl">
-            {formattedCompactDelta}
-          </div>
-          <p className="mt-1 max-w-full truncate font-mono text-[10px] font-bold leading-tight opacity-85 uppercase">
-            {bestRun ? `vs Volta #${bestRun.runNumber}` : 'Sem referência'}
-          </p>
-        </div>
-
-        {/* Linha 2: JANELA DESLIZANTE DE 4 COLUNAS PARA PARCIAIS (Até 4 fixas, +4 acompanha progressão) */}
-        {visibleSplitItems.length > 0 && (
-          <div className="grid shrink-0 grid-cols-4 gap-2">
-            {visibleSplitItems.map((sp) => {
-              const isBetter = sp.diffSec !== null && sp.diffSec <= 0;
-              const isWorse = sp.diffSec !== null && sp.diffSec > 0;
-              return (
-                <div
-                  key={sp.id}
-                  title={sp.name}
-                  className={`flex min-h-[60px] min-w-0 flex-col items-center justify-center rounded-xl border px-1.5 py-2 text-center font-mono tabular-nums transition-colors ${
-                    sp.isActive
-                      ? 'animate-pulse border-amber-400 bg-amber-500/15 text-[var(--ps-amber)]'
-                      : sp.crossed
-                        ? isBetter
-                          ? 'border-emerald-400/75 bg-emerald-600/20 text-[var(--ps-text)]'
-                          : isWorse
-                            ? 'border-red-500/75 bg-red-600/20 text-[var(--ps-text)]'
-                            : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)]'
-                        : 'border-[var(--ps-border)]/70 bg-[var(--ps-card-deep)]/65 text-[var(--ps-muted)]'
-                  }`}
-                >
-                  <span
-                    className={`text-[11px] font-black leading-none tracking-wider uppercase ${
-                      sp.isActive ? 'text-[var(--ps-amber)]' : 'text-[var(--ps-muted)]'
-                    }`}
-                  >
-                    {sp.code}
-                  </span>
-
-                  {sp.crossed ? (
-                    sp.diffSec !== null ? (
-                      <>
-                        <span
-                          className={`mt-1 text-sm font-black leading-none sm:text-base ${
-                            isBetter ? 'text-[var(--ps-emerald)]' : 'text-[#FF453A]'
-                          }`}
-                        >
-                          {sp.diffSec > 0 ? '+' : ''}
-                          {sp.diffSec.toFixed(1)}s
-                        </span>
-                        <span className="mt-1 text-[11px] font-bold leading-none text-[var(--ps-muted)]">
-                          {sp.sectorMs !== null ? formatSplitCompactTime(sp.sectorMs) : '--'}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="mt-1.5 text-sm font-black leading-none text-white sm:text-base">
-                        {sp.sectorMs !== null ? formatSplitCompactTime(sp.sectorMs) : '--'}
-                      </span>
-                    )
-                  ) : sp.isActive ? (
-                    <span className="mt-1.5 text-xs font-black leading-none text-[var(--ps-amber)] uppercase sm:text-sm">
-                      ATUAL
-                    </span>
-                  ) : (
-                    <span className="mt-1.5 text-sm font-bold leading-none opacity-60">--</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Grid 2 Colunas Iguais: VELOCIDADE (Esquerda) + METROS PERCORRIDOS / ODÔMETRO (Direita) */}
-        <div className="grid shrink-0 grid-cols-2 gap-1.5">
-          {/* Coluna Esquerda: VELOCIDADE (km/h) limpa e centralizada */}
-          <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-2 text-center">
-            <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-              Velocidade
-            </span>
-            <div className="mt-1 flex items-baseline justify-center gap-1 font-mono tabular-nums">
-              <span className="text-3xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-4xl">
-                {Math.round(speedKmh)}
-              </span>
-              <span className="text-xs font-extrabold text-[var(--ps-accent)] sm:text-sm">
-                km/h
-              </span>
-            </div>
-          </div>
-
-          {/* Coluna Direita: METROS PERCORRIDOS / ODÔMETRO (Toque para editar) */}
-          <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center">
-            <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-              Metros (Odômetro)
-            </span>
-            {editingTrip ? (
-              <div className="mt-1 w-full max-w-[150px] space-y-1">
-                <div className="flex items-center gap-1 rounded-lg border border-[var(--ps-accent)] bg-[var(--ps-card)] px-1.5 py-1">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="any"
-                    autoFocus
-                    value={tripInput}
-                    onChange={(e) => setTripInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitTripEdit();
-                      if (e.key === 'Escape') setEditingTrip(false);
-                    }}
-                    aria-label="Editar odômetro Trip"
-                    className="min-w-0 flex-1 bg-transparent text-center font-mono text-sm font-black text-[var(--ps-amber)] focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextUnit = tripUnit === 'm' ? 'km' : 'm';
-                      setTripUnit(nextUnit);
-                      setTripInput(
-                        nextUnit === 'm'
-                          ? String(Math.round(displayedTripKm * 1000))
-                          : displayedTripKm.toFixed(2)
-                      );
-                    }}
-                    className="rounded bg-[var(--ps-surface)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-text)] uppercase"
-                  >
-                    {tripUnit}
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={commitTripEdit}
-                  className="pitstop-btn-red w-full rounded py-1 text-[10px] font-extrabold uppercase"
-                >
-                  Confirmar
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setTripInput(
-                    tripUnit === 'm'
-                      ? String(Math.round(displayedTripKm * 1000))
-                      : displayedTripKm.toFixed(2)
-                  );
-                  setEditingTrip(true);
-                }}
-                title="Toque para digitar metragem do odômetro"
-                className="group mt-0.5 flex flex-col items-center justify-center rounded-lg px-1.5 py-0.5 hover:bg-[var(--ps-card)]"
-              >
-                <span className="font-mono text-3xl font-black leading-none tracking-tight text-[var(--ps-amber)] tabular-nums sm:text-4xl">
-                  {Math.round(displayedTripKm * 1000)}
-                  <span className="ml-0.5 text-sm font-extrabold text-[var(--ps-amber)]">m</span>
-                </span>
-                <span className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] text-[var(--ps-muted)] tabular-nums">
-                  <span>{displayedTripKm.toFixed(2)} km</span>
-                  <Pencil className="h-2.5 w-2.5 text-[var(--ps-muted)] group-hover:text-[var(--ps-accent)]" />
-                </span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Bloco 3: TEMPO DA ESPECIAL (Cronômetro Principal) + Grid 3 Colunas CH / MELHOR / ÚLTIMA */}
-        <div className="shrink-0 space-y-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 sm:px-3">
-          <div className="flex flex-col items-center text-center">
-            <div className="flex items-center justify-center gap-1.5 font-mono text-[10px] font-bold uppercase text-[var(--ps-muted)]">
-              <span className="truncate max-w-[180px] text-[var(--ps-text)]">{activeTrackName}</span>
-              <span aria-hidden="true">·</span>
-              <span
-                className={
-                  stageState === 'running'
-                    ? 'text-[var(--ps-emerald)]'
-                    : stageState === 'armed'
-                      ? 'text-[var(--ps-amber)]'
-                      : 'text-[var(--ps-muted)]'
-                }
-              >
-                {statusHeadline}
-              </span>
-            </div>
-            <div
-              className={`mt-0.5 font-mono text-4xl font-black leading-none tracking-tight tabular-nums sm:text-5xl ${
-                stageState === 'running'
-                  ? 'text-[var(--ps-text)]'
-                  : stageState === 'finished'
-                    ? 'text-[var(--ps-emerald)]'
-                    : 'text-[var(--ps-muted)]'
-              }`}
-            >
-              {formatStageDuration(currentStageElapsedMs)}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-1.5">
-            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 text-center">
-              <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-[10px]">
-                CH
-              </p>
-              <p className="font-mono text-base font-extrabold leading-tight text-[var(--ps-text)] tabular-nums sm:text-xl">
-                {formatClockTime(clockAdjustedNow)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 text-center">
-              <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-emerald)] uppercase sm:text-[10px]">
-                MELHOR
-              </p>
-              <p className="font-mono text-base font-extrabold leading-tight text-[var(--ps-emerald)] tabular-nums sm:text-xl">
-                {formatStageDuration(optimalSummary.bestRunTotalMs)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 text-center">
-              <p className="font-mono text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-[10px]">
-                ÚLTIMA
-              </p>
-              <p className="font-mono text-base font-extrabold leading-tight text-[var(--ps-text)] tabular-nums sm:text-xl">
-                {formatStageDuration(optimalSummary.lastRunTotalMs)}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 const VelocityGaugeClockCards: React.FC<{
   showOfficialClock: boolean;
@@ -2971,6 +2414,115 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   };
   const goproQuickBar = renderGoProBar(false);
 
+  const gpsEngineSettingsBlock = (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
+        <div>
+          <p className="text-xs font-bold text-[var(--ps-text)]">Fonte de Telemetria</p>
+          <p className="text-[11px] text-[var(--ps-muted)]">
+            GPS real ou Simulador de bancada (SS-01)
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                setSource('gps');
+                setSimPlaying(false);
+              }}
+              className={`rounded-md px-3 py-1.5 text-xs font-bold ${
+                source === 'gps' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
+              }`}
+            >
+              GPS
+            </button>
+            <button
+              type="button"
+              onClick={() => setSource('simulator')}
+              className={`rounded-md px-3 py-1.5 text-xs font-bold ${
+                source === 'simulator' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
+              }`}
+            >
+              Simulador
+            </button>
+          </div>
+          {source === 'simulator' && (
+            <div className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
+              {[1, 2, 4].map((x) => (
+                <button
+                  key={x}
+                  type="button"
+                  onClick={() => setSimMultiplier(x)}
+                  className={`rounded px-2 py-1 font-mono text-[10px] font-bold ${
+                    simMultiplier === x ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
+                  }`}
+                >
+                  {x}x
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
+        <div>
+          <p className="text-xs font-bold text-[var(--ps-text)]">Detecção Automática de Pista (GPS)</p>
+          <p className="text-[11px] text-[var(--ps-muted)]">
+            Reconhece pistas salvas num raio de{' '}
+            {velPrefs.autoDetectRadiusM >= 1000
+              ? `${(velPrefs.autoDetectRadiusM / 1000).toFixed(1)} km`
+              : `${velPrefs.autoDetectRadiusM} metros`}{' '}
+            da Largada.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={velPrefs.autoDetectTrack}
+          onChange={(e) =>
+            setVelPrefs((p) => ({ ...p, autoDetectTrack: e.target.checked }))
+          }
+          className="h-5 w-5 accent-[var(--ps-accent)]"
+        />
+      </label>
+
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
+        <div>
+          <p className="text-xs font-bold text-[var(--ps-text)]">Auto-Snap Dinâmico (HDOP)</p>
+          <p className="text-[11px] text-[var(--ps-muted)]">
+            Expande o portal proporcionalmente à precisão horizontal do GPS.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={velPrefs.autoSnapHdop}
+          onChange={(e) =>
+            setVelPrefs((p) => ({ ...p, autoSnapHdop: e.target.checked }))
+          }
+          className="h-5 w-5 accent-[var(--ps-accent)]"
+        />
+      </label>
+
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
+        <div>
+          <p className="text-xs font-bold text-[var(--ps-text)]">Acelerômetro &amp; Força G (IMU)</p>
+          <p className="text-[11px] text-[var(--ps-muted)]">
+            Combina sensores internos com variação cinemática de velocidade.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={velPrefs.useDeviceImu}
+          onChange={(e) =>
+            setVelPrefs((p) => ({ ...p, useDeviceImu: e.target.checked }))
+          }
+          className="h-5 w-5 accent-[var(--ps-accent)]"
+        />
+      </label>
+    </div>
+  );
+
   return (
     <div className="space-y-3">
       {/* Compact Top Bar inside Velocidade (hidden in full-viewport fixed Live Cockpit) */}
@@ -3157,17 +2709,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             >
               <Activity className="h-4 w-4 text-[var(--ps-emerald)]" />
               <span>Odômetro & Velocímetro Básico</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowLayoutModal(true)}
-              className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 text-[11px] font-extrabold tracking-wide text-[var(--ps-muted)] uppercase transition-colors hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
-            >
-              <LayoutGrid className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-              <span>
-                Layout: {cockpitLayout.preset.code} · {cockpitLayout.preset.shortName}
-              </span>
             </button>
           </div>
 
@@ -3371,550 +2912,278 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           setShowLiveMap(true);
         };
 
-        if (cockpitLayout.config.layoutId !== 'classic' && liveMode === 'timer') {
-          return (
-            <VelocityLivePresetScreen
-              layoutId={cockpitLayout.config.layoutId}
-              customWidgets={cockpitLayout.config.customWidgets}
-              activeTrackId={activeTrack?.id || 'live_free'}
-              activeTrackName={activeStageBannerName}
-              hasTraps={Boolean(activeTrack && activeTrack.traps.length > 0)}
-              orderedTraps={orderedTraps}
-              currentSplitTimesMs={currentSplitTimesMs}
-              stageState={stageState}
-              stageStartMs={stageStartMs}
-              lastFinishedMs={lastFinishedMs}
-              clockOffsetMs={navSettings.clockOffsetMs}
-              speedKmh={speedKmh}
-              displayedTripKm={displayedTripKm}
-              totalDistKm={totalDistKm}
-              liveRemainingDistM={liveRemainingDistM}
-              liveHasRefDist={liveHasRefDist}
-              liveProgressPct={liveProgressPct}
-              liveIsFinishFlash={liveIsFinishFlash}
-              bestRun={bestRun}
-              fallbackRuns={trackRuns}
-              optimalSummary={optimalSummary}
-              lapNumber={trackRuns.length + 1}
-              liveSamples={liveSamples}
-              liveMapTrace={liveMapTrace}
-              currentPos={currentPos}
-              headingDeg={headingDeg}
-              liveHeadingUp={liveHeadingUp}
-              onToggleHeadingUp={() => setLiveHeadingUp((v) => !v)}
-              liveHeatmapMode={liveHeatmapMode}
-              onToggleHeatmapMode={() =>
-                setLiveHeatmapMode((m) => (m === 'accel' ? 'speed' : 'accel'))
-              }
-              isPro={isPro}
-              showLiveMap={showLiveMap}
-              liveNotice={liveNotice}
-              gpsError={gpsError}
-              wakeLockActive={wakeLockActive}
-              goproBarNode={renderGoProBar(true)}
-              onBack={handleBackAction}
-              onOpenSettings={() => setScreen('settings')}
-              onOpenSatcron={handleOpenLiveSatcron}
-              onOpenLayoutModal={() => setShowLayoutModal(true)}
-              onOpenAnalysis={handleOpenLiveAnalysis}
-              onSelectTimerTab={() => {
-                setShowLiveMap(false);
-                setLiveMode('timer');
-              }}
-              onSelectMapTab={handleOpenLiveMapTab}
-              onZeroTrip={() => {
-                setTripDistKm(0);
-                showToast('Hodômetro parcial (Trip) zerado.');
-              }}
-              onStartOrArmStage={handleStartOrArmStage}
-              onForceManualStart={handleForceManualStart}
-              onEditTripDistanceKm={handleEditTripFromLive}
-            />
-          );
-        }
-
-        return (
-        <section className="fixed inset-0 z-40 h-[100dvh] overflow-hidden flex flex-col justify-between gap-1.5 bg-[var(--ps-bg)] p-2 sm:p-3 text-[var(--ps-text)]">
-          {/* Top Utility Strip + Thin Arrival Progress Bar + Full-Width Complete Stage Name */}
-          <div className="shrink-0 space-y-1">
-            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-1.5 space-y-1">
-              <div className="flex items-center justify-between gap-1.5">
-                <button
-                  type="button"
-                  onClick={handleBackAction}
-                  aria-label="Voltar"
-                  className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-                  <span className="hidden xs:inline">Voltar</span>
-                </button>
-
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowLayoutModal(true)}
-                    className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
-                    title="Trocar Layout do Cockpit (10 + Customizado)"
-                  >
-                    <LayoutGrid className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-                    <span className="hidden sm:inline">Layout</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleOpenLiveSatcron}
-                    className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
-                    title="Satcron Ao Vivo"
-                  >
-                    <Trophy className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-                    <span className="hidden sm:inline">Satcron</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setScreen('settings')}
-                    aria-label="Configurações"
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-                  >
-                    <Settings className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Barra fina de acendimento progressivo até a chegada logo acima do nome da pista */}
-              <div className="flex items-center gap-2 px-0.5">
-                <div className="relative h-1.5 flex-1 overflow-hidden rounded-full border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
-                  <div
-                    className={`h-full rounded-full transition-all duration-200 ${
-                      liveIsFinishFlash
-                        ? 'animate-pulse bg-[#00E5FF] shadow-[0_0_8px_#00E5FF]'
-                        : 'bg-gradient-to-r from-[#10B981] via-[#F59E0B] to-[#FF2A2A]'
-                    }`}
-                    style={{ width: `${liveProgressPct}%` }}
-                  />
-                </div>
-                <span
-                  className={`shrink-0 font-mono text-[9px] font-extrabold tabular-nums ${
-                    liveIsFinishFlash
-                      ? 'text-[#00E5FF]'
-                      : liveProgressPct >= 85
-                        ? 'text-[#FF2A2A]'
-                        : 'text-[var(--ps-muted)]'
-                  }`}
-                >
-                  {liveHasRefDist
-                    ? liveRemainingDistM !== null &&
-                      liveRemainingDistM <= 300 &&
-                      stageState === 'running'
-                      ? `-${Math.round(liveRemainingDistM)}m`
-                      : `${liveProgressPct}%`
-                    : `${Math.round(speedKmh)} km/h`}
-                </span>
-              </div>
-
-              {/* Nome completo da Especial sem prefixo fixo e com quebra de linha suave */}
-              <div className="w-full rounded-lg border border-[var(--ps-accent)]/45 bg-[var(--ps-accent-soft)] px-2.5 py-1 text-center">
-                <p className="line-clamp-2 font-['Barlow_Condensed'] text-base font-black leading-tight tracking-wide text-[var(--ps-text)] uppercase sm:text-lg">
-                  {activeStageBannerName}
-                </p>
-              </div>
-            </div>
-
-            {/* Mode Toggle: 3 abas fixas lado a lado (CRONÔMETRO | ANÁLISE | MAPA) */}
-            <div className="grid grid-cols-3 gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-1">
+        const gaugesCenterNode = (
+          <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 overflow-hidden">
+            <div className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-1.5 text-[var(--ps-text)]">
               <button
                 type="button"
                 onClick={() => {
-                  setShowLiveMap(false);
-                  setLiveMode('timer');
+                  if (!tripRegressive) {
+                    const input = tripTargetKm ?? (activeTrack?.referenceDistanceKm || 2.0);
+                    setTripTargetKm(input);
+                    setTripRegressive(true);
+                  } else {
+                    setTripRegressive(false);
+                  }
                 }}
-                className={`inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-extrabold uppercase transition-colors sm:text-xs ${
-                  !showLiveMap
-                    ? 'pitstop-btn-red'
-                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                className={`min-h-[32px] rounded-lg border px-2.5 text-xs font-bold whitespace-nowrap ${
+                  tripRegressive
+                    ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                    : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)]'
                 }`}
               >
-                <Flag className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Cronômetro</span>
+                Trip: {tripRegressive ? 'Regressivo' : 'Progressivo'}
               </button>
 
               <button
                 type="button"
-                onClick={() => {
-                  if (!isPro) {
-                    openProUpgradeModal(
-                      'Datalogger & Telemetria de 3 Voltas',
-                      'Comparativo de 3 voltas, forças G, mapa de calor e Vídeo Overlay HUD estão disponíveis no Plano PRO.'
-                    );
-                    return;
-                  }
-                  if (trackRuns.length > 0) {
-                    openSessionDetail(activeTrack?.id || trackRuns[0].trackId, 'analysis');
-                    return;
-                  }
-                  if (groupedSessions.length > 0) {
-                    openSessionDetail(groupedSessions[0].trackId, 'analysis');
-                    return;
-                  }
-                  setLiveNotice('Nenhuma volta concluída ainda para análise.');
-                  window.setTimeout(() => setLiveNotice(null), 3200);
-                }}
-                className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-extrabold text-[var(--ps-emerald)] uppercase transition-colors hover:bg-emerald-500/15 sm:text-xs"
+                onClick={() => setShowGaugeConfig((v) => !v)}
+                className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               >
-                <TrendingUp className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Análise {!isPro ? '(PRO)' : ''}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (!isPro) {
-                    openProUpgradeModal(
-                      'Mapa Ao Vivo com Calor G/Velocidade',
-                      'O mapa ao vivo de telemetria requer Plano PRO.'
-                    );
-                    return;
-                  }
-                  setShowLiveMap(true);
-                }}
-                className={`inline-flex min-h-[36px] items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-extrabold uppercase transition-colors sm:text-xs ${
-                  showLiveMap
-                    ? 'bg-sky-600 text-white'
-                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-                }`}
-              >
-                <MapIcon className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Mapa {!isPro ? '(PRO)' : ''}</span>
+                <Settings2 className="h-3.5 w-3.5" />
+                <span>Campos</span>
               </button>
             </div>
 
-            {(liveNotice || gpsError) && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1 text-[11px]">
-                <span className="truncate text-[var(--ps-amber)]">{liveNotice || gpsError}</span>
-                {wakeLockActive && (
-                  <span className="shrink-0 font-mono text-[9px] text-[var(--ps-muted)]">Tela Ativa</span>
-                )}
-              </div>
-            )}
-
-            {/* Manual Play Override whenever Waiting for Start or Idle */}
-            {isPro && (stageState === 'idle' || stageState === 'armed') && (
-              <button
-                type="button"
-                onClick={handleForceManualStart}
-                className="flex min-h-[38px] w-full items-center justify-center gap-2 rounded-xl border border-[var(--ps-emerald)]/60 bg-emerald-500/15 px-3 text-xs font-extrabold tracking-wider text-[var(--ps-emerald)] uppercase shadow transition-colors hover:bg-emerald-500/25 active:scale-[0.99]"
-              >
-                <Play className="h-3.5 w-3.5 fill-current" />
-                <span>Largar Agora (Play Manual)</span>
-              </button>
-            )}
-          </div>
-
-          {/* Flexible Center Pane (NEVER overflows 100dvh) */}
-          <div className="flex-1 min-h-0 flex flex-col justify-between gap-1.5 overflow-hidden">
-            {showLiveMap ? (
-              <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)]">
-                <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] px-2.5 py-1.5 shrink-0 font-mono text-xs tabular-nums">
-                  <span className="font-bold text-[var(--ps-text)]">
-                    {Math.round(speedKmh)} km/h ·{' '}
-                    <span className="text-[var(--ps-amber)]">{Math.round(displayedTripKm * 1000)}m</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setLiveHeatmapMode((m) => (m === 'accel' ? 'speed' : 'accel'))
-                    }
-                    className="rounded-md border border-[var(--ps-border)] bg-[var(--ps-card)] px-2 py-0.5 text-[10px] font-bold text-[var(--ps-text)]"
+            {showGaugeConfig && (
+              <div className="grid shrink-0 grid-cols-2 gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-[11px] sm:grid-cols-4">
+                {(
+                  [
+                    ['speed', 'Velocidade'],
+                    ['trip', 'Hodômetro Trip'],
+                    ['officialClock', 'Horário CH (GPS)'],
+                    ['stageTime', 'Cronômetro SS'],
+                    ['maxSpeed', 'Vel. Máxima'],
+                    ['altitude', 'Altitude'],
+                    ['gpsAccuracy', 'Sinal GPS'],
+                    ['heading', 'Rumo (CAP)'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label
+                    key={key}
+                    className="flex cursor-pointer items-center justify-between gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1 text-[var(--ps-text)]"
                   >
-                    Cor: {liveHeatmapMode === 'accel' ? 'Força G' : 'Veloc.'}
-                  </button>
-                </div>
-                <div className="flex-1 min-h-0">
-                  <VelocityMapboxView
-                    trackId={activeTrack?.id || 'live_free'}
-                    editableTrace={liveMapTrace}
-                    orderedTraps={orderedTraps}
-                    postEditIdx={Math.max(0, liveMapTrace.length - 1)}
-                    currentPos={currentPos}
-                    navigationMode={true}
-                    headingUp={liveHeadingUp}
-                    onToggleHeadingUp={() => setLiveHeadingUp((v) => !v)}
-                    navHeadingDeg={headingDeg}
-                    heatmapMode={liveHeatmapMode}
-                    containerClassName="relative h-full w-full overflow-hidden bg-[#000000]"
-                  />
-                </div>
-              </div>
-            ) : liveMode === 'timer' ? (
-              <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 overflow-hidden">
-                <VelocityLiveStagePanel
-                  activeTrackName={activeStageBannerName}
-                  hasTraps={Boolean(activeTrack && activeTrack.traps.length > 0)}
-                  orderedTraps={orderedTraps}
-                  currentSplitTimesMs={currentSplitTimesMs}
-                  stageState={stageState}
-                  stageStartMs={stageStartMs}
-                  lastFinishedMs={lastFinishedMs}
-                  clockOffsetMs={navSettings.clockOffsetMs}
-                  speedKmh={speedKmh}
-                  displayedTripKm={displayedTripKm}
-                  totalDistKm={totalDistKm}
-                  bestRun={bestRun}
-                  fallbackRuns={trackRuns}
-                  optimalSummary={optimalSummary}
-                  lapNumber={trackRuns.length + 1}
-                  liveSamples={liveSamples}
-                  onEditTripDistanceKm={handleEditTripFromLive}
-                />
-              </div>
-            ) : (
-              <div className="flex flex-1 min-h-0 flex-col justify-between gap-1.5 overflow-hidden">
-                <div className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-1.5 text-[var(--ps-text)]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!tripRegressive) {
-                        const input = tripTargetKm ?? (activeTrack?.referenceDistanceKm || 2.0);
-                        setTripTargetKm(input);
-                        setTripRegressive(true);
-                      } else {
-                        setTripRegressive(false);
+                    <span className="truncate">{label}</span>
+                    <input
+                      type="checkbox"
+                      checked={gaugeVisibility[key]}
+                      onChange={(e) =>
+                        setGaugeVisibility((prev) => ({
+                          ...prev,
+                          [key]: e.target.checked,
+                        }))
                       }
-                    }}
-                    className={`min-h-[32px] rounded-lg border px-2.5 text-xs font-bold whitespace-nowrap ${
-                      tripRegressive
-                        ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
-                        : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)]'
-                    }`}
-                  >
-                    Trip: {tripRegressive ? 'Regressivo' : 'Progressivo'}
-                  </button>
+                      className="h-3.5 w-3.5 accent-[var(--ps-accent)]"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
 
-                  <button
-                    type="button"
-                    onClick={() => setShowGaugeConfig((v) => !v)}
-                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-                  >
-                    <Settings2 className="h-3.5 w-3.5" />
-                    <span>Campos</span>
-                  </button>
+            <div className="grid flex-1 min-h-0 grid-cols-2 gap-2 sm:grid-cols-4">
+              {gaugeVisibility.speed && (
+                <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
+                  <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                    Velocidade
+                  </p>
+                  <p className="mt-0.5 font-mono text-3xl font-extrabold text-[var(--ps-text)] tabular-nums sm:text-5xl">
+                    {Math.round(speedKmh)}
+                  </p>
+                  <p className="font-mono text-[10px] font-bold text-[var(--ps-accent)]">KM/H</p>
                 </div>
+              )}
 
-                {showGaugeConfig && (
-                  <div className="grid shrink-0 grid-cols-2 gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-[11px] sm:grid-cols-4">
-                    {(
-                      [
-                        ['speed', 'Velocidade'],
-                        ['trip', 'Hodômetro Trip'],
-                        ['officialClock', 'Horário CH (GPS)'],
-                        ['stageTime', 'Cronômetro SS'],
-                        ['maxSpeed', 'Vel. Máxima'],
-                        ['altitude', 'Altitude'],
-                        ['gpsAccuracy', 'Sinal GPS'],
-                        ['heading', 'Rumo (CAP)'],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label
-                        key={key}
-                        className="flex cursor-pointer items-center justify-between gap-1.5 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1 text-[var(--ps-text)]"
-                      >
-                        <span className="truncate">{label}</span>
+              {gaugeVisibility.trip && (
+                <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
+                  <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                    {tripRegressive ? 'Trip Regressivo' : 'Trip Parcial'}
+                  </p>
+                  {editingGaugeTrip ? (
+                    <div className="mt-1 space-y-1">
+                      <div className="flex items-center gap-1">
                         <input
-                          type="checkbox"
-                          checked={gaugeVisibility[key]}
-                          onChange={(e) =>
-                            setGaugeVisibility((prev) => ({
-                              ...prev,
-                              [key]: e.target.checked,
-                            }))
-                          }
-                          className="h-3.5 w-3.5 accent-[var(--ps-accent)]"
-                        />
-                      </label>
-                    ))}
-                  </div>
-                )}
-
-                <div className="grid flex-1 min-h-0 grid-cols-2 gap-2 sm:grid-cols-4">
-                  {gaugeVisibility.speed && (
-                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
-                      <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                        Velocidade
-                      </p>
-                      <p className="mt-0.5 font-mono text-3xl font-extrabold text-[var(--ps-text)] tabular-nums sm:text-5xl">
-                        {Math.round(speedKmh)}
-                      </p>
-                      <p className="font-mono text-[10px] text-[var(--ps-accent)] font-bold">KM/H</p>
-                    </div>
-                  )}
-
-                  {gaugeVisibility.trip && (
-                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
-                      <p className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                        {tripRegressive ? 'Trip Regressivo' : 'Trip Parcial'}
-                      </p>
-                      {editingGaugeTrip ? (
-                        <div className="mt-1 space-y-1">
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              step="any"
-                              autoFocus
-                              value={gaugeTripInput}
-                              onChange={(e) => setGaugeTripInput(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  const n = Number(gaugeTripInput.replace(',', '.'));
-                                  if (Number.isFinite(n) && n >= 0) {
-                                    handleEditTripFromLive(gaugeTripUnit === 'm' ? n / 1000 : n);
-                                  }
-                                  setEditingGaugeTrip(false);
-                                }
-                                if (e.key === 'Escape') setEditingGaugeTrip(false);
-                              }}
-                              className="min-w-0 flex-1 rounded border border-[var(--ps-accent)] bg-[var(--ps-card)] px-1.5 py-1 text-center font-mono text-sm font-black text-[var(--ps-amber)] focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setGaugeTripUnit((u) => (u === 'm' ? 'km' : 'm'))}
-                              className="rounded border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-1 font-mono text-[10px] font-bold text-[var(--ps-text)] uppercase"
-                            >
-                              {gaugeTripUnit}
-                            </button>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
+                          type="number"
+                          inputMode="decimal"
+                          step="any"
+                          autoFocus
+                          value={gaugeTripInput}
+                          onChange={(e) => setGaugeTripInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
                               const n = Number(gaugeTripInput.replace(',', '.'));
                               if (Number.isFinite(n) && n >= 0) {
                                 handleEditTripFromLive(gaugeTripUnit === 'm' ? n / 1000 : n);
                               }
                               setEditingGaugeTrip(false);
-                            }}
-                            className="pitstop-btn-red w-full rounded py-0.5 text-[10px] font-extrabold"
-                          >
-                            OK
-                          </button>
-                        </div>
-                      ) : (
+                            }
+                            if (e.key === 'Escape') setEditingGaugeTrip(false);
+                          }}
+                          className="min-w-0 flex-1 rounded border border-[var(--ps-accent)] bg-[var(--ps-card)] px-1.5 py-1 text-center font-mono text-sm font-black text-[var(--ps-amber)] focus:outline-none"
+                        />
                         <button
                           type="button"
-                          onClick={() => {
-                            setGaugeTripInput(
-                              gaugeTripUnit === 'm'
-                                ? String(Math.round(displayedTripKm * 1000))
-                                : displayedTripKm.toFixed(2)
-                            );
-                            setEditingGaugeTrip(true);
-                          }}
-                          title="Toque para digitar metragem do Trip"
-                          className="group flex flex-col items-center justify-center rounded-lg py-0.5 hover:bg-[var(--ps-card)]"
+                          onClick={() => setGaugeTripUnit((u) => (u === 'm' ? 'km' : 'm'))}
+                          className="rounded border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-1 font-mono text-[10px] font-bold text-[var(--ps-text)] uppercase"
                         >
-                          <p className="font-mono text-2xl font-extrabold text-[var(--ps-amber)] tabular-nums sm:text-4xl">
-                            {Math.round(displayedTripKm * 1000)}m
-                          </p>
-                          <p className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--ps-muted)]">
-                            <span>{displayedTripKm.toFixed(2)} km</span>
-                            <Pencil className="h-2.5 w-2.5 text-[var(--ps-muted)] group-hover:text-[var(--ps-accent)]" />
-                          </p>
+                          {gaugeTripUnit}
                         </button>
-                      )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const n = Number(gaugeTripInput.replace(',', '.'));
+                          if (Number.isFinite(n) && n >= 0) {
+                            handleEditTripFromLive(gaugeTripUnit === 'm' ? n / 1000 : n);
+                          }
+                          setEditingGaugeTrip(false);
+                        }}
+                        className="pitstop-btn-red w-full rounded py-0.5 text-[10px] font-extrabold"
+                      >
+                        OK
+                      </button>
                     </div>
-                  )}
-
-                  <VelocityGaugeClockCards
-                    showOfficialClock={gaugeVisibility.officialClock}
-                    showStageTime={gaugeVisibility.stageTime}
-                    stageState={stageState}
-                    stageStartMs={stageStartMs}
-                    lastFinishedMs={lastFinishedMs}
-                    clockOffsetMs={navSettings.clockOffsetMs}
-                    totalDistKm={totalDistKm}
-                    bestRun={bestRun}
-                  />
-
-                  {gaugeVisibility.maxSpeed && (
-                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máxima</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
-                        {maxSpeedKmh}
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGaugeTripInput(
+                          gaugeTripUnit === 'm'
+                            ? String(Math.round(displayedTripKm * 1000))
+                            : displayedTripKm.toFixed(2)
+                        );
+                        setEditingGaugeTrip(true);
+                      }}
+                      title="Toque para digitar metragem do Trip"
+                      className="group flex flex-col items-center justify-center rounded-lg py-0.5 hover:bg-[var(--ps-card)]"
+                    >
+                      <p className="font-mono text-2xl font-extrabold text-[var(--ps-amber)] tabular-nums sm:text-4xl">
+                        {Math.round(displayedTripKm * 1000)}m
                       </p>
-                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">km/h</p>
-                    </div>
-                  )}
-
-                  {gaugeVisibility.altitude && (
-                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Altitude</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
-                        {altitudeM !== null ? `${altitudeM}m` : '--'}
+                      <p className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--ps-muted)]">
+                        <span>{displayedTripKm.toFixed(2)} km</span>
+                        <Pencil className="h-2.5 w-2.5 text-[var(--ps-muted)] group-hover:text-[var(--ps-accent)]" />
                       </p>
-                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">Elevação</p>
-                    </div>
-                  )}
-
-                  {gaugeVisibility.gpsAccuracy && (
-                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Sinal GPS</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-emerald)] tabular-nums sm:text-2xl">
-                        {gpsAccuracyM !== null ? `±${gpsAccuracyM}m` : '--'}
-                      </p>
-                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">
-                        {source === 'simulator' ? 'Simulador' : 'Receptor'}
-                      </p>
-                    </div>
-                  )}
-
-                  {gaugeVisibility.heading && (
-                    <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
-                      <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Rumo (CAP)</p>
-                      <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
-                        {headingDeg !== null ? `${headingDeg}°` : '--'}
-                      </p>
-                      <p className="font-mono text-[9px] text-[var(--ps-muted)]">Direção</p>
-                    </div>
+                    </button>
                   )}
                 </div>
-              </div>
-            )}
-          </div>
+              )}
 
-          {/* Bottom Fixed Control Bar: GoPro + Action Dock */}
-          <div className="shrink-0 space-y-1.5">
-            {renderGoProBar(true)}
+              <VelocityGaugeClockCards
+                showOfficialClock={gaugeVisibility.officialClock}
+                showStageTime={gaugeVisibility.stageTime}
+                stageState={stageState}
+                stageStartMs={stageStartMs}
+                lastFinishedMs={lastFinishedMs}
+                clockOffsetMs={navSettings.clockOffsetMs}
+                totalDistKm={totalDistKm}
+                bestRun={bestRun}
+              />
 
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setTripDistKm(0);
-                  showToast('Hodômetro parcial (Trip) zerado.');
-                }}
-                className="pitstop-btn-metal flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-3 text-xs font-extrabold uppercase sm:text-sm"
-              >
-                <RotateCcw className="h-4 w-4 text-[var(--ps-muted)]" />
-                <span>Zerar Trip</span>
-              </button>
+              {gaugeVisibility.maxSpeed && (
+                <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                  <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máxima</p>
+                  <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
+                    {maxSpeedKmh}
+                  </p>
+                  <p className="font-mono text-[9px] text-[var(--ps-muted)]">km/h</p>
+                </div>
+              )}
 
-              <button
-                type="button"
-                onClick={handleStartOrArmStage}
-                className="pitstop-btn-red flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-3 text-xs font-extrabold uppercase sm:text-sm"
-              >
-                {stageState === 'running' ? (
-                  <>
-                    <Flag className="h-4 w-4" />
-                    <span>Encerrar</span>
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4 fill-current" />
-                    <span>Iniciar</span>
-                  </>
-                )}
-              </button>
+              {gaugeVisibility.altitude && (
+                <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                  <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Altitude</p>
+                  <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
+                    {altitudeM !== null ? `${altitudeM}m` : '--'}
+                  </p>
+                  <p className="font-mono text-[9px] text-[var(--ps-muted)]">Elevação</p>
+                </div>
+              )}
+
+              {gaugeVisibility.gpsAccuracy && (
+                <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                  <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Sinal GPS</p>
+                  <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-emerald)] tabular-nums sm:text-2xl">
+                    {gpsAccuracyM !== null ? `±${gpsAccuracyM}m` : '--'}
+                  </p>
+                  <p className="font-mono text-[9px] text-[var(--ps-muted)]">
+                    {source === 'simulator' ? 'Simulador' : 'Receptor'}
+                  </p>
+                </div>
+              )}
+
+              {gaugeVisibility.heading && (
+                <div className="flex flex-col justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-center">
+                  <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Rumo (CAP)</p>
+                  <p className="mt-0.5 font-mono text-xl font-bold text-[var(--ps-text)] tabular-nums sm:text-2xl">
+                    {headingDeg !== null ? `${headingDeg}°` : '--'}
+                  </p>
+                  <p className="font-mono text-[9px] text-[var(--ps-muted)]">Direção</p>
+                </div>
+              )}
             </div>
           </div>
-        </section>
+        );
+
+        return (
+          <VelocityLivePresetScreen
+            layoutId={cockpitLayout.config.layoutId}
+            menuPosition={cockpitLayout.config.menuPosition}
+            customWidgets={cockpitLayout.config.customWidgets}
+            activeTrackId={activeTrack?.id || 'live_free'}
+            activeTrackName={activeStageBannerName}
+            hasTraps={Boolean(activeTrack && activeTrack.traps.length > 0)}
+            orderedTraps={orderedTraps}
+            currentSplitTimesMs={currentSplitTimesMs}
+            stageState={stageState}
+            stageStartMs={stageStartMs}
+            lastFinishedMs={lastFinishedMs}
+            clockOffsetMs={navSettings.clockOffsetMs}
+            speedKmh={speedKmh}
+            displayedTripKm={displayedTripKm}
+            totalDistKm={totalDistKm}
+            liveRemainingDistM={liveRemainingDistM}
+            liveHasRefDist={liveHasRefDist}
+            liveProgressPct={liveProgressPct}
+            liveIsFinishFlash={liveIsFinishFlash}
+            bestRun={bestRun}
+            fallbackRuns={trackRuns}
+            optimalSummary={optimalSummary}
+            lapNumber={trackRuns.length + 1}
+            liveSamples={liveSamples}
+            liveMapTrace={liveMapTrace}
+            currentPos={currentPos}
+            headingDeg={headingDeg}
+            liveHeadingUp={liveHeadingUp}
+            onToggleHeadingUp={() => setLiveHeadingUp((v) => !v)}
+            liveHeatmapMode={liveHeatmapMode}
+            onToggleHeatmapMode={() =>
+              setLiveHeatmapMode((m) => (m === 'accel' ? 'speed' : 'accel'))
+            }
+            isPro={isPro}
+            showLiveMap={showLiveMap}
+            liveMode={liveMode}
+            gaugesNode={gaugesCenterNode}
+            liveNotice={liveNotice}
+            gpsError={gpsError}
+            wakeLockActive={wakeLockActive}
+            goproBarNode={renderGoProBar(true)}
+            onBack={handleBackAction}
+            onOpenConfigModal={() => setShowLayoutModal(true)}
+            onOpenSatcron={handleOpenLiveSatcron}
+            onOpenAnalysis={handleOpenLiveAnalysis}
+            onSelectTimerTab={() => {
+              setShowLiveMap(false);
+              setLiveMode('timer');
+            }}
+            onSelectMapTab={handleOpenLiveMapTab}
+            onZeroTrip={() => {
+              setTripDistKm(0);
+              showToast('Hodômetro parcial (Trip) zerado.');
+            }}
+            onStartOrArmStage={handleStartOrArmStage}
+            onForceManualStart={handleForceManualStart}
+            onEditTripDistanceKm={handleEditTripFromLive}
+          />
         );
       })()}
 
@@ -5199,129 +4468,25 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-3">
             <div>
               <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                Layout da Tela Ao Vivo (10 Modelos + Customizado)
+                Seção 1 — Layout do Cockpit Ao Vivo (11 Modelos)
               </h3>
               <p className="text-xs text-[var(--ps-muted)]">
-                Troque o painel de cronometragem ou monte sua própria ordem e tamanho de blocos.
+                Todos os 11 layouts compartilham o mesmo cabeçalho limpo e rodapé unificado.
               </p>
             </div>
             <VelocityCockpitLayoutEditor />
           </div>
 
-          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-4">
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-3">
             <div>
               <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                Receptor GPS &amp; Motor de Cronometragem
+                Seção 2 — Receptor GPS &amp; Motor de Cronometragem
               </h3>
               <p className="text-xs text-[var(--ps-muted)]">
-                Configure fonte GPS, tolerância automática HDOP e acelerômetro IMU.
+                Configure fonte GPS, detecção automática, tolerância HDOP e acelerômetro IMU.
               </p>
             </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-              <div>
-                <p className="text-xs font-bold text-[var(--ps-text)]">Fonte de Telemetria</p>
-                <p className="text-[11px] text-[var(--ps-muted)]">
-                  GPS real ou Simulador de bancada (SS-01)
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="inline-flex rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSource('gps');
-                      setSimPlaying(false);
-                    }}
-                    className={`rounded-md px-3 py-1.5 text-xs font-bold ${
-                      source === 'gps' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
-                    }`}
-                  >
-                    GPS
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSource('simulator')}
-                    className={`rounded-md px-3 py-1.5 text-xs font-bold ${
-                      source === 'simulator' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
-                    }`}
-                  >
-                    Simulador
-                  </button>
-                </div>
-                {source === 'simulator' && (
-                  <div className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
-                    {[1, 2, 4].map((x) => (
-                      <button
-                        key={x}
-                        type="button"
-                        onClick={() => setSimMultiplier(x)}
-                        className={`rounded px-2 py-1 font-mono text-[10px] font-bold ${
-                          simMultiplier === x ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
-                        }`}
-                      >
-                        {x}x
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-              <div>
-                <p className="text-xs font-bold text-[var(--ps-text)]">Detecção Automática de Pista (GPS)</p>
-                <p className="text-[11px] text-[var(--ps-muted)]">
-                  Reconhece pistas salvas num raio de{' '}
-                  {velPrefs.autoDetectRadiusM >= 1000
-                    ? `${(velPrefs.autoDetectRadiusM / 1000).toFixed(1)} km`
-                    : `${velPrefs.autoDetectRadiusM} metros`}{' '}
-                  da Largada.
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={velPrefs.autoDetectTrack}
-                onChange={(e) =>
-                  setVelPrefs((p) => ({ ...p, autoDetectTrack: e.target.checked }))
-                }
-                className="h-5 w-5 accent-[var(--ps-accent)]"
-              />
-            </label>
-
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-              <div>
-                <p className="text-xs font-bold text-[var(--ps-text)]">Auto-Snap Dinâmico (HDOP)</p>
-                <p className="text-[11px] text-[var(--ps-muted)]">
-                  Expande o portal proporcionalmente à precisão horizontal do GPS.
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={velPrefs.autoSnapHdop}
-                onChange={(e) =>
-                  setVelPrefs((p) => ({ ...p, autoSnapHdop: e.target.checked }))
-                }
-                className="h-5 w-5 accent-[var(--ps-accent)]"
-              />
-            </label>
-
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-              <div>
-                <p className="text-xs font-bold text-[var(--ps-text)]">Acelerômetro &amp; Força G (IMU)</p>
-                <p className="text-[11px] text-[var(--ps-muted)]">
-                  Combina sensores internos com variação cinemática de velocidade.
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={velPrefs.useDeviceImu}
-                onChange={(e) =>
-                  setVelPrefs((p) => ({ ...p, useDeviceImu: e.target.checked }))
-                }
-                className="h-5 w-5 accent-[var(--ps-accent)]"
-              />
-            </label>
+            {gpsEngineSettingsBlock}
           </div>
         </section>
       )}
@@ -5394,6 +4559,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       <VelocityCockpitLayoutModal
         open={showLayoutModal}
         onClose={() => setShowLayoutModal(false)}
+        gpsSettingsSection={gpsEngineSettingsBlock}
       />
     </div>
   );

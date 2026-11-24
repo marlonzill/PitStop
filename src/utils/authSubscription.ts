@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { resolveApiBaseUrl } from './baseApi';
-import type { AppThemeId } from './navSettings';
+import { ENABLE_SUBSCRIPTION_GATE, type AppThemeId } from './navSettings';
+
+export { ENABLE_SUBSCRIPTION_GATE };
 
 export type UserPlan = 'free' | 'pro';
 export type UserRole = 'user' | 'admin';
@@ -98,16 +100,18 @@ export function saveAuthSession(session: StoredAuthSession | null): void {
 }
 
 export function isProSubscriptionActive(sessionOverride?: StoredAuthSession | null): boolean {
+  if (!ENABLE_SUBSCRIPTION_GATE) return true;
   const session = sessionOverride === undefined ? getStoredAuthSession() : sessionOverride;
   return getEffectiveUserPlan(session?.user) === 'pro';
 }
 
 export function isThemeUnlockedForPlan(themeId: AppThemeId, isPro: boolean): boolean {
-  if (isPro) return true;
+  if (!ENABLE_SUBSCRIPTION_GATE || isPro) return true;
   return FREE_THEME_IDS.has(themeId);
 }
 
 export function openProUpgradeModal(featureName: string, description?: string): void {
+  if (!ENABLE_SUBSCRIPTION_GATE) return;
   if (typeof window === 'undefined') return;
   window.dispatchEvent(
     new CustomEvent<ProUpgradePromptPayload>(UPGRADE_MODAL_EVENT, {
@@ -135,6 +139,9 @@ export async function registerUserAccount(payload: {
   email: string;
   password: string;
 }): Promise<StoredAuthSession> {
+  if (!ENABLE_SUBSCRIPTION_GATE) {
+    throw new Error('Sistema de conta e assinatura temporariamente desativado (Modo Dev).');
+  }
   const base = resolveApiBaseUrl();
   const res = await fetch(`${base}/api/auth/register`, {
     method: 'POST',
@@ -163,6 +170,9 @@ export async function loginUserAccount(payload: {
   email: string;
   password: string;
 }): Promise<StoredAuthSession> {
+  if (!ENABLE_SUBSCRIPTION_GATE) {
+    throw new Error('Sistema de conta e assinatura temporariamente desativado (Modo Dev).');
+  }
   const base = resolveApiBaseUrl();
   const res = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
@@ -189,6 +199,7 @@ export async function loginUserAccount(payload: {
 
 export async function refreshUserAccountFromServer(): Promise<StoredAuthSession | null> {
   const current = getStoredAuthSession();
+  if (!ENABLE_SUBSCRIPTION_GATE) return current;
   if (!current?.token) return null;
   try {
     const base = resolveApiBaseUrl();
@@ -228,6 +239,7 @@ export function logoutUserAccount(): void {
 }
 
 export async function fetchAdminUsersList(): Promise<AuthUser[]> {
+  if (!ENABLE_SUBSCRIPTION_GATE) return [];
   const current = getStoredAuthSession();
   if (!current?.token) {
     throw new Error('Faça login como administrador.');
@@ -255,6 +267,9 @@ export async function updateAdminUserSubscription(
   userId: string,
   payload: { plan: UserPlan; expiresAt: string | null }
 ): Promise<AuthUser> {
+  if (!ENABLE_SUBSCRIPTION_GATE) {
+    throw new Error('Sistema de assinatura temporariamente desativado (Modo Dev).');
+  }
   const current = getStoredAuthSession();
   if (!current?.token) {
     throw new Error('Sessão expirada.');
@@ -306,6 +321,9 @@ export function useAuthSession() {
   }, []);
 
   const refresh = useCallback(async () => {
+    if (!ENABLE_SUBSCRIPTION_GATE) {
+      return getStoredAuthSession();
+    }
     setSyncing(true);
     try {
       const next = await refreshUserAccountFromServer();
@@ -316,9 +334,11 @@ export function useAuthSession() {
     }
   }, []);
 
-  const effectivePlan = getEffectiveUserPlan(session?.user);
-  const isPro = effectivePlan === 'pro';
-  const isAdmin = session?.user?.role === 'admin';
+  const effectivePlan: UserPlan = !ENABLE_SUBSCRIPTION_GATE
+    ? 'pro'
+    : getEffectiveUserPlan(session?.user);
+  const isPro = !ENABLE_SUBSCRIPTION_GATE || effectivePlan === 'pro';
+  const isAdmin = ENABLE_SUBSCRIPTION_GATE && session?.user?.role === 'admin';
 
   return {
     session,

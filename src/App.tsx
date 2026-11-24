@@ -11,6 +11,7 @@ import { TimeCalculatorTab } from './components/TimeCalculatorModal';
 import { VelocityCockpit } from './components/VelocityCockpit';
 import type { ActiveTab, CompetitorResultFile, RallyMode } from './types/rally';
 import {
+  ENABLE_SUBSCRIPTION_GATE,
   openProUpgradeModal,
   type ProUpgradePromptPayload,
   subscribeProUpgradeModal,
@@ -66,6 +67,7 @@ const OrganizerBackoffice = isCompetitorEnv
 
 export type SettingsSubMenu =
   | 'hub'
+  | 'modality'
   | 'account'
   | 'theme'
   | 'collector'
@@ -113,25 +115,15 @@ export default function App() {
     }
   };
 
-  const handleSelectModeFromHome = (mode: RallyMode) => {
-    if (mode === 'regularidade' && !isPro) {
-      openProUpgradeModal(
-        'Navegação de Regularidade Completa',
-        'A navegação por planilha (.NBP/.TXT), cálculos de TNAV/PMM, voz e Droid Piloto estão disponíveis no Plano PRO.'
-      );
-      return;
-    }
-    updateRallyMode(mode);
-    setActiveTab(mode === 'velocidade' ? 'velocidade' : 'navegacao');
-  };
-
-  // Sync user account/subscription cleanly when online (falls back to offline cache)
+  // Sync user account/subscription cleanly when online (only when gate is enabled)
   useEffect(() => {
+    if (!ENABLE_SUBSCRIPTION_GATE) return;
     void refreshAuth();
   }, [refreshAuth]);
 
   // Listen to PRO upgrade modal prompts from any cockpit component
   useEffect(() => {
+    if (!ENABLE_SUBSCRIPTION_GATE) return;
     return subscribeProUpgradeModal((payload) => {
       setProModal(payload);
     });
@@ -243,8 +235,16 @@ export default function App() {
     setActiveTab('inicial');
   };
 
+  const isHomeFullCanvas = !publicResultSlug && !isApuracao && activeTab === 'inicial';
+
   return (
-    <div className="min-h-screen w-full overflow-x-hidden bg-rally-asphalt text-[var(--ps-text)] flex flex-col">
+    <div
+      className={`${
+        isHomeFullCanvas
+          ? 'h-[100dvh] overflow-hidden'
+          : 'min-h-screen overflow-x-hidden'
+      } w-full bg-rally-asphalt text-[var(--ps-text)] flex flex-col`}
+    >
       {/* PitStop-Sports Top Header (flush at top on native Android WebView) */}
       <header
         className={`sticky top-0 z-30 border-b border-[var(--ps-border)] bg-[var(--ps-header)] text-[var(--ps-text)] backdrop-blur-md ${
@@ -396,15 +396,16 @@ export default function App() {
             )}
           </div>
         </div>
-        {/* Checkered flag speed streak flush under top navigation bar */}
-        <div
-          aria-hidden="true"
-          className="pitstop-racing-line h-[5px] w-full sm:h-[7px]"
-        />
       </header>
 
       {/* Main Content */}
-      <main className="mx-auto w-full max-w-7xl flex-1 px-2.5 pt-2.5 pb-4 sm:px-6 sm:pt-5 lg:px-8">
+      <main
+        className={
+          isHomeFullCanvas
+            ? 'flex w-full flex-1 min-h-0 flex-col overflow-hidden p-0'
+            : 'mx-auto w-full max-w-7xl flex-1 px-2.5 pt-2.5 pb-4 sm:px-6 sm:pt-5 lg:px-8'
+        }
+      >
         {publicResultSlug ? (
           <PublicStandingsView slug={publicResultSlug} />
         ) : isApuracao && OrganizerBackoffice ? (
@@ -424,16 +425,14 @@ export default function App() {
           </Suspense>
         ) : (
           <>
-            <div className={activeTab === 'inicial' ? '' : 'hidden'}>
-              <InitialStatusTab
-                rallyMode={rallyMode}
-                onSelectMode={handleSelectModeFromHome}
-                onNavigate={(tab) => {
-                  if (tab === 'configuracoes') openSettingsSection('hub');
-                  else setActiveTab(tab);
-                }}
-                onOpenAccount={() => openSettingsSection('account')}
-              />
+            <div
+              className={
+                activeTab === 'inicial'
+                  ? 'flex flex-1 min-h-0 flex-col overflow-hidden'
+                  : 'hidden'
+              }
+            >
+              <InitialStatusTab />
             </div>
             {visitedTabs.has('navegacao') && (
               <div className={activeTab === 'navegacao' ? '' : 'hidden'}>
@@ -453,6 +452,8 @@ export default function App() {
                 <SettingsTab
                   initialMenu={settingsMenu}
                   onMenuChange={setSettingsMenu}
+                  rallyMode={rallyMode}
+                  onSelectRallyMode={updateRallyMode}
                   onOpenNavigation={() => {
                     if (!isPro) {
                       openProUpgradeModal(
@@ -472,16 +473,18 @@ export default function App() {
         )}
       </main>
 
-      <footer className="mx-auto w-full max-w-7xl px-4 pb-safe pt-2 text-center">
-        <p className="text-[11px] tracking-wide text-[var(--ps-muted)]">
-          Desenvolvido por Márlon Zill · PitStop-Sports
-        </p>
-      </footer>
+      {!isHomeFullCanvas && (
+        <footer className="mx-auto w-full max-w-7xl px-4 pb-safe pt-2 text-center">
+          <p className="text-[11px] tracking-wide text-[var(--ps-muted)]">
+            Desenvolvido por Márlon Zill · PitStop-Sports
+          </p>
+        </footer>
+      )}
 
       <OfflineIndicator />
 
       {/* Modal de Solicitação / Upgrade para Plano PRO */}
-      {proModal && (
+      {ENABLE_SUBSCRIPTION_GATE && proModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
           role="dialog"

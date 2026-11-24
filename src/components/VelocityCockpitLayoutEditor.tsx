@@ -3,8 +3,8 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
-  LayoutGrid,
   RotateCcw,
+  Settings,
   SlidersHorizontal,
   X,
 } from 'lucide-react';
@@ -52,8 +52,7 @@ const LayoutMiniSchematic: React.FC<{ id: VelocityCockpitLayoutId; accent: strin
       return (
         <svg viewBox="0 0 64 44" className="h-9 w-12 shrink-0" aria-hidden="true">
           <rect x="2" y="2" width="60" height="40" rx="4" fill="#0B0D12" stroke="#2D3342" />
-          <rect x="6" y="5" width="34" height="15" rx="2" fill={accent} fillOpacity="0.25" stroke={accent} />
-          <rect x="42" y="5" width="16" height="15" rx="2" fill="#E10600" fillOpacity="0.7" />
+          <rect x="6" y="5" width="52" height="15" rx="2" fill={accent} fillOpacity="0.25" stroke={accent} />
           <rect x="6" y="22" width="16" height="10" rx="1.5" fill="#181D29" />
           <rect x="24" y="22" width="16" height="10" rx="1.5" fill="#181D29" />
           <rect x="42" y="22" width="16" height="10" rx="1.5" fill="#181D29" />
@@ -154,7 +153,7 @@ interface VelocityCockpitLayoutEditorProps {
 export const VelocityCockpitLayoutEditor: React.FC<VelocityCockpitLayoutEditorProps> = ({
   onSelectClose,
 }) => {
-  const { config, preset, setLayoutId, updateCustomWidgets, resetCustomWidgets } =
+  const { config, preset, setLayoutId, setMenuPosition, updateCustomWidgets, resetCustomWidgets } =
     useVelocityCockpitLayout();
   const [showBuilder, setShowBuilder] = useState(config.layoutId === 'custom');
 
@@ -213,14 +212,49 @@ export const VelocityCockpitLayoutEditor: React.FC<VelocityCockpitLayoutEditorPr
         </button>
       </div>
 
+      {/* Menu Position Toggle: Rodapé (Polegar) vs Topo */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5">
+        <div>
+          <p className="text-xs font-bold text-[var(--ps-text)]">Posição do Menu (5 Abas)</p>
+          <p className="text-[11px] text-[var(--ps-muted)]">
+            Move Cronômetro · Análise · Mapa · Satcron · Config. igual em todos os 11 layouts.
+          </p>
+        </div>
+        <div className="inline-flex rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
+          <button
+            type="button"
+            onClick={() => setMenuPosition('bottom')}
+            className={`min-h-[34px] rounded-md px-3 text-xs font-extrabold transition-colors ${
+              config.menuPosition === 'bottom'
+                ? 'pitstop-btn-red'
+                : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+            }`}
+          >
+            Rodapé (Polegar)
+          </button>
+          <button
+            type="button"
+            onClick={() => setMenuPosition('top')}
+            className={`min-h-[34px] rounded-md px-3 text-xs font-extrabold transition-colors ${
+              config.menuPosition === 'top'
+                ? 'pitstop-btn-red'
+                : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+            }`}
+          >
+            Topo
+          </button>
+        </div>
+      </div>
+
       {/* Grid of 10 Ready-Made Presets + #11 Custom */}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-2.5">
         {VELOCITY_COCKPIT_PRESETS.map((item) => {
           const active = config.layoutId === item.id;
           return (
             <button
               key={item.id}
               type="button"
+              title={item.description}
               onClick={() => {
                 setLayoutId(item.id);
                 if (item.id === 'custom') {
@@ -229,35 +263,30 @@ export const VelocityCockpitLayoutEditor: React.FC<VelocityCockpitLayoutEditorPr
                   onSelectClose();
                 }
               }}
-              className={`group relative flex min-h-[76px] items-center gap-3 overflow-hidden rounded-xl border p-3 text-left transition-all active:scale-[0.99] ${
+              className={`group relative flex flex-col justify-between gap-1.5 overflow-hidden rounded-xl border p-2.5 text-left transition-all active:scale-[0.98] ${
                 active
                   ? 'border-white/40 bg-[#171C28] shadow-md'
                   : 'border-[var(--ps-border)] bg-[#11141C] hover:border-white/25'
               }`}
             >
-              <LayoutMiniSchematic id={item.id} accent={item.accentColor} />
-
-              <div className="min-w-0 flex-1 space-y-0.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-['Barlow_Condensed'] text-sm font-black tracking-wide text-white uppercase sm:text-base">
-                    {item.code} · {item.name}
+              <div className="flex items-center justify-between gap-1.5">
+                <LayoutMiniSchematic id={item.id} accent={item.accentColor} />
+                {active && (
+                  <span
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-black"
+                    style={{ backgroundColor: item.accentColor }}
+                  >
+                    <Check className="h-3 w-3 stroke-[3]" />
                   </span>
-                  {active && (
-                    <span
-                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-black"
-                      style={{ backgroundColor: item.accentColor }}
-                    >
-                      <Check className="h-3.5 w-3.5 stroke-[3]" />
-                    </span>
-                  )}
-                </div>
+                )}
+              </div>
 
-                <p className="line-clamp-2 text-[11px] leading-snug text-slate-300/85">
-                  {item.description}
+              <div className="min-w-0 space-y-0.5">
+                <p className="truncate font-['Barlow_Condensed'] text-xs font-black tracking-wide text-white uppercase sm:text-sm">
+                  {item.code} · {item.shortName}
                 </p>
-
                 <p
-                  className="font-mono text-[10px] font-bold uppercase"
+                  className="truncate font-mono text-[9px] font-bold uppercase"
                   style={{ color: item.accentColor }}
                 >
                   {item.tag}
@@ -413,11 +442,13 @@ export const VelocityCockpitLayoutEditor: React.FC<VelocityCockpitLayoutEditorPr
 interface VelocityCockpitLayoutModalProps {
   open: boolean;
   onClose: () => void;
+  gpsSettingsSection?: React.ReactNode;
 }
 
 export const VelocityCockpitLayoutModal: React.FC<VelocityCockpitLayoutModalProps> = ({
   open,
   onClose,
+  gpsSettingsSection,
 }) => {
   if (!open) return null;
 
@@ -426,33 +457,59 @@ export const VelocityCockpitLayoutModal: React.FC<VelocityCockpitLayoutModalProp
       className="fixed inset-0 z-[70] flex items-end justify-center bg-black/80 p-2 backdrop-blur-sm sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Escolher Layout do Cockpit Ao Vivo"
+      aria-label="Configurações e Layouts do Cockpit Velocidade"
     >
       <div className="flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#0D1017] text-[var(--ps-text)] shadow-2xl">
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
           <div className="flex items-center gap-2 min-w-0">
-            <LayoutGrid className="h-5 w-5 shrink-0 text-[#E10600]" />
+            <Settings className="h-5 w-5 shrink-0 text-[#E10600]" />
             <div className="min-w-0">
               <h3 className="font-['Barlow_Condensed'] text-lg font-black tracking-wide text-white uppercase sm:text-xl">
-                Layouts do Cockpit Ao Vivo (10 + Customizado)
+                Configurações da Aba Velocidade
               </h3>
               <p className="truncate text-[11px] text-slate-400">
-                Toque em qualquer modelo para trocar na hora · Zero rolagem na pista.
+                Seção 1: 11 Layouts &amp; Posição do Menu · Seção 2: Receptor GPS &amp; Motor
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Fechar seletor de layouts"
+            aria-label="Fechar configurações"
             className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-[#151A25] text-slate-200 hover:border-white/35"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 sm:p-4">
-          <VelocityCockpitLayoutEditor onSelectClose={onClose} />
+        <div className="flex-1 overflow-y-auto p-3 space-y-4 sm:p-4">
+          {/* Seção 1 — Layout do Cockpit Ao Vivo (11 Modelos) + Posição do Menu */}
+          <div className="space-y-2.5 rounded-xl border border-white/10 bg-[#11141D] p-3 sm:p-4">
+            <div>
+              <h4 className="font-['Barlow_Condensed'] text-base font-black tracking-wide text-white uppercase sm:text-lg">
+                Seção 1 — Layout do Cockpit Ao Vivo (11 Modelos)
+              </h4>
+              <p className="text-[11px] text-slate-400">
+                Todos os 11 layouts compartilham o mesmo cabeçalho limpo e rodapé unificado.
+              </p>
+            </div>
+            <VelocityCockpitLayoutEditor onSelectClose={onClose} />
+          </div>
+
+          {/* Seção 2 — Receptor GPS & Motor de Cronometragem */}
+          {gpsSettingsSection && (
+            <div className="space-y-2.5 rounded-xl border border-white/10 bg-[#11141D] p-3 sm:p-4">
+              <div className="mb-1">
+                <h4 className="font-['Barlow_Condensed'] text-base font-black tracking-wide text-white uppercase sm:text-lg">
+                  Seção 2 — Receptor GPS &amp; Motor de Cronometragem
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  Fonte de telemetria, detecção automática de pista, Auto-Snap HDOP e acelerômetro IMU.
+                </p>
+              </div>
+              {gpsSettingsSection}
+            </div>
+          )}
         </div>
       </div>
     </div>
