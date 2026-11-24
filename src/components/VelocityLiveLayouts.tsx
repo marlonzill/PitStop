@@ -240,6 +240,10 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       ? computePredictiveDeltaSec(totalDistKm, currentStageElapsedMs, bestRun)
       : null;
 
+  const latestSample = liveSamples.length > 0 ? liveSamples[liveSamples.length - 1] : null;
+  const liveLongG = latestSample?.accelLongG ?? 0;
+  const liveLatG = latestSample?.accelLatG ?? 0;
+
   const deltaTrend = useMemo<'improving' | 'worsening' | null>(() => {
     if (stageState !== 'running' || !bestRun || predictiveDeltaSec === null) return null;
     if (liveSamples.length >= 2 && totalDistKm > 0.03) {
@@ -1595,7 +1599,283 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
           </div>
         );
 
-      // 11 · CUSTOMIZADO (MONTE O SEU COCKPIT — APENAS WIDGETS DE DADOS)
+      // 11 · DIGITAL CLUSTER (VELOCÍMETRO GIGANTE + BARRA LUMINOSA 0–200 + SS)
+      case 'digital_cluster': {
+        const clampedSpeed = Math.max(0, Math.min(200, speedKmh));
+        const activeSegments = Math.round((clampedSpeed / 200) * 20);
+        return (
+          <div className="flex flex-1 min-h-0 flex-col justify-between gap-2 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 text-[var(--ps-text)] shadow-xl sm:p-3">
+            {/* Velocímetro Digital Gigante + Barra Luminosa 0–200 km/h */}
+            <div className="flex flex-[1.2] min-h-0 flex-col items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-2 text-center">
+              <div className="flex w-full items-center justify-between font-mono text-[10px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
+                <span>DIGITAL CLUSTER</span>
+                <span className={isFaster ? 'text-[var(--ps-emerald)]' : isSlower ? 'text-[#FF2A2A]' : 'text-[var(--ps-accent)]'}>
+                  {bestRun ? `DELTA ${formattedCompactDelta}` : 'KM/H'}
+                </span>
+              </div>
+
+              <div className="my-auto flex items-baseline justify-center gap-1.5 font-['Orbitron'] tabular-nums">
+                <span className="text-6xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-7xl">
+                  {Math.round(speedKmh)}
+                </span>
+                <span className="text-sm font-black text-[var(--ps-accent)] uppercase sm:text-base">
+                  km/h
+                </span>
+              </div>
+
+              {/* Barra Luminosa Segmentada 0–200 km/h */}
+              <div className="w-full space-y-1">
+                <div className="grid grid-cols-[repeat(20,minmax(0,1fr))] gap-1">
+                  {Array.from({ length: 20 }, (_, i) => {
+                    const lit = i < activeSegments;
+                    const segClass = !lit
+                      ? 'bg-white/10'
+                      : i >= 16
+                        ? 'bg-[#FF1744] shadow-[0_0_8px_rgba(255,23,68,0.85)]'
+                        : i >= 12
+                          ? 'bg-[var(--ps-amber)] shadow-[0_0_8px_rgba(251,191,36,0.7)]'
+                          : 'bg-[var(--ps-accent)] shadow-[0_0_8px_var(--ps-accent-soft)]';
+                    return <span key={i} className={`h-2.5 rounded-[2px] transition-colors ${segClass}`} />;
+                  })}
+                </div>
+                <div className="flex justify-between font-mono text-[9px] font-bold text-[var(--ps-muted)] tabular-nums">
+                  <span>0</span>
+                  <span>50</span>
+                  <span>100</span>
+                  <span>150</span>
+                  <span>200</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Cronômetro SS em Destaque Logo Abaixo */}
+            <div className="flex flex-1 min-h-0 flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2 text-center">
+              <div className="flex w-full items-center justify-between font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                <span>TEMPO SS · {statusHeadline}</span>
+                <span className="text-[var(--ps-emerald)]">
+                  MEL {formatStageDuration(optimalSummary.bestRunTotalMs)}
+                </span>
+              </div>
+              <div
+                className={`my-auto font-['Orbitron'] text-4xl font-black leading-none tracking-tight tabular-nums sm:text-5xl ${
+                  stageState === 'running'
+                    ? 'text-[var(--ps-accent)]'
+                    : stageState === 'finished'
+                      ? 'text-[var(--ps-emerald)]'
+                      : 'text-[var(--ps-text)]'
+                }`}
+              >
+                {formatStageDuration(currentStageElapsedMs)}
+              </div>
+              <div className="flex w-full items-center justify-between font-mono text-[10px] text-[var(--ps-muted)] tabular-nums">
+                <span>CH {formatClockTime(clockAdjustedNow)}</span>
+                <span>
+                  DIST{' '}
+                  <strong className="text-[var(--ps-amber)]">
+                    {Math.round(displayedTripKm * 1000)}m
+                  </strong>
+                </span>
+              </div>
+            </div>
+
+            {renderSplitsGrid(true)}
+          </div>
+        );
+      }
+
+      // 12 · OLD SCHOOL RALLY (TERRATRIP / HALDA RETRÔ)
+      case 'old_school': {
+        return (
+          <div className="flex flex-1 min-h-0 flex-col justify-between gap-2 rounded-sm border-2 border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-2 text-[var(--ps-text)]">
+            <div className="grid flex-1 min-h-0 grid-cols-2 gap-2">
+              <div className="flex flex-col justify-between rounded-sm border-2 border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] overflow-hidden">
+                <div className="border-b border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 py-1 font-['Share_Tech_Mono'] text-[10px] font-bold tracking-widest text-[var(--ps-accent)] uppercase">
+                  VELOCIDADE
+                </div>
+                <div className="flex flex-1 items-baseline justify-center gap-1 px-2 py-2 font-['Share_Tech_Mono'] tabular-nums">
+                  <span className="text-5xl font-bold leading-none text-[var(--ps-text)] sm:text-6xl">
+                    {String(Math.round(speedKmh)).padStart(3, '0')}
+                  </span>
+                  <span className="text-xs font-bold text-[var(--ps-muted)] uppercase">KM/H</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col justify-between rounded-sm border-2 border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] overflow-hidden">
+                <div className="border-b border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 py-1 font-['Share_Tech_Mono'] text-[10px] font-bold tracking-widest text-[var(--ps-accent)] uppercase">
+                  DISTÂNCIA
+                </div>
+                <div className="flex flex-1 flex-col items-center justify-center px-2 py-1 font-['Share_Tech_Mono'] tabular-nums">
+                  {renderTripEditorOrValue(
+                    "font-['Share_Tech_Mono'] text-4xl sm:text-5xl text-[var(--ps-amber)]",
+                    "font-['Share_Tech_Mono'] text-sm text-[var(--ps-amber)]",
+                    "font-['Share_Tech_Mono'] text-[10px] text-[var(--ps-muted)]"
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-1 min-h-0 flex-col justify-between rounded-sm border-2 border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] overflow-hidden">
+              <div className="flex items-center justify-between border-b border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 font-['Share_Tech_Mono'] text-[10px] font-bold tracking-widest uppercase">
+                <span className="text-[var(--ps-accent)]">TEMPO SS</span>
+                <span className="text-[var(--ps-muted)]">{statusHeadline}</span>
+              </div>
+              <div
+                className={`flex flex-1 items-center justify-center px-2 py-1 text-center font-['Share_Tech_Mono'] text-5xl font-bold leading-none tabular-nums sm:text-6xl ${
+                  stageState === 'running'
+                    ? 'text-[var(--ps-accent)]'
+                    : stageState === 'finished'
+                      ? 'text-[var(--ps-emerald)]'
+                      : 'text-[var(--ps-text)]'
+                }`}
+              >
+                {formatStageDuration(currentStageElapsedMs)}
+              </div>
+            </div>
+
+            <div className="grid shrink-0 grid-cols-3 gap-2">
+              <div className="rounded-sm border-2 border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center font-['Share_Tech_Mono'] tabular-nums">
+                <p className="text-[9px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
+                  DELTA
+                </p>
+                <p
+                  className={`mt-0.5 text-base font-bold leading-none sm:text-lg ${
+                    isFaster
+                      ? 'text-[var(--ps-emerald)]'
+                      : isSlower
+                        ? 'text-[#FF2A2A]'
+                        : 'text-[var(--ps-text)]'
+                  }`}
+                >
+                  {formattedCompactDelta}
+                </p>
+              </div>
+              <div className="rounded-sm border-2 border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center font-['Share_Tech_Mono'] tabular-nums">
+                <p className="text-[9px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
+                  HORA CH
+                </p>
+                <p className="mt-0.5 text-base font-bold leading-none text-[var(--ps-text)] sm:text-lg">
+                  {formatClockTime(clockAdjustedNow)}
+                </p>
+              </div>
+              <div className="rounded-sm border-2 border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center font-['Share_Tech_Mono'] tabular-nums">
+                <p className="text-[9px] font-bold tracking-widest text-[var(--ps-emerald)] uppercase">
+                  MELHOR SS
+                </p>
+                <p className="mt-0.5 text-base font-bold leading-none text-[var(--ps-emerald)] sm:text-lg">
+                  {formatStageDuration(optimalSummary.bestRunTotalMs)}
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // 13 · FUTURISTIC HUD (VISOR HEAD-UP DISPLAY DE AVIAÇÃO / F1)
+      case 'futuristic_hud': {
+        const gLatPct = Math.max(-100, Math.min(100, (liveLatG / 1.5) * 100));
+        return (
+          <div className="relative flex flex-1 min-h-0 flex-col justify-between gap-2 overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)]/75 p-3 text-[var(--ps-text)] backdrop-blur-sm">
+            {/* Linhas de Mira Geométricas nos 4 Cantos */}
+            <span aria-hidden="true" className="pointer-events-none absolute top-2 left-2 h-4 w-4 border-t-2 border-l-2 border-[var(--ps-accent)]" />
+            <span aria-hidden="true" className="pointer-events-none absolute top-2 right-2 h-4 w-4 border-t-2 border-r-2 border-[var(--ps-accent)]" />
+            <span aria-hidden="true" className="pointer-events-none absolute bottom-2 left-2 h-4 w-4 border-b-2 border-l-2 border-[var(--ps-accent)]" />
+            <span aria-hidden="true" className="pointer-events-none absolute bottom-2 right-2 h-4 w-4 border-b-2 border-r-2 border-[var(--ps-accent)]" />
+
+            {/* Barra Superior HUD: Rumo / Inclinação Lateral & Força G */}
+            <div className="grid shrink-0 grid-cols-3 items-center gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]/70 px-2.5 py-1.5 font-['Orbitron'] tabular-nums">
+              <div className="text-left">
+                <p className="text-[8px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
+                  LONG G
+                </p>
+                <p className="text-xs font-bold text-[var(--ps-accent)] sm:text-sm">
+                  {liveLongG >= 0 ? '+' : ''}
+                  {liveLongG.toFixed(2)}G
+                </p>
+              </div>
+              <div className="flex flex-col items-center text-center">
+                <p className="text-[8px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
+                  HORIZON / CAP {headingDeg !== null ? `${headingDeg}°` : '---'}
+                </p>
+                <div className="relative mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div className="absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 bg-[var(--ps-accent)]/70" />
+                  <div
+                    className="absolute inset-y-0 w-2.5 -translate-x-1/2 rounded-full bg-[var(--ps-accent)]"
+                    style={{ left: `${50 + gLatPct * 0.45}%` }}
+                  />
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-[8px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
+                  LAT G
+                </p>
+                <p className="text-xs font-bold text-[var(--ps-amber)] sm:text-sm">
+                  {liveLatG >= 0 ? '+' : ''}
+                  {liveLatG.toFixed(2)}G
+                </p>
+              </div>
+            </div>
+
+            {/* Velocímetro Translúcido + Mira Central */}
+            <div className="relative flex flex-[1.15] min-h-0 flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]/55 px-3 py-2 text-center">
+              <span className="font-mono text-[9px] font-bold tracking-[0.22em] text-[var(--ps-accent)] uppercase">
+                HUD VELOCITY · {statusHeadline}
+              </span>
+              <div className="my-auto flex items-baseline justify-center gap-1.5 font-['Orbitron'] tabular-nums">
+                <span className="text-6xl font-black leading-none tracking-tight text-[var(--ps-text)] drop-shadow-[0_0_12px_var(--ps-accent-soft)] sm:text-7xl">
+                  {Math.round(speedKmh)}
+                </span>
+                <span className="text-xs font-bold text-[var(--ps-accent)] uppercase sm:text-sm">
+                  KM/H
+                </span>
+              </div>
+              <div className="flex w-full items-center justify-between font-mono text-[10px] tabular-nums">
+                <span className="text-[var(--ps-muted)]">
+                  DIST <strong className="text-[var(--ps-amber)]">{Math.round(displayedTripKm * 1000)}m</strong>
+                </span>
+                <span
+                  className={`font-bold ${
+                    isFaster
+                      ? 'text-[var(--ps-emerald)]'
+                      : isSlower
+                        ? 'text-[#FF2A2A]'
+                        : 'text-[var(--ps-muted)]'
+                  }`}
+                >
+                  DELTA {formattedCompactDelta}
+                </span>
+              </div>
+            </div>
+
+            {/* Telemetria Inferior HUD: SS + CH/MELHOR */}
+            <div className="grid shrink-0 grid-cols-3 gap-2">
+              <div className="col-span-2 flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]/65 px-2.5 py-2 text-center">
+                <span className="font-mono text-[9px] font-bold tracking-widest text-[var(--ps-muted)] uppercase">
+                  CRONÔMETRO SS
+                </span>
+                <span className="mt-0.5 font-['Orbitron'] text-3xl font-black leading-none text-[var(--ps-text)] tabular-nums sm:text-4xl">
+                  {formatStageDuration(currentStageElapsedMs)}
+                </span>
+              </div>
+              <div className="flex flex-col justify-center gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]/65 px-2 py-1.5 text-center font-mono tabular-nums">
+                <div>
+                  <p className="text-[8px] font-bold text-[var(--ps-muted)] uppercase">CH</p>
+                  <p className="text-xs font-bold text-[var(--ps-text)]">
+                    {formatClockTime(clockAdjustedNow)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[8px] font-bold text-[var(--ps-emerald)] uppercase">MELHOR</p>
+                  <p className="text-xs font-bold text-[var(--ps-emerald)]">
+                    {formatStageDuration(optimalSummary.bestRunTotalMs)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // 14 · CUSTOMIZADO (MONTE O SEU COCKPIT — APENAS WIDGETS DE DADOS)
       case 'custom': {
         const enabledWidgets = customWidgets.filter((w) => w.enabled);
         const sizeFlexClass = (sz: CustomWidgetSize) =>

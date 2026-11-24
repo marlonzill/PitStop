@@ -16,7 +16,7 @@ import {
   useVelocityCockpitLayout,
 } from '../utils/velocityCockpitLayout';
 
-const LayoutMiniSchematic: React.FC<{ id: VelocityCockpitLayoutId; accent: string }> = ({
+export const LayoutMiniSchematic: React.FC<{ id: VelocityCockpitLayoutId; accent: string }> = ({
   id,
   accent,
 }) => {
@@ -131,6 +131,34 @@ const LayoutMiniSchematic: React.FC<{ id: VelocityCockpitLayoutId; accent: strin
           <rect x="24" y="6" width="16" height="25" rx="2" fill="#181D29" />
           <rect x="42" y="6" width="16" height="25" rx="2" fill="#181D29" />
           <rect x="6" y="33" width="52" height="5" rx="1.5" fill="#1E2432" />
+        </svg>
+      );
+    case 'digital_cluster':
+      return (
+        <svg viewBox="0 0 64 44" className="h-9 w-12 shrink-0" aria-hidden="true">
+          <rect x="2" y="2" width="60" height="40" rx="4" fill="#06090F" stroke="#1E293B" />
+          <rect x="6" y="5" width="52" height="14" rx="2" fill="#0D131F" stroke={accent} />
+          <rect x="8" y="21" width="48" height="4" rx="1" fill="#1E293B" />
+          <rect x="8" y="21" width="34" height="4" rx="1" fill={accent} />
+          <rect x="6" y="27" width="52" height="10" rx="2" fill="#0D131F" />
+        </svg>
+      );
+    case 'old_school':
+      return (
+        <svg viewBox="0 0 64 44" className="h-9 w-12 shrink-0" aria-hidden="true">
+          <rect x="2" y="2" width="60" height="40" rx="1" fill="#161310" stroke={accent} strokeWidth="1.5" />
+          <rect x="6" y="6" width="25" height="15" rx="0.5" fill="#100D0A" stroke={accent} strokeOpacity="0.65" />
+          <rect x="33" y="6" width="25" height="15" rx="0.5" fill="#100D0A" stroke={accent} strokeOpacity="0.65" />
+          <rect x="6" y="23" width="52" height="14" rx="0.5" fill="#100D0A" stroke={accent} strokeOpacity="0.65" />
+        </svg>
+      );
+    case 'futuristic_hud':
+      return (
+        <svg viewBox="0 0 64 44" className="h-9 w-12 shrink-0" aria-hidden="true">
+          <rect x="2" y="2" width="60" height="40" rx="4" fill="#050B14" stroke="#1E3A5F" />
+          <path d="M8 12 V7 H14 M50 7 H56 V12 M8 32 V37 H14 M50 37 H56 V32" fill="none" stroke={accent} strokeWidth="1.5" />
+          <line x1="20" y1="22" x2="44" y2="22" stroke={accent} strokeDasharray="3 2" strokeOpacity="0.7" />
+          <circle cx="32" cy="22" r="7" fill="none" stroke={accent} strokeOpacity="0.8" />
         </svg>
       );
     case 'custom':

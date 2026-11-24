@@ -11,6 +11,9 @@ export type VelocityCockpitLayoutId =
   | 'wrc_pacenote'
   | 'night_stage'
   | 'landscape_3col'
+  | 'digital_cluster'
+  | 'old_school'
+  | 'futuristic_hud'
   | 'custom';
 
 export type VelocityMenuPosition = 'bottom' | 'top';
@@ -144,8 +147,35 @@ export const VELOCITY_COCKPIT_PRESETS: VelocityCockpitLayoutPreset[] = [
     description: 'Grid largo em 3 colunas otimizado para celular deitado ou tablet no painel.',
   },
   {
-    id: 'custom',
+    id: 'digital_cluster',
     code: '11',
+    name: 'Digital Cluster (0–200)',
+    shortName: 'Digital Cluster',
+    tag: 'Barra Luminosa',
+    accentColor: '#00F5FF',
+    description: 'Velocímetro digital gigante centralizado com barra luminosa 0–200 km/h e cronômetro SS logo abaixo.',
+  },
+  {
+    id: 'old_school',
+    code: '12',
+    name: 'Old School Rally (Terratrip)',
+    shortName: 'Old School Rally',
+    tag: 'Retrô Terratrip',
+    accentColor: '#FF6A00',
+    description: 'Caixas retangulares de borda marcada, rótulos técnicos em caixa alta e dígitos LED retrô.',
+  },
+  {
+    id: 'futuristic_hud',
+    code: '13',
+    name: 'Futuristic HUD (Caça / F1)',
+    shortName: 'Futuristic HUD',
+    tag: 'Visor Aviação',
+    accentColor: '#38BDF8',
+    description: 'Visor Head-Up Display com miras geométricas nos cantos, indicador de Força G e velocímetro translúcido.',
+  },
+  {
+    id: 'custom',
+    code: '14',
     name: 'Customizado (Monte o Seu)',
     shortName: 'Customizado',
     tag: 'Editor Visual',
@@ -153,6 +183,9 @@ export const VELOCITY_COCKPIT_PRESETS: VelocityCockpitLayoutPreset[] = [
     description: 'Ative/desative widgets de dados, ordene com Subir/Descer e escolha tamanho P, M ou G.',
   },
 ];
+
+export const VELOCITY_COCKPIT_READY_PRESETS: VelocityCockpitLayoutPreset[] =
+  VELOCITY_COCKPIT_PRESETS.filter((p) => p.id !== 'custom');
 
 export function getDefaultCustomWidgets(): CustomWidgetConfig[] {
   return [

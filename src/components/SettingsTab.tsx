@@ -315,6 +315,132 @@ const APP_THEME_OPTIONS: {
     border: 'rgba(220,38,38,0.3)',
     fontClass: 'font-mono',
   },
+  {
+    id: 'neon_cyan',
+    name: 'Neon Cyan (Tron)',
+    tag: 'PRO · Neon',
+    description: 'Fundo #06090F, cartões #0D131F e azul ciano elétrico #00F5FF com fonte Orbitron.',
+    bg: '#06090F',
+    surface: '#090E18',
+    card: '#0D131F',
+    accent: '#00F5FF',
+    accent2: '#38BDF8',
+    text: '#ECFEFF',
+    muted: '#67E8F9',
+    border: 'rgba(0,245,255,0.32)',
+    fontClass: "font-['Orbitron']",
+    darkAccentText: true,
+  },
+  {
+    id: 'neon_amber',
+    name: 'Neon Âmbar (Rally Night)',
+    tag: 'PRO · Neon',
+    description: 'Fundo #0A0806, cartões #16120E e laranja âmbar noturno #FF9E00 com fonte Orbitron.',
+    bg: '#0A0806',
+    surface: '#110E0A',
+    card: '#16120E',
+    accent: '#FF9E00',
+    accent2: '#FFB703',
+    text: '#FFFBEB',
+    muted: '#FBBF24',
+    border: 'rgba(255,158,0,0.34)',
+    fontClass: "font-['Orbitron']",
+    darkAccentText: true,
+  },
+  {
+    id: 'neon_lime',
+    name: 'Neon Acid Lime (WRC)',
+    tag: 'PRO · Neon',
+    description: 'Fundo #080A06, cartões #11160D e verde-limão ácido #CCFF00 com fonte Orbitron.',
+    bg: '#080A06',
+    surface: '#0D1109',
+    card: '#11160D',
+    accent: '#CCFF00',
+    accent2: '#D9FF33',
+    text: '#F7FEE7',
+    muted: '#BEF264',
+    border: 'rgba(204,255,0,0.34)',
+    fontClass: "font-['Orbitron']",
+    darkAccentText: true,
+  },
+  {
+    id: 'neon_red',
+    name: 'Neon Laser Red',
+    tag: 'PRO · Neon',
+    description: 'Fundo #0B0607, cartões #160C0E e vermelho laser #FF1744 com fonte Orbitron.',
+    bg: '#0B0607',
+    surface: '#11090B',
+    card: '#160C0E',
+    accent: '#FF1744',
+    accent2: '#FF4569',
+    text: '#FFF1F2',
+    muted: '#FDA4AF',
+    border: 'rgba(255,23,68,0.36)',
+    fontClass: "font-['Orbitron']",
+  },
+  {
+    id: 'old_vdo',
+    name: 'Old VDO Green (80s/90s)',
+    tag: 'PRO · Old School',
+    description: 'Painéis VDO Gol GTI / Kadett GSi: preto fosco #0B0D0B e verde clássico #38E57D.',
+    bg: '#0B0D0B',
+    surface: '#0F120F',
+    card: '#131713',
+    accent: '#38E57D',
+    accent2: '#6EE7B7',
+    text: '#ECFDF5',
+    muted: '#86EFAC',
+    border: 'rgba(56,229,125,0.32)',
+    fontClass: "font-['Share_Tech_Mono']",
+    darkAccentText: true,
+  },
+  {
+    id: 'old_terratrip',
+    name: 'Old Terratrip (Rally)',
+    tag: 'PRO · Old School',
+    description: 'Computadores de rally antigos: grafite quente #161310 e dígitos laranja #FF6A00.',
+    bg: '#161310',
+    surface: '#1B1713',
+    card: '#211C17',
+    accent: '#FF6A00',
+    accent2: '#FF8C33',
+    text: '#FFF7ED',
+    muted: '#FDBA74',
+    border: 'rgba(255,106,0,0.36)',
+    fontClass: "font-['Share_Tech_Mono']",
+  },
+  {
+    id: 'futuristic_hud',
+    name: 'Futuristic HUD (Caça/F1)',
+    tag: 'PRO · Futurista',
+    description: 'Fundo azul-aço #050B14, cartões #0B1626 e azul holográfico #38BDF8.',
+    bg: '#050B14',
+    surface: '#08111D',
+    card: '#0B1626',
+    accent: '#38BDF8',
+    accent2: '#7DD3FC',
+    text: '#F0F9FF',
+    muted: '#7DD3FC',
+    border: 'rgba(56,189,248,0.34)',
+    fontClass: "font-['Orbitron']",
+    darkAccentText: true,
+  },
+  {
+    id: 'cyber_plasma',
+    name: 'Cyber Plasma',
+    tag: 'PRO · Futurista',
+    description: 'Fundo abissal #070510, cartões #120D24 e magenta/plasma #E879F9.',
+    bg: '#070510',
+    surface: '#0C091A',
+    card: '#120D24',
+    accent: '#E879F9',
+    accent2: '#F0ABFC',
+    text: '#FAF5FF',
+    muted: '#F0ABFC',
+    border: 'rgba(232,121,249,0.34)',
+    fontClass: "font-['Orbitron']",
+    darkAccentText: true,
+  },
 ];
 
 const IMPORT_FORMAT_OPTIONS: {
@@ -1371,7 +1497,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               id: 'theme' as const,
               accentColor: '#00E5FF',
               title: 'TEMAS',
-              subtitle: '10 Visuais',
+              subtitle: '18 Visuais',
               swatches: [
                 activeThemeMeta.bg,
                 activeThemeMeta.surface,
@@ -1605,14 +1731,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
                 <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                  Escolha o Tema do Cockpit (10 Modelos)
+                  Escolha o Tema do Cockpit (18 Modelos)
                 </h2>
                 <p className="text-xs text-[var(--ps-muted)]">
                   {!ENABLE_SUBSCRIPTION_GATE
-                    ? 'Modo Dev ativo: todos os 10 temas visuais estão 100% liberados.'
+                    ? 'Modo Dev ativo: todos os 18 temas visuais estão 100% liberados.'
                     : isPro
-                      ? 'Plano PRO ativo: todos os 10 temas visuais desbloqueados offline e online.'
-                      : 'Plano FREE: PitStop Original e Solar Dia liberados. Os demais 8 temas requerem Plano PRO.'}
+                      ? 'Plano PRO ativo: todos os 18 temas visuais desbloqueados offline e online.'
+                      : 'Plano FREE: PitStop Original e Solar Dia liberados. Os demais 16 temas requerem Plano PRO.'}
                 </p>
               </div>
               <span className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-1.5 font-mono text-[11px] font-bold text-[var(--ps-accent)]">
@@ -2305,10 +2431,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                  Cockpit Ao Vivo · Aba Velocidade (10 Modelos + Customizado)
+                  Cockpit Ao Vivo · Aba Velocidade (13 Modelos + Customizado)
                 </h2>
                 <p className="text-xs text-[var(--ps-muted)]">
-                  Escolha um dos 10 layouts prontos ou monte o seu painel com ordem, tamanho P/M/G e widgets ativos.
+                  Escolha um dos 13 layouts prontos ou monte o seu painel com ordem, tamanho P/M/G e widgets ativos.
                 </p>
               </div>
             </div>

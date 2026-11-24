@@ -31,7 +31,15 @@ export type AppThemeId =
   | 'cyberpunk'
   | 'castrol'
   | 'night'
-  | 'solar';
+  | 'solar'
+  | 'neon_cyan'
+  | 'neon_amber'
+  | 'neon_lime'
+  | 'neon_red'
+  | 'old_vdo'
+  | 'old_terratrip'
+  | 'futuristic_hud'
+  | 'cyber_plasma';
 
 export interface PilotDisplayOptions {
   showDistance: boolean;
@@ -250,7 +258,15 @@ export function getNavSettings(): PitStopNavSettings {
         parsed.appTheme === 'cyberpunk' ||
         parsed.appTheme === 'castrol' ||
         parsed.appTheme === 'night' ||
-        parsed.appTheme === 'solar'
+        parsed.appTheme === 'solar' ||
+        parsed.appTheme === 'neon_cyan' ||
+        parsed.appTheme === 'neon_amber' ||
+        parsed.appTheme === 'neon_lime' ||
+        parsed.appTheme === 'neon_red' ||
+        parsed.appTheme === 'old_vdo' ||
+        parsed.appTheme === 'old_terratrip' ||
+        parsed.appTheme === 'futuristic_hud' ||
+        parsed.appTheme === 'cyber_plasma'
           ? parsed.appTheme
           : 'pitstop',
       voiceThresholds:
@@ -282,6 +298,14 @@ export function applyAppThemeToDocument(themeId: AppThemeId): void {
       castrol: '#051610',
       night: '#050506',
       solar: '#F1F5F9',
+      neon_cyan: '#06090F',
+      neon_amber: '#0A0806',
+      neon_lime: '#080A06',
+      neon_red: '#0B0607',
+      old_vdo: '#0B0D0B',
+      old_terratrip: '#161310',
+      futuristic_hud: '#050B14',
+      cyber_plasma: '#070510',
     };
     metaTheme.setAttribute('content', colorMap[themeId]);
   }

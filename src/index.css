@@ -227,6 +227,182 @@
   --ps-drawing-filter: none;
 }
 
+[data-theme="neon_cyan"] {
+  --ps-bg: #06090F;
+  --ps-surface: #090E18;
+  --ps-card: #0D131F;
+  --ps-card-deep: #04060B;
+  --ps-header: rgba(6, 9, 15, 0.97);
+  --ps-border: rgba(0, 245, 255, 0.22);
+  --ps-border-strong: rgba(0, 245, 255, 0.48);
+  --ps-text: #ECFEFF;
+  --ps-muted: #67E8F9;
+  --ps-accent: #00F5FF;
+  --ps-accent-2: #38BDF8;
+  --ps-accent-soft: rgba(0, 245, 255, 0.16);
+  --ps-accent-text: #041016;
+  --ps-amber: #FACC15;
+  --ps-emerald: #00F5FF;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Orbitron", "Chakra Petch", sans-serif;
+  --ps-font-mono: "Orbitron", "Share Tech Mono", monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="neon_amber"] {
+  --ps-bg: #0A0806;
+  --ps-surface: #110E0A;
+  --ps-card: #16120E;
+  --ps-card-deep: #060504;
+  --ps-header: rgba(10, 8, 6, 0.97);
+  --ps-border: rgba(255, 158, 0, 0.24);
+  --ps-border-strong: rgba(255, 158, 0, 0.52);
+  --ps-text: #FFFBEB;
+  --ps-muted: #FBBF24;
+  --ps-accent: #FF9E00;
+  --ps-accent-2: #FFB703;
+  --ps-accent-soft: rgba(255, 158, 0, 0.18);
+  --ps-accent-text: #120B02;
+  --ps-amber: #FF9E00;
+  --ps-emerald: #34D399;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Orbitron", "Chakra Petch", sans-serif;
+  --ps-font-mono: "Orbitron", "Share Tech Mono", monospace;
+  --ps-drawing-filter: invert(1) sepia(0.25) hue-rotate(15deg) contrast(1.2);
+}
+
+[data-theme="neon_lime"] {
+  --ps-bg: #080A06;
+  --ps-surface: #0D1109;
+  --ps-card: #11160D;
+  --ps-card-deep: #050704;
+  --ps-header: rgba(8, 10, 6, 0.97);
+  --ps-border: rgba(204, 255, 0, 0.24);
+  --ps-border-strong: rgba(204, 255, 0, 0.5);
+  --ps-text: #F7FEE7;
+  --ps-muted: #BEF264;
+  --ps-accent: #CCFF00;
+  --ps-accent-2: #D9FF33;
+  --ps-accent-soft: rgba(204, 255, 0, 0.16);
+  --ps-accent-text: #090D04;
+  --ps-amber: #FACC15;
+  --ps-emerald: #CCFF00;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Orbitron", "Chakra Petch", sans-serif;
+  --ps-font-mono: "Orbitron", "Share Tech Mono", monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="neon_red"] {
+  --ps-bg: #0B0607;
+  --ps-surface: #11090B;
+  --ps-card: #160C0E;
+  --ps-card-deep: #070304;
+  --ps-header: rgba(11, 6, 7, 0.97);
+  --ps-border: rgba(255, 23, 68, 0.26);
+  --ps-border-strong: rgba(255, 23, 68, 0.54);
+  --ps-text: #FFF1F2;
+  --ps-muted: #FDA4AF;
+  --ps-accent: #FF1744;
+  --ps-accent-2: #FF4569;
+  --ps-accent-soft: rgba(255, 23, 68, 0.18);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #FB923C;
+  --ps-emerald: #10B981;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Orbitron", "Chakra Petch", sans-serif;
+  --ps-font-mono: "Orbitron", "Share Tech Mono", monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="old_vdo"] {
+  --ps-bg: #0B0D0B;
+  --ps-surface: #0F120F;
+  --ps-card: #131713;
+  --ps-card-deep: #070907;
+  --ps-header: rgba(11, 13, 11, 0.98);
+  --ps-border: rgba(56, 229, 125, 0.24);
+  --ps-border-strong: rgba(56, 229, 125, 0.48);
+  --ps-text: #ECFDF5;
+  --ps-muted: #86EFAC;
+  --ps-accent: #38E57D;
+  --ps-accent-2: #6EE7B7;
+  --ps-accent-soft: rgba(56, 229, 125, 0.16);
+  --ps-accent-text: #04130A;
+  --ps-amber: #FBBF24;
+  --ps-emerald: #38E57D;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Chakra Petch", "Barlow Condensed", sans-serif;
+  --ps-font-mono: "Share Tech Mono", "JetBrains Mono", monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.2);
+}
+
+[data-theme="old_terratrip"] {
+  --ps-bg: #161310;
+  --ps-surface: #1B1713;
+  --ps-card: #211C17;
+  --ps-card-deep: #100D0A;
+  --ps-header: rgba(22, 19, 16, 0.98);
+  --ps-border: rgba(255, 106, 0, 0.28);
+  --ps-border-strong: rgba(255, 106, 0, 0.56);
+  --ps-text: #FFF7ED;
+  --ps-muted: #FDBA74;
+  --ps-accent: #FF6A00;
+  --ps-accent-2: #FF8C33;
+  --ps-accent-soft: rgba(255, 106, 0, 0.18);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #FF6A00;
+  --ps-emerald: #4ADE80;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Chakra Petch", "Barlow Condensed", sans-serif;
+  --ps-font-mono: "Share Tech Mono", "JetBrains Mono", monospace;
+  --ps-drawing-filter: invert(0.95) sepia(0.25) contrast(1.15);
+}
+
+[data-theme="futuristic_hud"] {
+  --ps-bg: #050B14;
+  --ps-surface: #08111D;
+  --ps-card: #0B1626;
+  --ps-card-deep: #03070D;
+  --ps-header: rgba(5, 11, 20, 0.97);
+  --ps-border: rgba(56, 189, 248, 0.26);
+  --ps-border-strong: rgba(56, 189, 248, 0.52);
+  --ps-text: #F0F9FF;
+  --ps-muted: #7DD3FC;
+  --ps-accent: #38BDF8;
+  --ps-accent-2: #7DD3FC;
+  --ps-accent-soft: rgba(56, 189, 248, 0.18);
+  --ps-accent-text: #04121F;
+  --ps-amber: #FBBF24;
+  --ps-emerald: #22D3EE;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Orbitron", "Chakra Petch", sans-serif;
+  --ps-font-mono: "Orbitron", "Share Tech Mono", monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="cyber_plasma"] {
+  --ps-bg: #070510;
+  --ps-surface: #0C091A;
+  --ps-card: #120D24;
+  --ps-card-deep: #04030A;
+  --ps-header: rgba(7, 5, 16, 0.97);
+  --ps-border: rgba(232, 121, 249, 0.26);
+  --ps-border-strong: rgba(232, 121, 249, 0.54);
+  --ps-text: #FAF5FF;
+  --ps-muted: #F0ABFC;
+  --ps-accent: #E879F9;
+  --ps-accent-2: #F0ABFC;
+  --ps-accent-soft: rgba(232, 121, 249, 0.18);
+  --ps-accent-text: #16041C;
+  --ps-amber: #38BDF8;
+  --ps-emerald: #34D399;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Orbitron", "Chakra Petch", sans-serif;
+  --ps-font-mono: "Orbitron", "Share Tech Mono", monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
 @layer base {
   html,
   body {
@@ -241,7 +417,9 @@
   }
 }
 
-.tabular-nums {
+.tabular-nums,
+.font-mono,
+.font-display {
   font-variant-numeric: tabular-nums;
 }
 

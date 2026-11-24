@@ -39,16 +39,16 @@ import {
 import { FuelTechAnalysisPanel } from './FuelTechAnalysisPanel';
 import { SatcronLivePanel } from './SatcronLivePanel';
 import { SurveyCockpit } from './SurveyCockpit';
-import {
-  VelocityCockpitLayoutEditor,
-  VelocityCockpitLayoutModal,
-} from './VelocityCockpitLayoutEditor';
+import { LayoutMiniSchematic } from './VelocityCockpitLayoutEditor';
 import { VelocityLivePresetScreen } from './VelocityLiveLayouts';
 import { VelocityMapboxView } from './VelocityMapboxView';
 import { VideoHudOverlayPanel } from './VideoHudOverlayPanel';
 import { openProUpgradeModal, useAuthSession } from '../utils/authSubscription';
 import { useNavSettings } from '../utils/navSettings';
-import { useVelocityCockpitLayout } from '../utils/velocityCockpitLayout';
+import {
+  VELOCITY_COCKPIT_READY_PRESETS,
+  useVelocityCockpitLayout,
+} from '../utils/velocityCockpitLayout';
 import {
   autoStartGoProRecording,
   autoStopGoProRecording,
@@ -377,7 +377,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
   const goproFleet = useGoProFleet();
   const cockpitLayout = useVelocityCockpitLayout();
-  const [showLayoutModal, setShowLayoutModal] = useState(false);
+  const activeReadyLayoutId =
+    cockpitLayout.config.layoutId === 'custom' ? 'classic' : cockpitLayout.config.layoutId;
+  const [showGpsSettingsModal, setShowGpsSettingsModal] = useState(false);
   const [goproDrawerOpen, setGoproDrawerOpen] = useState(false);
   const [editingGoProId, setEditingGoProId] = useState<string | null>(null);
   const [editingGoProName, setEditingGoProName] = useState('');
@@ -2466,8 +2468,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         </div>
       </div>
 
-      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-        <div>
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 transition-colors hover:border-[var(--ps-border-strong)]">
+        <div className="min-w-0">
           <p className="text-xs font-bold text-[var(--ps-text)]">Detecção Automática de Pista (GPS)</p>
           <p className="text-[11px] text-[var(--ps-muted)]">
             Reconhece pistas salvas num raio de{' '}
@@ -2477,49 +2479,147 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             da Largada.
           </p>
         </div>
-        <input
-          type="checkbox"
-          checked={velPrefs.autoDetectTrack}
-          onChange={(e) =>
-            setVelPrefs((p) => ({ ...p, autoDetectTrack: e.target.checked }))
-          }
-          className="h-5 w-5 accent-[var(--ps-accent)]"
-        />
+        <span className="relative inline-flex shrink-0 items-center">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-checked={velPrefs.autoDetectTrack}
+            checked={velPrefs.autoDetectTrack}
+            onChange={(e) =>
+              setVelPrefs((p) => ({ ...p, autoDetectTrack: e.target.checked }))
+            }
+            className="peer sr-only"
+          />
+          <span
+            aria-hidden="true"
+            className={`flex h-6 w-11 items-center rounded-full border p-[2px] transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ps-accent)] ${
+              velPrefs.autoDetectTrack
+                ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)]'
+                : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]'
+            }`}
+          >
+            <span
+              className={`h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                velPrefs.autoDetectTrack ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </span>
+        </span>
       </label>
 
-      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-        <div>
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 transition-colors hover:border-[var(--ps-border-strong)]">
+        <div className="min-w-0">
           <p className="text-xs font-bold text-[var(--ps-text)]">Auto-Snap Dinâmico (HDOP)</p>
           <p className="text-[11px] text-[var(--ps-muted)]">
             Expande o portal proporcionalmente à precisão horizontal do GPS.
           </p>
         </div>
-        <input
-          type="checkbox"
-          checked={velPrefs.autoSnapHdop}
-          onChange={(e) =>
-            setVelPrefs((p) => ({ ...p, autoSnapHdop: e.target.checked }))
-          }
-          className="h-5 w-5 accent-[var(--ps-accent)]"
-        />
+        <span className="relative inline-flex shrink-0 items-center">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-checked={velPrefs.autoSnapHdop}
+            checked={velPrefs.autoSnapHdop}
+            onChange={(e) =>
+              setVelPrefs((p) => ({ ...p, autoSnapHdop: e.target.checked }))
+            }
+            className="peer sr-only"
+          />
+          <span
+            aria-hidden="true"
+            className={`flex h-6 w-11 items-center rounded-full border p-[2px] transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ps-accent)] ${
+              velPrefs.autoSnapHdop
+                ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)]'
+                : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]'
+            }`}
+          >
+            <span
+              className={`h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                velPrefs.autoSnapHdop ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </span>
+        </span>
       </label>
 
-      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-        <div>
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 transition-colors hover:border-[var(--ps-border-strong)]">
+        <div className="min-w-0">
           <p className="text-xs font-bold text-[var(--ps-text)]">Acelerômetro &amp; Força G (IMU)</p>
           <p className="text-[11px] text-[var(--ps-muted)]">
             Combina sensores internos com variação cinemática de velocidade.
           </p>
         </div>
-        <input
-          type="checkbox"
-          checked={velPrefs.useDeviceImu}
-          onChange={(e) =>
-            setVelPrefs((p) => ({ ...p, useDeviceImu: e.target.checked }))
-          }
-          className="h-5 w-5 accent-[var(--ps-accent)]"
-        />
+        <span className="relative inline-flex shrink-0 items-center">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-checked={velPrefs.useDeviceImu}
+            checked={velPrefs.useDeviceImu}
+            onChange={(e) =>
+              setVelPrefs((p) => ({ ...p, useDeviceImu: e.target.checked }))
+            }
+            className="peer sr-only"
+          />
+          <span
+            aria-hidden="true"
+            className={`flex h-6 w-11 items-center rounded-full border p-[2px] transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ps-accent)] ${
+              velPrefs.useDeviceImu
+                ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)]'
+                : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]'
+            }`}
+          >
+            <span
+              className={`h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                velPrefs.useDeviceImu ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </span>
+        </span>
       </label>
+    </div>
+  );
+
+  const readyLayoutPickerBlock = (
+    <div className="grid grid-cols-2 gap-2.5">
+      {VELOCITY_COCKPIT_READY_PRESETS.map((item) => {
+        const selected = activeReadyLayoutId === item.id;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => cockpitLayout.setLayoutId(item.id)}
+            aria-pressed={selected}
+            className={`group flex flex-col justify-between gap-2 rounded-xl border p-2.5 text-left transition-all ${
+              selected
+                ? 'border-[var(--ps-accent)] bg-[var(--ps-card)] ring-1 ring-[var(--ps-accent)]/50 shadow-md'
+                : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <LayoutMiniSchematic id={item.id} accent={item.accentColor} />
+              <span
+                className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                  selected
+                    ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)] text-white'
+                    : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-transparent'
+                }`}
+              >
+                <Check className="h-3 w-3" strokeWidth={3} />
+              </span>
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1 font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                <span className={selected ? 'text-[var(--ps-accent)]' : ''}>{item.code}</span>
+                <span>·</span>
+                <span className="truncate">{item.tag}</span>
+              </div>
+              <p className="mt-0.5 truncate font-['Barlow_Condensed'] text-sm font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                {item.shortName}
+              </p>
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 
@@ -3126,9 +3226,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
         return (
           <VelocityLivePresetScreen
-            layoutId={cockpitLayout.config.layoutId}
-            menuPosition={cockpitLayout.config.menuPosition}
-            customWidgets={cockpitLayout.config.customWidgets}
+            layoutId={activeReadyLayoutId}
+            menuPosition="bottom"
+            customWidgets={[]}
             activeTrackId={activeTrack?.id || 'live_free'}
             activeTrackName={activeStageBannerName}
             hasTraps={Boolean(activeTrack && activeTrack.traps.length > 0)}
@@ -3168,7 +3268,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             wakeLockActive={wakeLockActive}
             goproBarNode={renderGoProBar(true)}
             onBack={handleBackAction}
-            onOpenConfigModal={() => setShowLayoutModal(true)}
+            onOpenConfigModal={() => setShowGpsSettingsModal(true)}
             onOpenSatcron={handleOpenLiveSatcron}
             onOpenAnalysis={handleOpenLiveAnalysis}
             onSelectTimerTab={() => {
@@ -4468,25 +4568,25 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-3">
             <div>
               <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                Seção 1 — Layout do Cockpit Ao Vivo (11 Modelos)
-              </h3>
-              <p className="text-xs text-[var(--ps-muted)]">
-                Todos os 11 layouts compartilham o mesmo cabeçalho limpo e rodapé unificado.
-              </p>
-            </div>
-            <VelocityCockpitLayoutEditor />
-          </div>
-
-          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-3">
-            <div>
-              <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                Seção 2 — Receptor GPS &amp; Motor de Cronometragem
+                Receptor GPS &amp; Motor de Cronometragem
               </h3>
               <p className="text-xs text-[var(--ps-muted)]">
                 Configure fonte GPS, detecção automática, tolerância HDOP e acelerômetro IMU.
               </p>
             </div>
             {gpsEngineSettingsBlock}
+          </div>
+
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-3">
+            <div>
+              <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
+                Layout do Cockpit Ao Vivo
+              </h3>
+              <p className="text-xs text-[var(--ps-muted)]">
+                Selecione com 1 toque o modelo estrutural do painel ao vivo (13 modelos prontos).
+              </p>
+            </div>
+            {readyLayoutPickerBlock}
           </div>
         </section>
       )}
@@ -4556,11 +4656,52 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </div>
         </div>
       )}
-      <VelocityCockpitLayoutModal
-        open={showLayoutModal}
-        onClose={() => setShowLayoutModal(false)}
-        gpsSettingsSection={gpsEngineSettingsBlock}
-      />
+      {showGpsSettingsModal && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-black/80 p-2 backdrop-blur-sm sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Configurações GPS"
+        >
+          <div className="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--ps-border)] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Settings className="h-5 w-5 shrink-0 text-[var(--ps-accent)]" />
+                <div className="min-w-0">
+                  <h3 className="font-['Barlow_Condensed'] text-lg font-black tracking-wide uppercase sm:text-xl">
+                    Receptor GPS &amp; Motor de Cronometragem
+                  </h3>
+                  <p className="truncate text-[11px] text-[var(--ps-muted)]">
+                    Fonte de telemetria, detecção automática, HDOP e acelerômetro IMU
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGpsSettingsModal(false)}
+                aria-label="Fechar configurações GPS"
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex-1 space-y-4 overflow-y-auto p-3 sm:p-4">
+              {gpsEngineSettingsBlock}
+              <div className="space-y-2.5 border-t border-[var(--ps-border)] pt-3">
+                <div>
+                  <h4 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase">
+                    Layout do Cockpit Ao Vivo
+                  </h4>
+                  <p className="text-[11px] text-[var(--ps-muted)]">
+                    Toque para aplicar imediatamente na tela ao vivo.
+                  </p>
+                </div>
+                {readyLayoutPickerBlock}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
