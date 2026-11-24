@@ -1,5 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Download, Film, Loader2, Square, Upload, Video } from 'lucide-react';
+import {
+  AlertCircle,
+  Camera,
+  CheckCircle2,
+  Download,
+  Film,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  Square,
+  Upload,
+  Video,
+  Wifi,
+  X,
+} from 'lucide-react';
+import {
+  downloadGoProMediaVideoUrl,
+  enableGoProWifiAP,
+  fetchGoProMediaList,
+  fetchGoProMediaThumbnail,
+  getGoProDisplayName,
+  useGoProFleet,
+  type GoProMediaItem,
+} from '../utils/goproBle';
 import {
   formatStageDuration,
   interpolateSampleAtElapsedMs,
@@ -10,9 +34,102 @@ import {
 
 interface VideoHudOverlayPanelProps {
   lap1: VelocityRun | null;
+  lap2?: VelocityRun | null;
+  lap3?: VelocityRun | null;
   lap1Samples: VelocitySample[];
+  lap2Samples?: VelocitySample[];
+  lap3Samples?: VelocitySample[];
   sessionRuns: VelocityRun[];
   sessionOptimal: OptimalStageSummary;
+}
+
+interface LoadedVideoMeta {
+  source: 'gopro' | 'gallery';
+  filename: string;
+  /** Exact epoch ms when recording started (from `cre` on GoPro or `lastModified - duration` on gallery). */
+  videoStartMs: number | null;
+  /** File lastModified ms (used once HTMLVideoElement metadata provides duration). */
+  fileLastModifiedMs?: number;
+}
+
+interface AutoSyncState {
+  active: boolean;
+  /** Seconds into the video where Start (L) occurs (positive = Start happens X seconds after video start). */
+  startSeekSec: number;
+  baseOffsetMs: number;
+  sourceLabel: string;
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  return `${mb.toFixed(0)} MB`;
+}
+
+function formatMediaDate(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return 'Data desconhecida';
+  return new Date(ms).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function formatSignedSeconds(sec: number, decimals = 1): string {
+  const safe = Math.abs(sec) < 0.05 ? 0 : sec;
+  const sign = safe >= 0 ? '+' : '-';
+  return `${sign}${Math.abs(safe).toFixed(decimals)}s`;
+}
+
+/**
+ * Resolve o melhor timestamp de início de gravação comparando o horário de criação do vídeo
+ * com a largada da volta (compensando eventual fuso local gravado pela GoPro no campo `cre`).
+ */
+function resolveAutoSyncOffset(
+  videoStartMs: number,
+  lap: VelocityRun,
+  source: 'gopro' | 'gallery',
+  videoDurationSec?: number
+): AutoSyncState {
+  const lapStartMs = lap.startedAtMs;
+  const lapDurationSec = Math.max(10, lap.totalMs / 1000);
+  const maxSeekWindow = Number.isFinite(videoDurationSec) && (videoDurationSec ?? 0) > 1
+    ? (videoDurationSec as number) + 120
+    : 7200;
+
+  let chosenVideoStartMs = videoStartMs;
+  let startSeekSec = (lapStartMs - chosenVideoStartMs) / 1000;
+
+  // GoPro firmware frequentemente grava `cre` como relógio local codificado em epoch UTC
+  if (source === 'gopro' && Math.abs(startSeekSec) > 1800) {
+    const tzShiftMs = new Date().getTimezoneOffset() * 60000;
+    const altCandidates = [videoStartMs + tzShiftMs, videoStartMs - tzShiftMs];
+    for (const candidateMs of altCandidates) {
+      const candidateSeek = (lapStartMs - candidateMs) / 1000;
+      if (
+        Math.abs(candidateSeek) < Math.abs(startSeekSec) &&
+        candidateSeek >= -lapDurationSec - 60 &&
+        candidateSeek <= maxSeekWindow
+      ) {
+        chosenVideoStartMs = candidateMs;
+        startSeekSec = candidateSeek;
+      }
+    }
+  }
+
+  const roundedSeekSec = Number(startSeekSec.toFixed(1));
+  // targetTelemetryMs = video.currentTime * 1000 + offsetMs => quando currentTime = startSeekSec, targetTelemetryMs = 0
+  const baseOffsetMs = -Math.round(roundedSeekSec * 1000);
+
+  return {
+    active: true,
+    startSeekSec: roundedSeekSec,
+    baseOffsetMs,
+    sourceLabel: source === 'gopro' ? 'GoPro Wi-Fi (cre)' : 'Galeria (lastModified)',
+  };
 }
 
 function getSpeedometerMax(samples: VelocitySample[]): number {
@@ -79,7 +196,7 @@ function drawHudOnCanvas(
   }
 ) {
   const { sample, miniMapPts, sampleIndex, bestMs, prevMs, maxGaugeSpeed } = params;
-  const s = w / 1280; // scale factor relative to 1280x720
+  const s = w / 1280;
 
   ctx.save();
 
@@ -98,11 +215,9 @@ function drawHudOnCanvas(
     ctx.fill();
     ctx.stroke();
 
-    // Scale normalized points (from 120x92 space) into map box
     const sx = mapW / 120;
     const sy = mapH / 92;
 
-    // Dark shadow outline under track
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
     ctx.lineWidth = 5 * s;
     ctx.lineCap = 'round';
@@ -116,7 +231,6 @@ function drawHudOnCanvas(
     });
     ctx.stroke();
 
-    // Crisp white track line
     ctx.strokeStyle = '#FFFFFF';
     ctx.lineWidth = 2.6 * s;
     ctx.beginPath();
@@ -128,7 +242,6 @@ function drawHudOnCanvas(
     });
     ctx.stroke();
 
-    // Current car dot
     const pt = miniMapPts[Math.min(miniMapPts.length - 1, Math.max(0, sampleIndex))];
     if (pt) {
       const cx = mapX + pt.x * sx;
@@ -179,12 +292,11 @@ function drawHudOnCanvas(
     ctx.fillText(col.value, cx, timerBoxY + 50 * s);
   });
 
-  // 3. BOTTOM-CENTER: Apenas 2 Instrumentos Principais (Alvo Força G + Velocímetro Analógico)
+  // 3. BOTTOM-CENTER: Alvo Força G + Velocímetro Analógico
   const baseCenterY = h - 104 * s;
   const gCenterX = w / 2 - 108 * s;
   const speedCenterX = w / 2 + 88 * s;
 
-  // Instrumento 1 (Esquerda): Alvo Circular de Força G
   const gR = 64 * s;
   ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
@@ -194,14 +306,12 @@ function drawHudOnCanvas(
   ctx.fill();
   ctx.stroke();
 
-  // Inner 0.5G ring
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
   ctx.lineWidth = 1 * s;
   ctx.beginPath();
   ctx.arc(gCenterX, baseCenterY, gR * 0.5, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Crosshair X/Y
   ctx.beginPath();
   ctx.moveTo(gCenterX - gR + 6 * s, baseCenterY);
   ctx.lineTo(gCenterX + gR - 6 * s, baseCenterY);
@@ -228,13 +338,11 @@ function drawHudOnCanvas(
   ctx.fill();
   ctx.stroke();
 
-  // Valor numérico em G abaixo
   ctx.textAlign = 'center';
   ctx.fillStyle = '#FFFFFF';
   ctx.font = `900 ${Math.round(14 * s)}px monospace`;
   ctx.fillText(`${totalG.toFixed(2)} G`, gCenterX, baseCenterY + gR + 18 * s);
 
-  // Instrumento 2 (Centro/Direita): Velocímetro Analógico Redondo
   const spdR = 82 * s;
   ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.32)';
@@ -249,7 +357,6 @@ function drawHudOnCanvas(
   const sweep = endAng - startAng;
   const gaugeCy = baseCenterY - 6 * s;
 
-  // Graduated tick marks
   const majorStep = maxGaugeSpeed >= 220 ? 40 : 20;
   const minorStep = majorStep / 2;
   for (let v = 0; v <= maxGaugeSpeed; v += minorStep) {
@@ -280,7 +387,6 @@ function drawHudOnCanvas(
   }
   ctx.textBaseline = 'alphabetic';
 
-  // Animated Red Needle
   const spdClamped = Math.max(0, Math.min(maxGaugeSpeed, sample.speedKmh || 0));
   const needleAng = startAng + (spdClamped / maxGaugeSpeed) * sweep;
   ctx.strokeStyle = '#FF2A2A';
@@ -294,7 +400,6 @@ function drawHudOnCanvas(
   );
   ctx.stroke();
 
-  // Digital speed center badge
   ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
   ctx.beginPath();
   ctx.arc(speedCenterX, gaugeCy + 16 * s, 28 * s, 0, Math.PI * 2);
@@ -313,25 +418,71 @@ function drawHudOnCanvas(
 
 export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
   lap1,
+  lap2 = null,
+  lap3 = null,
   lap1Samples,
+  lap2Samples = [],
+  lap3Samples = [],
   sessionRuns,
   sessionOptimal,
 }) => {
+  const goproFleet = useGoProFleet();
+  const hasPairedGoPro =
+    goproFleet.cameras.length > 0 || goproFleet.savedDevices.length > 0;
+  const connectedGoPro = goproFleet.cameras.find((c) => c.connected && !c.sleeping) ?? null;
+
+  const [selectedLapSlot, setSelectedLapSlot] = useState<'v1' | 'v2' | 'v3'>('v1');
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [videoOffsetMs, setVideoOffsetMs] = useState(0);
+  const [loadedVideoMeta, setLoadedVideoMeta] = useState<LoadedVideoMeta | null>(null);
+  const [autoSync, setAutoSync] = useState<AutoSyncState | null>(null);
+  const [fineOffsetMs, setFineOffsetMs] = useState(0);
   const [previewSampleIdx, setPreviewSampleIdx] = useState(0);
   const [activeElapsedMs, setActiveElapsedMs] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exportedBlobUrl, setExportedBlobUrl] = useState<string | null>(null);
 
+  // GoPro Wi-Fi Media Modal states
+  const [goproModalOpen, setGoproModalOpen] = useState(false);
+  const [goproApStatus, setGoproApStatus] = useState<string | null>(null);
+  const [goproApLoading, setGoproApLoading] = useState(false);
+  const [goproMediaLoading, setGoproMediaLoading] = useState(false);
+  const [goproMediaError, setGoproMediaError] = useState<string | null>(null);
+  const [goproMediaList, setGoproMediaList] = useState<GoProMediaItem[]>([]);
+  const [goproThumbs, setGoproThumbs] = useState<Record<string, string>>({});
+  const [downloadingMediaId, setDownloadingMediaId] = useState<string | null>(null);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const pendingSeekSecRef = useRef<number | null>(null);
   const exportAbortRef = useRef(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const goproThumbsRef = useRef<Record<string, string>>({});
+  goproThumbsRef.current = goproThumbs;
+
+  const activeLap = useMemo(() => {
+    if (selectedLapSlot === 'v2' && lap2) return lap2;
+    if (selectedLapSlot === 'v3' && lap3) return lap3;
+    return lap1;
+  }, [selectedLapSlot, lap1, lap2, lap3]);
+
+  const activeLapSamples = useMemo(() => {
+    if (selectedLapSlot === 'v2' && lap2 && lap2Samples.length > 0) return lap2Samples;
+    if (selectedLapSlot === 'v3' && lap3 && lap3Samples.length > 0) return lap3Samples;
+    return lap1Samples;
+  }, [selectedLapSlot, lap1Samples, lap2, lap2Samples, lap3, lap3Samples]);
+
+  // Reset slot to V1 if selected V2/V3 becomes unavailable
+  useEffect(() => {
+    if (selectedLapSlot === 'v2' && !lap2) setSelectedLapSlot('v1');
+    if (selectedLapSlot === 'v3' && !lap3) setSelectedLapSlot('v1');
+  }, [selectedLapSlot, lap2, lap3]);
+
+  const totalOffsetMs = (autoSync?.baseOffsetMs ?? 0) + fineOffsetMs;
+  const effectiveStartSeekSec = -(totalOffsetMs / 1000);
 
   useEffect(() => {
     return () => {
-      if (videoUrl) URL.revokeObjectURL(videoUrl);
+      if (videoUrl && videoUrl.startsWith('blob:')) URL.revokeObjectURL(videoUrl);
     };
   }, [videoUrl]);
 
@@ -341,21 +492,66 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
     };
   }, [exportedBlobUrl]);
 
-  // Previous lap time relative to lap1
-  const previousRun = useMemo(() => {
-    if (!lap1 || sessionRuns.length < 2) return null;
-    const ordered = [...sessionRuns].sort((a, b) => a.startedAtMs - b.startedAtMs);
-    const idx = ordered.findIndex((r) => r.id === lap1.id);
-    if (idx > 0) return ordered[idx - 1];
-    const fallback = ordered.find((r) => r.id !== lap1.id);
-    return fallback ?? null;
-  }, [lap1, sessionRuns]);
+  useEffect(() => {
+    return () => {
+      Object.values(goproThumbsRef.current).forEach((u) => {
+        if (u.startsWith('blob:')) URL.revokeObjectURL(u);
+      });
+    };
+  }, []);
 
-  const maxGaugeSpeed = useMemo(() => getSpeedometerMax(lap1Samples), [lap1Samples]);
+  const applyAutoSyncForVideo = useCallback(
+    (
+      videoStartMs: number,
+      lap: VelocityRun | null,
+      source: 'gopro' | 'gallery',
+      durationSec?: number
+    ) => {
+      if (!lap) return;
+      const computed = resolveAutoSyncOffset(videoStartMs, lap, source, durationSec);
+      setAutoSync(computed);
+      setFineOffsetMs(0);
+
+      const vid = videoRef.current;
+      const targetSeek = Math.max(0, computed.startSeekSec);
+      if (vid && Number.isFinite(vid.duration) && vid.duration > 0) {
+        const clampedSeek = Math.min(vid.duration, targetSeek);
+        vid.currentTime = clampedSeek;
+        setActiveElapsedMs(Math.max(0, clampedSeek * 1000 + computed.baseOffsetMs));
+        pendingSeekSecRef.current = null;
+      } else {
+        pendingSeekSecRef.current = targetSeek;
+      }
+    },
+    []
+  );
+
+  // Recalcula Auto-Sync automaticamente ao trocar de volta selecionada (V1 / V2 / V3)
+  useEffect(() => {
+    if (!loadedVideoMeta?.videoStartMs || !activeLap) return;
+    const vid = videoRef.current;
+    const dur = vid && Number.isFinite(vid.duration) ? vid.duration : undefined;
+    applyAutoSyncForVideo(loadedVideoMeta.videoStartMs, activeLap, loadedVideoMeta.source, dur);
+  }, [activeLap?.id, loadedVideoMeta?.videoStartMs, loadedVideoMeta?.source, applyAutoSyncForVideo, activeLap]);
+
+  // Previous lap time relative to activeLap
+  const previousRun = useMemo(() => {
+    if (!activeLap || sessionRuns.length < 2) return null;
+    const ordered = [...sessionRuns].sort((a, b) => a.startedAtMs - b.startedAtMs);
+    const idx = ordered.findIndex((r) => r.id === activeLap.id);
+    if (idx > 0) return ordered[idx - 1];
+    const fallback = ordered.find((r) => r.id !== activeLap.id);
+    return fallback ?? null;
+  }, [activeLap, sessionRuns]);
+
+  const maxGaugeSpeed = useMemo(
+    () => getSpeedometerMax(activeLapSamples),
+    [activeLapSamples]
+  );
 
   const miniMap = useMemo(
-    () => normalizeTrackPoints(lap1Samples, 120, 92, 10),
-    [lap1Samples]
+    () => normalizeTrackPoints(activeLapSamples, 120, 92, 10),
+    [activeLapSamples]
   );
 
   // Sync HUD smoothly at 30fps during video playback
@@ -364,7 +560,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
     if (!vid || !videoUrl) return;
     let rafId = 0;
     const tick = () => {
-      const targetMs = Math.max(0, vid.currentTime * 1000 + videoOffsetMs);
+      const targetMs = Math.max(0, vid.currentTime * 1000 + totalOffsetMs);
       setActiveElapsedMs(targetMs);
       if (!vid.paused && !vid.ended) {
         rafId = window.requestAnimationFrame(tick);
@@ -374,7 +570,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
       rafId = window.requestAnimationFrame(tick);
     };
     const onSeekOrUpdate = () => {
-      setActiveElapsedMs(Math.max(0, vid.currentTime * 1000 + videoOffsetMs));
+      setActiveElapsedMs(Math.max(0, vid.currentTime * 1000 + totalOffsetMs));
     };
     vid.addEventListener('play', onPlay);
     vid.addEventListener('timeupdate', onSeekOrUpdate);
@@ -386,29 +582,145 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
       vid.removeEventListener('timeupdate', onSeekOrUpdate);
       vid.removeEventListener('seeked', onSeekOrUpdate);
     };
-  }, [videoUrl, videoOffsetMs]);
+  }, [videoUrl, totalOffsetMs]);
 
   const activeSampleData = useMemo(() => {
-    if (lap1Samples.length === 0) return { sample: null, idx: 0 };
+    if (activeLapSamples.length === 0) return { sample: null, idx: 0 };
     if (!videoUrl) {
-      const idx = Math.max(0, Math.min(lap1Samples.length - 1, previewSampleIdx));
-      return { sample: lap1Samples[idx], idx };
+      const idx = Math.max(0, Math.min(activeLapSamples.length - 1, previewSampleIdx));
+      return { sample: activeLapSamples[idx], idx };
     }
-    const sample = interpolateSampleAtElapsedMs(lap1Samples, activeElapsedMs);
+    const sample = interpolateSampleAtElapsedMs(activeLapSamples, activeElapsedMs);
     let closestIdx = 0;
     let bestDiff = Infinity;
-    for (let i = 0; i < lap1Samples.length; i += 1) {
-      const d = Math.abs(lap1Samples[i].stageElapsedMs - activeElapsedMs);
+    for (let i = 0; i < activeLapSamples.length; i += 1) {
+      const d = Math.abs(activeLapSamples[i].stageElapsedMs - activeElapsedMs);
       if (d < bestDiff) {
         bestDiff = d;
         closestIdx = i;
       }
     }
-    return { sample: sample ?? lap1Samples[closestIdx], idx: closestIdx };
-  }, [lap1Samples, videoUrl, previewSampleIdx, activeElapsedMs]);
+    return { sample: sample ?? activeLapSamples[closestIdx], idx: closestIdx };
+  }, [activeLapSamples, videoUrl, previewSampleIdx, activeElapsedMs]);
 
   const activeSample = activeSampleData.sample;
   const activeMapPt = miniMap.pts[activeSampleData.idx] ?? miniMap.pts[0] ?? null;
+
+  const loadGoProListAndThumbs = useCallback(async () => {
+    setGoproMediaLoading(true);
+    setGoproMediaError(null);
+    try {
+      const items = await fetchGoProMediaList();
+      setGoproMediaList(items);
+      if (items.length === 0) {
+        setGoproMediaError('Nenhum vídeo MP4 encontrado no cartão SD da GoPro.');
+      } else {
+        // Carrega miniaturas em paralelo sem bloquear a exibição da lista
+        items.slice(0, 12).forEach((item) => {
+          void fetchGoProMediaThumbnail(item.thumbUrl).then((src) => {
+            if (!src) return;
+            setGoproThumbs((prev) => ({ ...prev, [item.id]: src }));
+          });
+        });
+      }
+    } catch (err) {
+      setGoproMediaError(
+        err instanceof Error
+          ? `Não foi possível acessar http://10.5.5.9:8080 (${err.message}). Conecte o celular no Wi-Fi da GoPro e tente novamente.`
+          : 'Conecte o celular à rede Wi-Fi da GoPro (10.5.5.9) e toque em Atualizar Lista.'
+      );
+    } finally {
+      setGoproMediaLoading(false);
+    }
+  }, []);
+
+  const handleOpenGoProMediaBrowser = async () => {
+    setGoproModalOpen(true);
+    setGoproMediaError(null);
+    setGoproApStatus(null);
+
+    if (hasPairedGoPro) {
+      setGoproApLoading(true);
+      const apRes = await enableGoProWifiAP();
+      setGoproApLoading(false);
+      if (apRes.ok) {
+        setGoproApStatus(
+          apRes.simulated
+            ? `Modo Simulador (${apRes.cameraName}): conecte na GoPro real via Wi-Fi para listar gravações.`
+            : `Wi-Fi AP ativado via BLE em "${apRes.cameraName}". Confirme a conexão do celular no Wi-Fi da GoPro.`
+        );
+      } else if (apRes.error) {
+        setGoproApStatus(`Aviso BLE: ${apRes.error}`);
+      }
+    } else {
+      setGoproApStatus(
+        'Nenhuma GoPro pareada via BLE. Caso já esteja conectado no Wi-Fi da GoPro, a busca abaixo consultará 10.5.5.9:8080 diretamente.'
+      );
+    }
+
+    await loadGoProListAndThumbs();
+  };
+
+  const handleSelectGoProMediaItem = async (item: GoProMediaItem) => {
+    setDownloadingMediaId(item.id);
+    setGoproMediaError(null);
+    try {
+      const downloaded = await downloadGoProMediaVideoUrl(item);
+      if (videoUrl && videoUrl.startsWith('blob:')) URL.revokeObjectURL(videoUrl);
+      setExportedBlobUrl(null);
+      setExportStatus(null);
+      setVideoUrl(downloaded.url);
+      setLoadedVideoMeta({
+        source: 'gopro',
+        filename: item.filename,
+        videoStartMs: item.createdAtMs || null,
+      });
+      if (item.createdAtMs && activeLap) {
+        applyAutoSyncForVideo(item.createdAtMs, activeLap, 'gopro');
+      } else {
+        setAutoSync(null);
+        setFineOffsetMs(0);
+      }
+      setGoproModalOpen(false);
+    } catch (err) {
+      setGoproMediaError(
+        err instanceof Error
+          ? err.message
+          : 'Falha ao importar o vídeo da GoPro via Wi-Fi.'
+      );
+    } finally {
+      setDownloadingMediaId(null);
+    }
+  };
+
+  const handleVideoLoadedMetadata = () => {
+    const vid = videoRef.current;
+    if (!vid) return;
+
+    if (
+      loadedVideoMeta?.source === 'gallery' &&
+      loadedVideoMeta.fileLastModifiedMs &&
+      Number.isFinite(vid.duration) &&
+      vid.duration > 0
+    ) {
+      const computedStartMs =
+        loadedVideoMeta.fileLastModifiedMs - Math.round(vid.duration * 1000);
+      setLoadedVideoMeta((prev) =>
+        prev ? { ...prev, videoStartMs: computedStartMs } : prev
+      );
+      if (activeLap) {
+        applyAutoSyncForVideo(computedStartMs, activeLap, 'gallery', vid.duration);
+        return;
+      }
+    }
+
+    if (pendingSeekSecRef.current !== null && Number.isFinite(vid.duration) && vid.duration > 0) {
+      const clamped = Math.max(0, Math.min(vid.duration, pendingSeekSecRef.current));
+      vid.currentTime = clamped;
+      setActiveElapsedMs(Math.max(0, clamped * 1000 + totalOffsetMs));
+      pendingSeekSecRef.current = null;
+    }
+  };
 
   const stopExportEarly = useCallback(() => {
     exportAbortRef.current = true;
@@ -421,7 +733,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
   }, []);
 
   const handleExportHudVideo = async () => {
-    if (lap1Samples.length < 2) {
+    if (activeLapSamples.length < 2) {
       setExportStatus('Sem amostras GPS suficientes para exportar.');
       return;
     }
@@ -453,7 +765,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
 
     const stream = canvas.captureStream(30);
 
-    // Attach video audio track if browser supports captureStream on HTMLMediaElement
     if (vid && videoUrl) {
       try {
         const vidWithStream = vid as HTMLVideoElement & {
@@ -492,7 +803,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
         setExportStatus('Vídeo com HUD pronto! Baixando arquivo...');
         const a = document.createElement('a');
         a.href = url;
-        a.download = `pitstop-hud-volta-${lap1?.runNumber ?? 1}.webm`;
+        a.download = `pitstop-hud-volta-${activeLap?.runNumber ?? 1}.webm`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -503,7 +814,8 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
     recorder.start(250);
 
     if (vid && videoUrl) {
-      vid.currentTime = 0;
+      const startAt = autoSync ? Math.max(0, effectiveStartSeekSec) : 0;
+      vid.currentTime = Number.isFinite(vid.duration) ? Math.min(vid.duration, startAt) : 0;
       await vid.play().catch(() => {});
 
       const drawLoop = () => {
@@ -515,13 +827,13 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
 
-        const elapsedMs = Math.max(0, vid.currentTime * 1000 + videoOffsetMs);
+        const elapsedMs = Math.max(0, vid.currentTime * 1000 + totalOffsetMs);
         const s =
-          interpolateSampleAtElapsedMs(lap1Samples, elapsedMs) ?? lap1Samples[0];
+          interpolateSampleAtElapsedMs(activeLapSamples, elapsedMs) ?? activeLapSamples[0];
         let cIdx = 0;
         let bDiff = Infinity;
-        for (let i = 0; i < lap1Samples.length; i += 1) {
-          const d = Math.abs(lap1Samples[i].stageElapsedMs - elapsedMs);
+        for (let i = 0; i < activeLapSamples.length; i += 1) {
+          const d = Math.abs(activeLapSamples[i].stageElapsedMs - elapsedMs);
           if (d < bDiff) {
             bDiff = d;
             cIdx = i;
@@ -539,8 +851,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
       };
       window.requestAnimationFrame(drawLoop);
     } else {
-      // Telemetry-only preview export (15 seconds compressed pass or full lap up to 20s)
-      const lapTotalMs = lap1Samples[lap1Samples.length - 1].stageElapsedMs || 10000;
+      const lapTotalMs = activeLapSamples[activeLapSamples.length - 1].stageElapsedMs || 10000;
       const exportDurMs = Math.min(18000, Math.max(4000, lapTotalMs));
       const startWall = performance.now();
 
@@ -552,11 +863,11 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
         }
         const simElapsed = (wallElapsed / exportDurMs) * lapTotalMs;
         const s =
-          interpolateSampleAtElapsedMs(lap1Samples, simElapsed) ?? lap1Samples[0];
+          interpolateSampleAtElapsedMs(activeLapSamples, simElapsed) ?? activeLapSamples[0];
         let cIdx = 0;
         let bDiff = Infinity;
-        for (let i = 0; i < lap1Samples.length; i += 1) {
-          const d = Math.abs(lap1Samples[i].stageElapsedMs - simElapsed);
+        for (let i = 0; i < activeLapSamples.length; i += 1) {
+          const d = Math.abs(activeLapSamples[i].stageElapsedMs - simElapsed);
           if (d < bDiff) {
             bDiff = d;
             cIdx = i;
@@ -583,7 +894,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
   // Analog Speedometer geometry in SVG (viewBox 0 0 140 140)
   const spdVal = activeSample ? Math.round(activeSample.speedKmh || 0) : 0;
   const spdFrac = Math.max(0, Math.min(1, spdVal / maxGaugeSpeed));
-  const needleAngleDeg = 135 + spdFrac * 270; // 135° (bottom-left) to 405° (bottom-right)
+  const needleAngleDeg = 135 + spdFrac * 270;
   const majorStep = maxGaugeSpeed >= 220 ? 40 : 20;
   const gaugeTicks = useMemo(() => {
     const arr: Array<{ v: number; angRad: number; isMajor: boolean }> = [];
@@ -603,60 +914,152 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
 
   return (
     <div className="space-y-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)]">
-      {/* Header + Actions */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="font-['Barlow_Condensed'] text-lg font-bold uppercase">
-            Vídeo &amp; Overlay HUD
-          </h3>
-          <p className="text-[11px] text-[var(--ps-muted)]">
-            Telemetria RaceChrono Pro sincronizada com a Volta 1 #{lap1?.runNumber ?? '-'}.
+      {/* Header + Import & Export Actions */}
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-['Barlow_Condensed'] text-lg font-bold uppercase">
+              Vídeo &amp; Overlay HUD
+            </h3>
+            {autoSync?.active && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-mono text-[10px] font-extrabold text-[var(--ps-emerald)] tabular-nums">
+                <Sparkles className="h-3 w-3 shrink-0" />
+                <span>
+                  AUTO-SYNC ATIVO ({formatSignedSeconds(effectiveStartSeekSec)})
+                </span>
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-[var(--ps-muted)] tabular-nums">
+            Sincronizado com{' '}
+            <strong className="text-[var(--ps-text)]">
+              {selectedLapSlot.toUpperCase()} #{activeLap?.runNumber ?? '-'}
+            </strong>{' '}
+            ({formatStageDuration(activeLap?.totalMs)})
+            {loadedVideoMeta ? ` · ${loadedVideoMeta.filename}` : ''}.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="inline-flex min-h-[38px] cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-xs font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)]">
-            <Upload className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-            <span>{videoUrl ? 'Trocar Vídeo' : 'Abrir Vídeo MP4/MOV'}</span>
-            <input
-              type="file"
-              accept="video/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                if (videoUrl) URL.revokeObjectURL(videoUrl);
-                setVideoUrl(URL.createObjectURL(file));
-                setExportedBlobUrl(null);
-                setExportStatus(null);
-              }}
-            />
-          </label>
+        {/* V1 / V2 / V3 quick switcher when comparison laps are active */}
+        {(lap2 || lap3) && (
+          <div className="inline-flex self-start rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5 font-mono text-[11px] tabular-nums">
+            <button
+              type="button"
+              onClick={() => setSelectedLapSlot('v1')}
+              className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
+                selectedLapSlot === 'v1'
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-[var(--ps-emerald)] hover:bg-[var(--ps-card)]'
+              }`}
+            >
+              V1 #{lap1?.runNumber ?? '-'}
+            </button>
+            {lap2 && (
+              <button
+                type="button"
+                onClick={() => setSelectedLapSlot('v2')}
+                className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
+                  selectedLapSlot === 'v2'
+                    ? 'bg-red-600 text-white'
+                    : 'text-[var(--ps-danger)] hover:bg-[var(--ps-card)]'
+                }`}
+              >
+                V2 #{lap2.runNumber}
+              </button>
+            )}
+            {lap3 && (
+              <button
+                type="button"
+                onClick={() => setSelectedLapSlot('v3')}
+                className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
+                  selectedLapSlot === 'v3'
+                    ? 'bg-sky-600 text-white'
+                    : 'text-sky-500 hover:bg-[var(--ps-card)]'
+                }`}
+              >
+                V3 #{lap3.runNumber}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
-          {isExporting ? (
-            <button
-              type="button"
-              onClick={stopExportEarly}
-              className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold"
-            >
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <Square className="h-3 w-3 fill-current" />
-              <span>Parar e Salvar</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                void handleExportHudVideo();
-              }}
-              disabled={lap1Samples.length < 2}
-              className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold disabled:opacity-40"
-            >
-              <Video className="h-3.5 w-3.5" />
-              <span>Exportar Vídeo com HUD</span>
-            </button>
-          )}
-        </div>
+      {/* Action Buttons Row: Gallery + Buscar Vídeo da GoPro + Export */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <label className="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-xs font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)]">
+          <Upload className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
+          <span className="truncate">
+            {videoUrl ? 'Trocar Vídeo da Galeria' : 'Selecionar Vídeo da Galeria'}
+          </span>
+          <input
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              if (videoUrl && videoUrl.startsWith('blob:')) URL.revokeObjectURL(videoUrl);
+              setVideoUrl(URL.createObjectURL(file));
+              setExportedBlobUrl(null);
+              setExportStatus(null);
+              setAutoSync(null);
+              setFineOffsetMs(0);
+              pendingSeekSecRef.current = null;
+              setLoadedVideoMeta({
+                source: 'gallery',
+                filename: file.name,
+                videoStartMs: null,
+                fileLastModifiedMs: file.lastModified,
+              });
+            }}
+          />
+        </label>
+
+        <button
+          type="button"
+          onClick={() => {
+            void handleOpenGoProMediaBrowser();
+          }}
+          className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-sky-500/50 bg-sky-500/10 px-3 text-xs font-extrabold text-[var(--ps-text)] hover:border-sky-400 hover:bg-sky-500/20"
+        >
+          <Camera className="h-3.5 w-3.5 shrink-0 text-sky-400" />
+          <span className="truncate">BUSCAR VÍDEO DA GOPRO</span>
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-black uppercase ${
+              connectedGoPro
+                ? 'bg-emerald-500/20 text-[var(--ps-emerald)]'
+                : hasPairedGoPro
+                ? 'bg-amber-500/20 text-[var(--ps-amber)]'
+                : 'bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
+            }`}
+          >
+            {connectedGoPro ? 'Pareada' : hasPairedGoPro ? 'Salva' : 'Wi-Fi'}
+          </span>
+        </button>
+
+        {isExporting ? (
+          <button
+            type="button"
+            onClick={stopExportEarly}
+            className="pitstop-btn-red inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-extrabold"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Square className="h-3 w-3 fill-current" />
+            <span>Parar e Salvar</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              void handleExportHudVideo();
+            }}
+            disabled={activeLapSamples.length < 2}
+            className="pitstop-btn-red inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-extrabold disabled:opacity-40"
+          >
+            <Video className="h-3.5 w-3.5 shrink-0" />
+            <span>Exportar Vídeo com HUD</span>
+          </button>
+        )}
       </div>
 
       {/* 16:9 Responsive Video + RaceChrono Pro HUD */}
@@ -667,13 +1070,14 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
             src={videoUrl}
             controls
             playsInline
+            onLoadedMetadata={handleVideoLoadedMetadata}
             className="h-full w-full object-contain"
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center p-4 text-center">
             <Film className="h-8 w-8 text-zinc-600" />
             <p className="mt-2 max-w-sm text-xs text-zinc-400">
-              Abra um vídeo da GoPro ou arraste o controle abaixo para pré-visualizar o Overlay HUD.
+              Selecione um vídeo da galeria ou busque direto da GoPro para sincronizar o Overlay HUD.
             </p>
           </div>
         )}
@@ -682,7 +1086,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
           <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-2 sm:p-3">
             {/* TOP ROW: Left Mini-Map + Center 3-Column Timers */}
             <div className="flex items-start justify-between gap-2">
-              {/* Canto Superior Esquerdo — Mini-Mapa do Traçado */}
               <div className="rounded-lg border border-white/20 bg-black/50 p-1 backdrop-blur-xs shadow-lg">
                 <svg
                   viewBox="0 0 120 92"
@@ -731,7 +1134,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                 </svg>
               </div>
 
-              {/* Topo Centro — 3 Colunas Limpas (MELHOR | ANTERIOR | ATUAL) */}
               <div className="grid grid-cols-3 gap-2 sm:gap-5 rounded-lg border border-white/20 bg-black/55 px-2.5 py-1 sm:px-4 sm:py-1.5 backdrop-blur-xs shadow-lg font-mono tabular-nums text-center">
                 <div>
                   <p className="text-[8px] sm:text-[10px] font-bold tracking-wider text-zinc-300 uppercase">
@@ -759,13 +1161,11 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                 </div>
               </div>
 
-              {/* Spacer direita para manter painel de tempos centralizado */}
               <div className="hidden sm:block sm:w-28" aria-hidden="true" />
             </div>
 
-            {/* BOTTOM-CENTER: Apenas os 2 Instrumentos Principais (Alvo Força G + Velocímetro Analógico Redondo) */}
+            {/* BOTTOM-CENTER: Alvo Força G + Velocímetro Analógico Redondo */}
             <div className="mb-4 sm:mb-7 flex items-end justify-center gap-4 sm:gap-7">
-              {/* Esquerda: Alvo Circular de Força G */}
               <div className="flex flex-col items-center">
                 <div className="relative h-16 w-16 sm:h-24 sm:w-24 rounded-full border-2 border-white/30 bg-black/65 backdrop-blur-xs shadow-xl">
                   <div className="absolute inset-3 sm:inset-5 rounded-full border border-white/20" />
@@ -784,7 +1184,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                 </span>
               </div>
 
-              {/* Centro/Direita: Velocímetro Analógico Redondo (km/h) */}
               <div className="relative h-22 w-22 sm:h-32 sm:w-32 rounded-full border-2 border-white/30 bg-black/70 backdrop-blur-xs shadow-xl">
                 <svg viewBox="0 0 140 140" className="h-full w-full">
                   {gaugeTicks.map((t) => {
@@ -825,7 +1224,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                     );
                   })}
 
-                  {/* Ponteiro Dinâmico */}
                   <g transform={`rotate(${needleAngleDeg} 70 70)`}>
                     <line
                       x1="70"
@@ -839,7 +1237,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                   </g>
                   <circle cx="70" cy="70" r="5" fill="#FF2A2A" stroke="#FFFFFF" strokeWidth="1.5" />
 
-                  {/* Número Digital Grande no Centro */}
                   <circle cx="70" cy="96" r="22" fill="rgba(0,0,0,0.78)" />
                   <text
                     x="70"
@@ -870,30 +1267,59 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
         )}
       </div>
 
-      {/* Controles de Sincronia Vídeo vs GPS */}
-      <div className="space-y-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 font-mono text-xs">
+      {/* Controles de Sincronia Vídeo vs GPS + Ajuste Fino */}
+      <div className="space-y-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 font-mono text-xs tabular-nums">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-[var(--ps-muted)]">
-            Sincronia Vídeo vs GPS:{' '}
-            <strong className="text-[var(--ps-amber)]">
-              {videoOffsetMs >= 0 ? `+${videoOffsetMs}` : videoOffsetMs} ms
-            </strong>
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[var(--ps-muted)]">
+              Largada no Vídeo:{' '}
+              <strong className="text-[var(--ps-amber)]">
+                {formatSignedSeconds(effectiveStartSeekSec)}
+              </strong>
+            </span>
+            {autoSync?.active && (
+              <span className="text-[10px] text-[var(--ps-emerald)] font-bold">
+                [{autoSync.sourceLabel}]
+              </span>
+            )}
+          </div>
+
           <div className="flex flex-wrap items-center gap-1">
-            {[-2000, -500, 500, 2000].map((step) => (
+            {[-500, -100, 100, 500].map((step) => (
               <button
                 key={step}
                 type="button"
-                onClick={() => setVideoOffsetMs((v) => v + step)}
-                className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+                onClick={() => setFineOffsetMs((v) => v + step)}
+                className="min-h-[32px] rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
               >
-                {step > 0 ? `+${step / 1000}s` : `${step / 1000}s`}
+                {step > 0 ? `+${(step / 1000).toFixed(1)}s` : `${(step / 1000).toFixed(1)}s`}
               </button>
             ))}
+            {autoSync?.active && videoRef.current && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFineOffsetMs(0);
+                  const vid = videoRef.current;
+                  if (vid) {
+                    const seek = Math.max(0, Math.min(vid.duration || Infinity, autoSync.startSeekSec));
+                    vid.currentTime = seek;
+                  }
+                }}
+                className="inline-flex min-h-[32px] items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-[var(--ps-emerald)]"
+                title="Voltar para o frame exato calculado pelo Auto-Sync"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>Largada</span>
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setVideoOffsetMs(0)}
-              className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-bold text-[var(--ps-muted)]"
+              onClick={() => {
+                setAutoSync(null);
+                setFineOffsetMs(0);
+              }}
+              className="min-h-[32px] rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-bold text-[var(--ps-muted)]"
             >
               0
             </button>
@@ -902,8 +1328,10 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
 
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[10px] text-[var(--ps-muted)]">
-            <span>Ajuste fino de offset (-10s a +10s)</span>
-            <span>{(videoOffsetMs / 1000).toFixed(2)}s</span>
+            <span>
+              Ajuste fino manual (-10s a +10s{autoSync?.active ? ' sobre Auto-Sync' : ''})
+            </span>
+            <span>{formatSignedSeconds(fineOffsetMs / 1000, 2)}</span>
           </div>
           <input
             type="range"
@@ -911,13 +1339,13 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
             min={-10000}
             max={10000}
             step={50}
-            value={Math.max(-10000, Math.min(10000, videoOffsetMs))}
-            onChange={(e) => setVideoOffsetMs(Number(e.target.value))}
+            value={Math.max(-10000, Math.min(10000, fineOffsetMs))}
+            onChange={(e) => setFineOffsetMs(Number(e.target.value))}
             className="w-full accent-[var(--ps-accent)]"
           />
         </div>
 
-        {!videoUrl && lap1Samples.length > 1 && (
+        {!videoUrl && activeLapSamples.length > 1 && (
           <div className="space-y-1 border-t border-[var(--ps-border)] pt-2">
             <span className="text-[10px] text-[var(--ps-muted)]">
               Pré-visualização da volta no HUD
@@ -926,7 +1354,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
               type="range"
               aria-label="Linha do tempo de pré-visualização do HUD"
               min={0}
-              max={lap1Samples.length - 1}
+              max={activeLapSamples.length - 1}
               value={previewSampleIdx}
               onChange={(e) => setPreviewSampleIdx(Number(e.target.value))}
               className="w-full accent-[var(--ps-emerald)]"
@@ -942,7 +1370,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
             {exportedBlobUrl && (
               <a
                 href={exportedBlobUrl}
-                download={`pitstop-hud-volta-${lap1?.runNumber ?? 1}.webm`}
+                download={`pitstop-hud-volta-${activeLap?.runNumber ?? 1}.webm`}
                 className="inline-flex items-center gap-1 rounded-md border border-[var(--ps-emerald)] bg-emerald-500/15 px-2.5 py-1 font-extrabold text-[var(--ps-emerald)] hover:bg-emerald-500/25"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -952,6 +1380,169 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal: Buscador de Mídia da GoPro (Wi-Fi AP BLE 0x17 + HTTP 10.5.5.9:8080/gp/gpMediaList) */}
+      {goproModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/75 p-2 backdrop-blur-xs sm:items-center sm:p-4">
+          <div className="flex max-h-[88vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[var(--ps-border)] px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Wifi className="h-4 w-4 text-sky-400" />
+                <div>
+                  <h4 className="font-['Barlow_Condensed'] text-lg font-extrabold uppercase tracking-wide">
+                    Mídia da GoPro via Wi-Fi
+                  </h4>
+                  <p className="text-[11px] text-[var(--ps-muted)]">
+                    {connectedGoPro
+                      ? `Câmera BLE: ${getGoProDisplayName(connectedGoPro)}`
+                      : 'Consulta direta em http://10.5.5.9:8080/gp/gpMediaList'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGoproModalOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+                aria-label="Fechar buscador da GoPro"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 overflow-y-auto p-4">
+              {/* Passo 1: Status Wi-Fi AP via BLE */}
+              <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="space-y-1">
+                    <p className="font-extrabold text-[var(--ps-text)] flex items-center gap-1.5">
+                      {goproApLoading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />
+                      ) : (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
+                      )}
+                      <span>1. Ponto de Acesso Wi-Fi da GoPro</span>
+                    </p>
+                    <p className="text-[11px] text-[var(--ps-muted)] leading-snug">
+                      {goproApStatus ||
+                        'Ative o Wi-Fi da câmera (via BLE) e conecte este aparelho na rede Wi-Fi da GoPro.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {hasPairedGoPro && (
+                    <button
+                      type="button"
+                      disabled={goproApLoading}
+                      onClick={async () => {
+                        setGoproApLoading(true);
+                        const res = await enableGoProWifiAP();
+                        setGoproApLoading(false);
+                        setGoproApStatus(
+                          res.ok
+                            ? `Wi-Fi AP ativado via BLE em "${res.cameraName}". Conecte na rede Wi-Fi da GoPro.`
+                            : res.error || 'Falha ao ativar Wi-Fi AP via BLE.'
+                        );
+                      }}
+                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-[11px] font-bold text-[var(--ps-text)] hover:border-sky-400 disabled:opacity-50"
+                    >
+                      <Wifi className="h-3.5 w-3.5 text-sky-400" />
+                      <span>Ativar Wi-Fi via BLE</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={goproMediaLoading}
+                    onClick={() => {
+                      void loadGoProListAndThumbs();
+                    }}
+                    className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 text-[11px] font-extrabold disabled:opacity-50"
+                  >
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 ${goproMediaLoading ? 'animate-spin' : ''}`}
+                    />
+                    <span>{goproMediaLoading ? 'Buscando...' : 'Atualizar Lista'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {goproMediaError && (
+                <div className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-[var(--ps-amber)]">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{goproMediaError}</span>
+                </div>
+              )}
+
+              {/* Lista de Vídeos MP4 */}
+              {goproMediaLoading && goproMediaList.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-xs text-[var(--ps-muted)]">
+                  <Loader2 className="h-6 w-6 animate-spin text-sky-400" />
+                  <span className="mt-2">Consultando cartão SD em 10.5.5.9:8080...</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {goproMediaList.map((item) => {
+                    const thumbSrc = goproThumbs[item.id];
+                    const isDownloading = downloadingMediaId === item.id;
+                    const nearActiveLap =
+                      Boolean(activeLap && item.createdAtMs > 0) &&
+                      Math.abs((activeLap?.startedAtMs ?? 0) - item.createdAtMs) <= 30 * 60 * 1000;
+
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        disabled={Boolean(downloadingMediaId)}
+                        onClick={() => {
+                          void handleSelectGoProMediaItem(item);
+                        }}
+                        className="flex w-full items-center gap-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-left transition-colors hover:border-sky-400 disabled:opacity-60"
+                      >
+                        <div className="relative h-14 w-24 shrink-0 overflow-hidden rounded-lg border border-[var(--ps-border)] bg-black">
+                          {thumbSrc ? (
+                            <img
+                              src={thumbSrc}
+                              alt={item.filename}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-zinc-600">
+                              <Film className="h-5 w-5" />
+                            </div>
+                          )}
+                          {isDownloading && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+                              <Loader2 className="h-5 w-5 animate-spin text-sky-400" />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate font-mono text-xs font-extrabold text-[var(--ps-text)]">
+                              {item.filename}
+                            </span>
+                            {nearActiveLap && (
+                              <span className="shrink-0 rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[9px] font-black text-[var(--ps-emerald)] uppercase">
+                                Volta Match
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
+                            <span>{formatMediaDate(item.createdAtMs)}</span>
+                            <span>{formatFileSize(item.sizeBytes)}</span>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

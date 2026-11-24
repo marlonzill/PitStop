@@ -70,10 +70,15 @@ export interface OptimalStageSummary {
   sectors: SectorOptimalEntry[];
 }
 
+export const MIN_TRAP_HALF_WIDTH_M = 20; // Mínimo 20m para cada lado do eixo da pista (40m total)
+export const DEFAULT_TRAP_WIDTH_M = 40; // Padrão 40m total (20m para cada lado do eixo)
+
 export interface TrapCrossingResult {
   crossed: boolean;
   t: number; // 0..1 interpolation factor between prev and curr
   crossTimestampMs: number;
+  crossLat: number;
+  crossLon: number;
   lateralOffsetM: number;
   headingDiffDeg: number;
 }
@@ -132,6 +137,7 @@ export interface GpsKalmanInput {
   rawSpeedMs: number | null;
   rawHeadingDeg: number | null;
   timestampMs: number;
+  imu?: { longG: number; latG: number } | null;
 }
 
 export interface GpsKalmanOutput {
@@ -142,6 +148,15 @@ export interface GpsKalmanOutput {
   headingDeg: number | null;
   accuracyM: number | null;
   movementDetected: boolean;
+  zeroSpeedLocked?: boolean;
+}
+
+export interface GpsKalman10HzPrediction {
+  lat: number;
+  lon: number;
+  speedKmh: number;
+  headingDeg: number | null;
+  zeroSpeedLocked: boolean;
 }
 
 interface AxisKalmanState {
@@ -154,8 +169,8 @@ interface AxisKalmanState {
 }
 
 /**
- * 2D Kalman Filter (East/North local tangent plane in meters) calibrated by coords.accuracy.
- * Eliminates stationary GPS jitter while reacting immediately to walking steps (>= 0.45m or >= 0.5 m/s).
+ * 2D Kalman Filter (East/North local tangent plane in meters) with IMU Fusion,
+ * 10 Hz visual kinematic propagation, and Zero-Speed Anti-Drift Lock (< 2.0 km/h within accuracy).
  */
 export function createGpsKalmanProcessor() {
   let origin: { lat: number; lon: number; cosLat: number } | null = null;
@@ -163,12 +178,15 @@ export function createGpsKalmanProcessor() {
   let northState: AxisKalmanState | null = null;
   let lastTsMs = 0;
   let lastFilteredPos: { lat: number; lon: number } | null = null;
+  let zeroLockAnchor: { lat: number; lon: number } | null = null;
   let odoAnchor: { lat: number; lon: number } | null = null;
   let headingAnchor: { lat: number; lon: number } | null = null;
   let currentHeadingDeg: number | null = null;
   let emaSpeedKmh = 0;
+  let zeroSpeedLocked = true;
 
   const METERS_PER_DEG_LAT = 111320;
+  const G_TO_MS2 = 9.80665;
 
   const toLocalMeters = (lat: number, lon: number) => {
     if (!origin) {
@@ -192,18 +210,41 @@ export function createGpsKalmanProcessor() {
     };
   };
 
+  const projectImuEnu = (
+    imu?: { longG: number; latG: number } | null,
+    headingDeg?: number | null
+  ): { aEast: number; aNorth: number } => {
+    if (!imu || headingDeg === null || headingDeg === undefined || !Number.isFinite(headingDeg)) {
+      return { aEast: 0, aNorth: 0 };
+    }
+    const longMs2 =
+      Math.abs(imu.longG) > 0.04 ? Math.max(-20, Math.min(20, imu.longG * G_TO_MS2)) : 0;
+    const latMs2 =
+      Math.abs(imu.latG) > 0.04 ? Math.max(-20, Math.min(20, imu.latG * G_TO_MS2)) : 0;
+    const rad = (headingDeg * Math.PI) / 180;
+    const fwdX = Math.sin(rad);
+    const fwdY = Math.cos(rad);
+    const rightX = Math.cos(rad);
+    const rightY = -Math.sin(rad);
+    return {
+      aEast: longMs2 * fwdX + latMs2 * rightX,
+      aNorth: longMs2 * fwdY + latMs2 * rightY,
+    };
+  };
+
   const stepAxis = (
     st: AxisKalmanState,
     z: number,
     dt: number,
     rVar: number,
-    qAccelVar: number
+    qAccelVar: number,
+    accelMs2 = 0
   ): AxisKalmanState => {
-    // Predict
-    const xPred = st.x + st.v * dt;
-    const vPred = st.v;
-
+    // Predict with IMU acceleration control input
     const dt2 = dt * dt;
+    const xPred = st.x + st.v * dt + 0.5 * accelMs2 * dt2;
+    const vPred = st.v + accelMs2 * dt;
+
     const dt3 = dt2 * dt;
     const dt4 = dt2 * dt2;
 
@@ -238,10 +279,12 @@ export function createGpsKalmanProcessor() {
     northState = null;
     lastTsMs = 0;
     lastFilteredPos = null;
+    zeroLockAnchor = null;
     odoAnchor = null;
     headingAnchor = null;
     currentHeadingDeg = null;
     emaSpeedKmh = 0;
+    zeroSpeedLocked = true;
   };
 
   const update = (input: GpsKalmanInput): GpsKalmanOutput => {
@@ -261,6 +304,7 @@ export function createGpsKalmanProcessor() {
       !eastState ||
       !northState ||
       !lastFilteredPos ||
+      !zeroLockAnchor ||
       ts - lastTsMs > 15000 ||
       haversineMetersVel(lastFilteredPos.lat, lastFilteredPos.lon, input.lat, input.lon) > 500;
 
@@ -270,17 +314,19 @@ export function createGpsKalmanProcessor() {
         lon: input.lon,
         cosLat: Math.max(0.1, Math.cos((input.lat * Math.PI) / 180)),
       };
-      const initR = Math.pow(Math.min(25, Math.max(2.5, accM ?? 6)), 2);
+      const initR = Math.pow(Math.min(25, Math.max(1.5, accM ?? 5)), 2);
       eastState = { x: 0, v: 0, p00: initR, p01: 0, p10: 0, p11: 4 };
       northState = { x: 0, v: 0, p00: initR, p01: 0, p10: 0, p11: 4 };
       lastTsMs = ts;
       lastFilteredPos = { lat: input.lat, lon: input.lon };
+      zeroLockAnchor = { lat: input.lat, lon: input.lon };
       odoAnchor = { lat: input.lat, lon: input.lon };
       headingAnchor = { lat: input.lat, lon: input.lon };
       if (input.rawHeadingDeg !== null && Number.isFinite(input.rawHeadingDeg)) {
         currentHeadingDeg = Math.round(((input.rawHeadingDeg % 360) + 360) % 360);
       }
-      emaSpeedKmh = dopplerKmh >= 1.5 ? dopplerKmh : 0;
+      zeroSpeedLocked = dopplerKmh < 2.0;
+      emaSpeedKmh = zeroSpeedLocked ? 0 : dopplerKmh;
       return {
         lat: input.lat,
         lon: input.lon,
@@ -288,98 +334,188 @@ export function createGpsKalmanProcessor() {
         speedKmh: emaSpeedKmh,
         headingDeg: currentHeadingDeg,
         accuracyM: accM !== null ? Math.round(accM) : null,
-        movementDetected: dopplerMs >= 0.5,
+        movementDetected: !zeroSpeedLocked,
+        zeroSpeedLocked,
       };
     }
 
-    const dtSec = Math.min(5, Math.max(0.08, (ts - lastTsMs) / 1000));
+    const dtSec = Math.min(5, Math.max(0.03, (ts - lastTsMs) / 1000));
     const local = toLocalMeters(input.lat, input.lon);
     const innovationM = Math.hypot(local.eastM - eastState!.x, local.northM - northState!.x);
 
-    // Calibrate measurement variance R from GPS horizontal accuracy
-    const sigmaM = Math.min(35, Math.max(2.5, accM ?? 7)) * 0.72;
+    const sigmaM = Math.min(35, Math.max(1.5, accM ?? 6)) * 0.68;
     const rVar = sigmaM * sigmaM;
 
-    // Adaptive process noise Q: responsive when walking/driving, tight when stationary
+    const imuEnu = !zeroSpeedLocked
+      ? projectImuEnu(input.imu, currentHeadingDeg ?? input.rawHeadingDeg)
+      : { aEast: 0, aNorth: 0 };
+
     const activeMotionSignal =
-      dopplerMs >= 0.5 ||
-      innovationM >= Math.max(0.75, Math.min(2.2, sigmaM * 0.45));
-    const qAccelVar = activeMotionSignal ? 12.0 : 0.08;
+      dopplerKmh >= 2.0 ||
+      innovationM >= Math.max(1.2, Math.min(8, (accM ?? 5) * 0.75));
+    const qAccelVar = activeMotionSignal ? 14.0 : 0.05;
 
-    eastState = stepAxis(eastState!, local.eastM, dtSec, rVar, qAccelVar);
-    northState = stepAxis(northState!, local.northM, dtSec, rVar, qAccelVar);
+    eastState = stepAxis(eastState!, local.eastM, dtSec, rVar, qAccelVar, imuEnu.aEast);
+    northState = stepAxis(northState!, local.northM, dtSec, rVar, qAccelVar, imuEnu.aNorth);
 
-    const filt = toLatLon(eastState.x, northState.x);
+    const filtRaw = toLatLon(eastState.x, northState.x);
+
+    // Zero-Speed Anti-Drift Lock:
+    // Se speed < 2.0 km/h e deslocamento dentro da margem de erro de accuracy,
+    // trava velocidade em 0.0 km/h e impede acúmulo de distância fantasma.
+    const accuracyMarginM = Math.max(1.5, Math.min(18, (accM ?? 5) * 0.85));
+    const zeroAnchorDistM = haversineMetersVel(
+      zeroLockAnchor!.lat,
+      zeroLockAnchor!.lon,
+      input.lat,
+      input.lon
+    );
+    const kalmanVelKmh = Math.hypot(eastState.v, northState.v) * 3.6;
+
+    const shouldLockZero =
+      dopplerKmh < 2.0 &&
+      kalmanVelKmh < 2.2 &&
+      zeroAnchorDistM <= accuracyMarginM;
+
+    if (shouldLockZero) {
+      zeroSpeedLocked = true;
+      emaSpeedKmh = 0;
+      const lockedLocal = toLocalMeters(zeroLockAnchor!.lat, zeroLockAnchor!.lon);
+      eastState = { ...eastState, x: lockedLocal.eastM, v: 0 };
+      northState = { ...northState, x: lockedLocal.northM, v: 0 };
+      lastTsMs = ts;
+      lastFilteredPos = { ...zeroLockAnchor! };
+      odoAnchor = { ...zeroLockAnchor! };
+      return {
+        lat: zeroLockAnchor!.lat,
+        lon: zeroLockAnchor!.lon,
+        distStepM: 0,
+        speedKmh: 0,
+        headingDeg: currentHeadingDeg,
+        accuracyM: accM !== null ? Math.round(accM) : null,
+        movementDetected: false,
+        zeroSpeedLocked: true,
+      };
+    }
+
+    zeroSpeedLocked = false;
+    zeroLockAnchor = { lat: filtRaw.lat, lon: filtRaw.lon };
+
     const instStepM = haversineMetersVel(
       lastFilteredPos!.lat,
       lastFilteredPos!.lon,
-      filt.lat,
-      filt.lon
+      filtRaw.lat,
+      filtRaw.lon
     );
-
-    // Odometer anchor accumulates filtered sub-steps (e.g. 250ms ticks at walking pace) until >= 0.45m
     const anchorDistM = odoAnchor
-      ? haversineMetersVel(odoAnchor.lat, odoAnchor.lon, filt.lat, filt.lon)
+      ? haversineMetersVel(odoAnchor.lat, odoAnchor.lon, filtRaw.lat, filtRaw.lon)
       : 0;
     const movementDetected =
-      (anchorDistM >= 0.45 && anchorDistM < 500) ||
-      (dopplerMs >= 0.5 && anchorDistM >= 0.15 && anchorDistM < 500);
+      (anchorDistM >= 0.35 && anchorDistM < 500) ||
+      (dopplerKmh >= 2.0 && anchorDistM >= 0.1 && anchorDistM < 500);
 
     let distStepM = 0;
     if (movementDetected && odoAnchor) {
       distStepM = anchorDistM;
-      odoAnchor = { lat: filt.lat, lon: filt.lon };
+      odoAnchor = { lat: filtRaw.lat, lon: filtRaw.lon };
     }
 
-    // Heading updates only after >= 1.2m of accumulated directional displacement
     if (headingAnchor) {
-      const hdgDistM = haversineMetersVel(headingAnchor.lat, headingAnchor.lon, filt.lat, filt.lon);
+      const hdgDistM = haversineMetersVel(headingAnchor.lat, headingAnchor.lon, filtRaw.lat, filtRaw.lon);
       if (hdgDistM >= 1.2 && hdgDistM < 500) {
-        const calcBearing = bearingBetweenDeg(headingAnchor.lat, headingAnchor.lon, filt.lat, filt.lon);
+        const calcBearing = bearingBetweenDeg(headingAnchor.lat, headingAnchor.lon, filtRaw.lat, filtRaw.lon);
         currentHeadingDeg =
-          input.rawHeadingDeg !== null && Number.isFinite(input.rawHeadingDeg) && dopplerKmh >= 6
+          input.rawHeadingDeg !== null && Number.isFinite(input.rawHeadingDeg) && dopplerKmh >= 5
             ? Math.round(((input.rawHeadingDeg % 360) + 360) % 360)
             : calcBearing;
-        headingAnchor = { lat: filt.lat, lon: filt.lon };
+        headingAnchor = { lat: filtRaw.lat, lon: filtRaw.lon };
+      } else if (input.rawHeadingDeg !== null && Number.isFinite(input.rawHeadingDeg) && dopplerKmh >= 6) {
+        currentHeadingDeg = Math.round(((input.rawHeadingDeg % 360) + 360) % 360);
       }
     }
 
-    // EMA speed blending (alpha = 0.65) between chip Doppler and filtered geometric speed
-    const geomSpeedKmh = dtSec >= 0.08 && instStepM < 500 ? (instStepM / dtSec) * 3.6 : 0;
-    const kalmanVelKmh = Math.hypot(eastState.v, northState.v) * 3.6;
-    const bestGeomKmh = geomSpeedKmh > 0.5 ? geomSpeedKmh : kalmanVelKmh;
+    const geomSpeedKmh = dtSec >= 0.03 && instStepM < 500 ? (instStepM / dtSec) * 3.6 : 0;
+    const bestGeomKmh = geomSpeedKmh > 0.8 ? geomSpeedKmh : kalmanVelKmh;
     const instSpeedKmh =
-      dopplerKmh >= 1.5
-        ? bestGeomKmh >= 1.0
-          ? 0.65 * dopplerKmh + 0.35 * bestGeomKmh
+      dopplerKmh >= 2.0
+        ? bestGeomKmh >= 1.5
+          ? 0.68 * dopplerKmh + 0.32 * bestGeomKmh
           : dopplerKmh
         : bestGeomKmh;
 
-    const EMA_ALPHA = 0.65;
-    emaSpeedKmh = EMA_ALPHA * instSpeedKmh + (1 - EMA_ALPHA) * emaSpeedKmh;
+    // Higher responsiveness on 10Hz/25Hz receivers, smooth blend on 1Hz
+    const emaAlpha = dtSec <= 0.18 ? 0.78 : 0.65;
+    emaSpeedKmh = emaAlpha * instSpeedKmh + (1 - emaAlpha) * emaSpeedKmh;
 
-    // Zero speed ONLY when speed < 1.5 km/h AND filtered displacement < 0.45m
     let finalSpeedKmh = emaSpeedKmh;
-    if (finalSpeedKmh < 1.5 && anchorDistM < 0.45 && dopplerMs < 0.5) {
+    if (finalSpeedKmh < 2.0 && dopplerKmh < 2.0 && zeroAnchorDistM <= accuracyMarginM) {
       finalSpeedKmh = 0;
       emaSpeedKmh = 0;
+      zeroSpeedLocked = true;
     }
 
     lastTsMs = ts;
-    lastFilteredPos = { lat: filt.lat, lon: filt.lon };
+    lastFilteredPos = { lat: filtRaw.lat, lon: filtRaw.lon };
 
     return {
-      lat: filt.lat,
-      lon: filt.lon,
-      distStepM,
+      lat: filtRaw.lat,
+      lon: filtRaw.lon,
+      distStepM: zeroSpeedLocked ? 0 : distStepM,
       speedKmh: finalSpeedKmh,
       headingDeg: currentHeadingDeg,
       accuracyM: accM !== null ? Math.round(accM) : null,
-      movementDetected,
+      movementDetected: !zeroSpeedLocked && movementDetected,
+      zeroSpeedLocked,
     };
   };
 
-  return { update, reset };
+  /**
+   * 10 Hz IMU-Kalman kinematic propagation for smooth visual speedometer & live map marker
+   * between 1 Hz GPS fixes while preserving Zero-Speed Anti-Drift Lock.
+   */
+  const predictAt10Hz = (
+    nowMs = Date.now(),
+    imu?: { longG: number; latG: number } | null
+  ): GpsKalman10HzPrediction | null => {
+    if (!origin || !eastState || !northState || !lastFilteredPos || lastTsMs <= 0) {
+      return null;
+    }
+    if (zeroSpeedLocked) {
+      return {
+        lat: (zeroLockAnchor ?? lastFilteredPos).lat,
+        lon: (zeroLockAnchor ?? lastFilteredPos).lon,
+        speedKmh: 0,
+        headingDeg: currentHeadingDeg,
+        zeroSpeedLocked: true,
+      };
+    }
+
+    const elapsedMs = nowMs - lastTsMs;
+    if (elapsedMs < 20 || elapsedMs > 2200) {
+      return null;
+    }
+    const dt = Math.min(1.2, elapsedMs / 1000);
+    const { aEast, aNorth } = projectImuEnu(imu, currentHeadingDeg);
+    const predEast = eastState.x + eastState.v * dt + 0.5 * aEast * dt * dt;
+    const predNorth = northState.x + northState.v * dt + 0.5 * aNorth * dt * dt;
+    const predPos = toLatLon(predEast, predNorth);
+
+    const vEast = eastState.v + aEast * dt;
+    const vNorth = northState.v + aNorth * dt;
+    const predSpeedKmh = Math.hypot(vEast, vNorth) * 3.6;
+    const blendedSpeed =
+      emaSpeedKmh >= 2.0 ? 0.6 * emaSpeedKmh + 0.4 * predSpeedKmh : emaSpeedKmh;
+
+    return {
+      lat: predPos.lat,
+      lon: predPos.lon,
+      speedKmh: blendedSpeed < 2.0 ? 0 : blendedSpeed,
+      headingDeg: currentHeadingDeg,
+      zeroSpeedLocked: blendedSpeed < 2.0,
+    };
+  };
+
+  return { update, predictAt10Hz, reset };
 }
 
 export function bearingBetweenDeg(
@@ -411,8 +547,9 @@ export interface MarcoDef {
   lat: number;
   lng: number;
   angulo: number; // 0..360°
-  larguraM: number; // padrão 25m
-  unidirecional?: boolean; // padrão true
+  larguraM: number; // padrão 40m (20m para cada lado)
+  unidirecional?: boolean; // padrão true (±65°)
+  rumoVeiculoDeg?: number | null;
 }
 
 export interface CruzamentoMarcoResult {
@@ -435,15 +572,15 @@ export function angleDiffDeg(a: number, b: number): number {
 
 /**
  * Constroi o segmento transversal LineString([P1, P2]) do Marco em metros via @turf/turf
- * com P1 em (angulo - 90°) e P2 em (angulo + 90°) a largura/2 de distância do centro.
+ * com P1 em (angulo - 90°) e P2 em (angulo + 90°) a pelo menos 20m..25m de cada lado do eixo.
  */
 export function buildMarcoGateLineString(
   lat: number,
   lng: number,
   anguloDeg: number,
-  larguraM = 25
+  larguraM = DEFAULT_TRAP_WIDTH_M
 ) {
-  const halfWidth = Math.max(2, Number.isFinite(larguraM) ? larguraM : 25) / 2;
+  const halfWidth = Math.max(40, Number.isFinite(larguraM) ? larguraM : DEFAULT_TRAP_WIDTH_M) / 2;
   const center = turf.point([lng, lat]);
   const p1 = turf.destination(center, halfWidth, anguloDeg - 90, { units: 'meters' });
   const p2 = turf.destination(center, halfWidth, anguloDeg + 90, { units: 'meters' });
@@ -457,11 +594,11 @@ export function buildMarcoArrowGeometry(
   lat: number,
   lng: number,
   anguloDeg: number,
-  larguraM = 25
+  larguraM = DEFAULT_TRAP_WIDTH_M
 ) {
-  const safeWidth = Math.max(5, Number.isFinite(larguraM) ? larguraM : 25);
-  const arrowLen = Math.max(14, safeWidth * 0.72);
-  const barbLen = Math.max(5, safeWidth * 0.24);
+  const safeWidth = Math.max(40, Number.isFinite(larguraM) ? larguraM : DEFAULT_TRAP_WIDTH_M);
+  const arrowLen = Math.max(16, safeWidth * 0.52);
+  const barbLen = Math.max(6, safeWidth * 0.18);
   const center = turf.point([lng, lat]);
   const tip = turf.destination(center, arrowLen, anguloDeg, { units: 'meters' });
   const leftWing = turf.destination(tip, barbLen, anguloDeg + 142, { units: 'meters' });
@@ -481,11 +618,11 @@ export function buildMarcoArrowGeometry(
 }
 
 /**
- * Motor de Detecção de Cruzamento estilo RaceChrono usando @turf/turf:
- * - Cria segmento de deslocamento LineString([pontoAnterior, pontoAtual])
- * - Verifica interseção com o portão transversal via turf.lineIntersect()
- * - Valida direção (< 60° em relação a marco.angulo) quando unidirecional === true
- * - Interpola timestamp exato (ms) usando d1 / dTotal
+ * Motor de Detecção de Cruzamento por Interseção Exata de Segmentos de Reta (Plano Tangente ENU):
+ * - Verifica se o segmento [pontoAnterior -> pontoAtual] cruza o segmento transversal do Marco [G1 -> G2]
+ * - Garante tolerância mínima de 22.5m para cada lado do eixo da pista (>= 45m total)
+ * - Valida direção (< 65° em relação a marco.angulo) quando unidirecional === true
+ * - Interpola linearmente o timestamp exato (ms) e a coordenada do cruzamento entre os dois pontos GPS
  */
 export function verificarCruzamento(
   pontoAnterior: MarcoGpsPonto,
@@ -496,7 +633,9 @@ export function verificarCruzamento(
     !Number.isFinite(pontoAnterior.lat) ||
     !Number.isFinite(pontoAnterior.lng) ||
     !Number.isFinite(pontoAtual.lat) ||
-    !Number.isFinite(pontoAtual.lng)
+    !Number.isFinite(pontoAtual.lng) ||
+    !Number.isFinite(marco.lat) ||
+    !Number.isFinite(marco.lng)
   ) {
     return null;
   }
@@ -504,79 +643,130 @@ export function verificarCruzamento(
     return null;
   }
 
-  const ptAnterior = turf.point([pontoAnterior.lng, pontoAnterior.lat]);
-  const ptAtual = turf.point([pontoAtual.lng, pontoAtual.lat]);
-  const deslocamento = turf.lineString([
-    [pontoAnterior.lng, pontoAnterior.lat],
-    [pontoAtual.lng, pontoAtual.lat],
-  ]);
-
-  const linhaMarco = buildMarcoGateLineString(
-    marco.lat,
-    marco.lng,
-    marco.angulo,
-    marco.larguraM
+  // Projeção local tangente WGS84 em metros centrada no Marco
+  const latRad = (marco.lat * Math.PI) / 180;
+  const mPerDegLat =
+    111132.92 - 559.82 * Math.cos(2 * latRad) + 1.175 * Math.cos(4 * latRad);
+  const mPerDegLon = Math.max(
+    1,
+    111412.84 * Math.cos(latRad) - 93.5 * Math.cos(3 * latRad)
   );
 
-  const intersecoes = turf.lineIntersect(deslocamento, linhaMarco);
-  if (!intersecoes.features.length) {
+  const ax = (pontoAnterior.lng - marco.lng) * mPerDegLon;
+  const ay = (pontoAnterior.lat - marco.lat) * mPerDegLat;
+  const bx = (pontoAtual.lng - marco.lng) * mPerDegLon;
+  const by = (pontoAtual.lat - marco.lat) * mPerDegLat;
+
+  const dx = bx - ax;
+  const dy = by - ay;
+  const segLenM = Math.hypot(dx, dy);
+  if (segLenM < 1e-6) {
     return null;
   }
 
-  const rumoVeiculo = normalizeAngle360(turf.bearing(ptAnterior, ptAtual));
   const anguloMarco = normalizeAngle360(marco.angulo);
-  const diferencaAngularDeg = angleDiffDeg(rumoVeiculo, anguloMarco);
+  const angRad = (anguloMarco * Math.PI) / 180;
 
-  if (marco.unidirecional !== false && diferencaAngularDeg >= 60) {
+  // Base ortonormal da linha/portal: fwd = sentido da pista, right = transversal (+90°)
+  const fwdX = Math.sin(angRad);
+  const fwdY = Math.cos(angRad);
+  const rightX = Math.cos(angRad);
+  const rightY = -Math.sin(angRad);
+
+  const alongA = ax * fwdX + ay * fwdY;
+  const latA = ax * rightX + ay * rightY;
+  const alongB = bx * fwdX + by * fwdY;
+  const latB = bx * rightX + by * rightY;
+
+  // Tolerância mínima garantida de 22.5m para cada lado do eixo da pista (45m total)
+  const halfWidthM = Math.max(
+    MIN_TRAP_HALF_WIDTH_M,
+    (Number.isFinite(marco.larguraM) ? marco.larguraM : DEFAULT_TRAP_WIDTH_M) / 2
+  );
+
+  // Interseção algébrica entre segmento A->B e linha do portal (along = 0, lateral ∈ [-halfWidthM, +halfWidthM])
+  const dAlong = alongB - alongA;
+  let fatorInterpolacao: number;
+
+  if (Math.abs(dAlong) > 1e-7) {
+    const tRaw = -alongA / dAlong;
+    if (tRaw < -1e-6 || tRaw > 1 + 1e-6) {
+      return null;
+    }
+    fatorInterpolacao = Math.max(0, Math.min(1, tRaw));
+  } else {
+    // Caso degenerado: deslocamento colinear sobre a própria linha (along ≈ 0)
+    if (Math.abs(alongA) > 0.05) {
+      return null;
+    }
+    const minSegLat = Math.min(latA, latB);
+    const maxSegLat = Math.max(latA, latB);
+    if (maxSegLat < -halfWidthM || minSegLat > halfWidthM) {
+      return null;
+    }
+    fatorInterpolacao = 0.5;
+  }
+
+  const latCross = latA + fatorInterpolacao * (latB - latA);
+  if (Math.abs(latCross) > halfWidthM + 1e-4) {
     return null;
   }
 
-  let closestFeature = intersecoes.features[0];
-  let d1 = turf.distance(ptAnterior, closestFeature, { units: 'meters' });
-  for (let i = 1; i < intersecoes.features.length; i += 1) {
-    const cand = intersecoes.features[i];
-    const candDist = turf.distance(ptAnterior, cand, { units: 'meters' });
-    if (candDist < d1) {
-      d1 = candDist;
-      closestFeature = cand;
-    }
+  const geomBearing = normalizeAngle360((Math.atan2(dx, dy) * 180) / Math.PI);
+  const rumoVeiculo =
+    segLenM < 0.6 &&
+    marco.rumoVeiculoDeg !== null &&
+    marco.rumoVeiculoDeg !== undefined &&
+    Number.isFinite(marco.rumoVeiculoDeg)
+      ? normalizeAngle360(marco.rumoVeiculoDeg)
+      : geomBearing;
+  const diferencaAngularDeg = angleDiffDeg(rumoVeiculo, anguloMarco);
+  if (marco.unidirecional !== false && diferencaAngularDeg > 65) {
+    return null;
   }
 
-  const dTotal = turf.distance(ptAnterior, ptAtual, { units: 'meters' });
-  const fatorInterpolacao =
-    dTotal > 1e-6 ? Math.max(0, Math.min(1, d1 / dTotal)) : 0;
-  const timestampCruzamento = Math.round(
-    pontoAnterior.timestamp +
-      fatorInterpolacao * (pontoAtual.timestamp - pontoAnterior.timestamp)
-  );
+  const dtMs = pontoAtual.timestamp - pontoAnterior.timestamp;
+  const timestampCruzamento = Math.round(pontoAnterior.timestamp + fatorInterpolacao * dtMs);
+  const crossLng =
+    pontoAnterior.lng + fatorInterpolacao * (pontoAtual.lng - pontoAnterior.lng);
+  const crossLat =
+    pontoAnterior.lat + fatorInterpolacao * (pontoAtual.lat - pontoAnterior.lat);
 
-  const coords = closestFeature.geometry.coordinates;
   return {
     cruzou: true,
     timestampCruzamento,
     fatorInterpolacao,
-    pontoIntersecao: [coords[0], coords[1]],
+    pontoIntersecao: [crossLng, crossLat],
     diferencaAngularDeg,
   };
 }
 
 /**
  * Vector segment intersection between vehicle movement (prev -> curr)
- * and a virtual Trap gate centered at (trap.lat, trap.lon) with perpendicular width `trap.widthM`
- * and travel direction `trap.bearingDeg`, powered by `@turf/turf`.
+ * and a virtual Trap gate centered at (trap.lat, trap.lon) with perpendicular width >= 45m
+ * (>= 22.5m per side of track axis) and travel direction `trap.bearingDeg`.
  */
 export function detectTrapCrossing(
   prev: { lat: number; lon: number; timestampMs: number },
   curr: { lat: number; lon: number; timestampMs: number },
   trap: VelocityTrap,
-  options?: { hdopAccuracyM?: number | null; autoSnap?: boolean }
+  options?: {
+    hdopAccuracyM?: number | null;
+    autoSnap?: boolean;
+    vehicleHeadingDeg?: number | null;
+  }
 ): TrapCrossingResult | null {
   const acc = options?.hdopAccuracyM;
   const hdopBonus =
     options?.autoSnap !== false && typeof acc === 'number' && Number.isFinite(acc) && acc > 6
-      ? Math.min(22, (acc - 6) * 0.65)
+      ? Math.min(24, (acc - 6) * 0.65)
       : 0;
-  const effectiveWidthM = Math.max(8, (Number(trap.widthM) || 25) + hdopBonus);
+  // Garante mínimo absoluto de 20m para cada lado (40m total), expandindo se portal for maior ou HDOP alto
+  const baseTotalWidthM = Math.max(
+    MIN_TRAP_HALF_WIDTH_M * 2,
+    Number(trap.widthM) || DEFAULT_TRAP_WIDTH_M
+  );
+  const effectiveWidthM = baseTotalWidthM + hdopBonus;
 
   const res = verificarCruzamento(
     { lat: prev.lat, lng: prev.lon, timestamp: prev.timestampMs },
@@ -587,20 +777,24 @@ export function detectTrapCrossing(
       angulo: trap.bearingDeg,
       larguraM: effectiveWidthM,
       unidirecional: trap.unidirectional !== false,
+      rumoVeiculoDeg: options?.vehicleHeadingDeg ?? null,
     }
   );
   if (!res) return null;
 
-  const lateralOffsetM = turf.distance(
-    turf.point([trap.lon, trap.lat]),
-    turf.point(res.pontoIntersecao),
-    { units: 'meters' }
+  const lateralOffsetM = haversineMetersVel(
+    trap.lat,
+    trap.lon,
+    res.pontoIntersecao[1],
+    res.pontoIntersecao[0]
   );
 
   return {
     crossed: true,
     t: res.fatorInterpolacao,
     crossTimestampMs: res.timestampCruzamento,
+    crossLat: res.pontoIntersecao[1],
+    crossLon: res.pontoIntersecao[0],
     lateralOffsetM,
     headingDiffDeg: res.diferencaAngularDeg,
   };
@@ -867,26 +1061,26 @@ export function computeOptimalStage(
 
 export function formatStageDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) {
-    return '--:--.-';
+    return '--:--.--';
   }
-  const totalTenths = Math.floor(ms / 100);
-  const tenths = totalTenths % 10;
-  const totalSec = Math.floor(totalTenths / 10);
+  const totalHundredths = Math.floor(ms / 10);
+  const hundredths = totalHundredths % 100;
+  const totalSec = Math.floor(totalHundredths / 100);
   const sec = totalSec % 60;
   const totalMin = Math.floor(totalSec / 60);
   const min = totalMin % 60;
   const hours = Math.floor(totalMin / 60);
   if (hours > 0) {
-    return `${hours}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${tenths}`;
+    return `${hours}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(hundredths).padStart(2, '0')}`;
   }
-  return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${tenths}`;
+  return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(hundredths).padStart(2, '0')}`;
 }
 
 export function formatDeltaSeconds(deltaSec: number | null): string {
-  if (deltaSec === null || !Number.isFinite(deltaSec)) return '--.-s';
-  if (Math.abs(deltaSec) < 0.05) return '0.0s';
+  if (deltaSec === null || !Number.isFinite(deltaSec)) return '--.--s';
+  if (Math.abs(deltaSec) < 0.005) return '0.00s';
   const sign = deltaSec < 0 ? '-' : '+';
-  return `${sign}${Math.abs(deltaSec).toFixed(1)}s`;
+  return `${sign}${Math.abs(deltaSec).toFixed(2)}s`;
 }
 
 export function loadVelocityTracks(): VelocityTrack[] {
@@ -1530,7 +1724,7 @@ export function createDemoSpecialStage(): {
         lat: waypoints[1].lat,
         lon: waypoints[1].lon,
         bearingDeg: startBearing,
-        widthM: 35,
+        widthM: 50,
       },
       {
         id: 'demo_split_1',
@@ -1539,7 +1733,7 @@ export function createDemoSpecialStage(): {
         lat: waypoints[5].lat,
         lon: waypoints[5].lon,
         bearingDeg: s1Bearing,
-        widthM: 35,
+        widthM: 50,
       },
       {
         id: 'demo_split_2',
@@ -1548,7 +1742,7 @@ export function createDemoSpecialStage(): {
         lat: waypoints[9].lat,
         lon: waypoints[9].lon,
         bearingDeg: s2Bearing,
-        widthM: 35,
+        widthM: 50,
       },
       {
         id: 'demo_finish',
@@ -1557,7 +1751,7 @@ export function createDemoSpecialStage(): {
         lat: waypoints[12].lat,
         lon: waypoints[12].lon,
         bearingDeg: finBearing,
-        widthM: 40,
+        widthM: 50,
       },
     ],
   };
@@ -1668,7 +1862,7 @@ export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrac
           lat: pStart.lat,
           lon: pStart.lon,
           bearingDeg: startBearing,
-          widthM: 25,
+          widthM: 50,
           unidirectional: true,
         },
       ],
@@ -1692,7 +1886,7 @@ export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrac
         lat: pStart.lat,
         lon: pStart.lon,
         bearingDeg: startBearing,
-        widthM: 25,
+        widthM: 50,
         unidirectional: true,
       },
       {
@@ -1702,7 +1896,7 @@ export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrac
         lat: pEnd.lat,
         lon: pEnd.lon,
         bearingDeg: endBearing,
-        widthM: 25,
+        widthM: 50,
         unidirectional: true,
       },
     ],

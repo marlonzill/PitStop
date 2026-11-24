@@ -247,7 +247,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
             <button
               type="button"
               onClick={() => setSimRunning((v) => !v)}
-              className={`min-h-[38px] rounded-lg px-4 text-xs font-extrabold uppercase ${
+              className={`min-h-[44px] rounded-lg px-4 text-xs font-extrabold uppercase ${
                 simRunning ? 'pitstop-btn-metal' : 'pitstop-btn-red'
               }`}
             >
@@ -314,9 +314,9 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
             <button
               type="button"
               onClick={() => setTotalKm(0)}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+              className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
             >
-              <RotateCcw className="h-3 w-3" />
+              <RotateCcw className="h-3.5 w-3.5" />
               <span>Zerar Total</span>
             </button>
           </div>
@@ -563,14 +563,14 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
           <button
             type="button"
             onClick={() => adjustCalPct(-1)}
-            className="min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+            className="min-h-[48px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
           >
             -1%
           </button>
           <button
             type="button"
             onClick={() => adjustCalPct(-0.1)}
-            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+            className="min-h-[48px] inline-flex items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
           >
             <Minus className="h-4 w-4" />
           </button>
@@ -585,14 +585,14 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
           <button
             type="button"
             onClick={() => adjustCalPct(0.1)}
-            className="min-h-[42px] inline-flex items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+            className="min-h-[48px] inline-flex items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-sm font-black text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
           >
             <Plus className="h-4 w-4" />
           </button>
           <button
             type="button"
             onClick={() => adjustCalPct(1)}
-            className="min-h-[42px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+            className="min-h-[48px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xs font-extrabold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
           >
             +1%
           </button>

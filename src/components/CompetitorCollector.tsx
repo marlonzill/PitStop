@@ -20,6 +20,7 @@ import {
   Upload,
   UploadCloud,
 } from 'lucide-react';
+import { CockpitSelect } from './CockpitSelect';
 import type {
   ParsedRoadbook,
   PassageRecord,
@@ -997,31 +998,29 @@ export const CompetitorCollector: React.FC = () => {
               </p>
             </div>
 
-            <div className="flex items-center gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5">
-              <label
-                htmlFor="gps-radius-select"
-                className="text-[11px] font-semibold text-[var(--ps-muted)] whitespace-nowrap"
-              >
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[var(--ps-muted)] whitespace-nowrap">
                 Raio GPS
-              </label>
-              <select
-                id="gps-radius-select"
-                value={config.detectionRadiusM}
-                onChange={(e) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    detectionRadiusM: Number(e.target.value),
-                  }))
-                }
-                aria-label="Raio de detecção GPS em metros"
-                className="bg-transparent font-mono text-xs font-bold text-[var(--ps-accent)] focus:outline-none cursor-pointer"
-              >
-                {[2, 5, 10, 15, 20, 30, 40, 50, 75, 100, 150].map((r) => (
-                  <option key={r} value={r} className="bg-[var(--ps-surface)] text-[var(--ps-text)]">
-                    {r} m
-                  </option>
-                ))}
-              </select>
+              </span>
+              <div className="w-28">
+                <CockpitSelect
+                  id="gps-radius-select"
+                  compact
+                  align="right"
+                  ariaLabel="Raio de detecção GPS em metros"
+                  value={String(config.detectionRadiusM)}
+                  options={[2, 5, 10, 15, 20, 30, 40, 50, 75, 100, 150].map((r) => ({
+                    value: String(r),
+                    label: `${r} m`,
+                  }))}
+                  onChange={(val) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      detectionRadiusM: Number(val),
+                    }))
+                  }
+                />
+              </div>
             </div>
           </div>
 
@@ -1165,8 +1164,8 @@ export const CompetitorCollector: React.FC = () => {
           </label>
 
           {parseError && (
-            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/15 p-3 text-xs text-red-400">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#FF2A2A]" />
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/15 p-3 text-xs font-semibold text-[var(--ps-danger)]">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ps-danger)]" />
               <span>{parseError}</span>
             </div>
           )}

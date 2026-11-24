@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Clock, Delete, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Check, Clock, Copy, Delete, Gauge, RotateCcw, X } from 'lucide-react';
 
 interface TimeCalculatorModalProps {
   open: boolean;
@@ -7,6 +7,8 @@ interface TimeCalculatorModalProps {
 }
 
 type OpSymbol = '+' | '-' | '×' | '÷';
+type CalcTab = 'time' | 'rally';
+type RallySolveTarget = 'speed' | 'time' | 'distance';
 
 function digitsToMinutes(digits: string): number {
   if (!digits) return 0;
@@ -49,6 +51,36 @@ function minutesToCanonicalDigits(totalMinutes: number): string {
   return `${h}${String(m).padStart(2, '0')}`;
 }
 
+function parseTimeToHours(raw: string): number | null {
+  const trimmed = raw.trim().replace(',', '.');
+  if (!trimmed) return null;
+  if (trimmed.includes(':')) {
+    const parts = trimmed.split(':').map((p) => Number(p));
+    if (parts.some((n) => !Number.isFinite(n) || n < 0)) return null;
+    if (parts.length === 2) {
+      // MM:SS when <= 90, or HH:MM? In rally timing inputs, treat HH:MM:SS or MM:SS cleanly:
+      // Actually support MM:SS if user types e.g. 05:30? Let's label explicitly "Minutos ou MM:SS" -> parts[0]/60 + parts[1]/3600!
+      return parts[0] / 60 + parts[1] / 3600;
+    }
+    if (parts.length === 3) {
+      return parts[0] + parts[1] / 60 + parts[2] / 3600;
+    }
+    return null;
+  }
+  const mins = Number(trimmed);
+  if (!Number.isFinite(mins) || mins <= 0) return null;
+  return mins / 60;
+}
+
+function formatHoursAsHms(hours: number): string {
+  if (!Number.isFinite(hours) || hours < 0) return '--:--:--';
+  const totalSec = Math.round(hours * 3600);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
 interface TimeCalculatorPanelProps {
   onClose?: () => void;
   isModal?: boolean;
@@ -60,6 +92,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
   isModal = false,
   active = true,
 }) => {
+  const [calcTab, setCalcTab] = useState<CalcTab>('time');
   const [rawDigits, setRawDigits] = useState<string>('');
   const [accMinutes, setAccMinutes] = useState<number | null>(null);
   const [pendingOp, setPendingOp] = useState<OpSymbol | null>(null);
@@ -68,6 +101,14 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
   const [hasTypedAfterOp, setHasTypedAfterOp] = useState<boolean>(false);
   const [clock24hMode, setClock24hMode] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [copiedTime, setCopiedTime] = useState(false);
+
+  // Rally Velocity / Distance / Time state
+  const [solveTarget, setSolveTarget] = useState<RallySolveTarget>('speed');
+  const [distInput, setDistInput] = useState<string>('4.50');
+  const [timeInput, setTimeInput] = useState<string>('5');
+  const [speedInput, setSpeedInput] = useState<string>('54');
+  const [copiedRally, setCopiedRally] = useState(false);
 
   const isScalarMode = pendingOp === '×' || pendingOp === '÷';
 
@@ -221,7 +262,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
   };
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || calcTab !== 'time') return;
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (document.activeElement?.tagName || '').toUpperCase();
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -258,7 +299,7 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [active]);
+  }, [active, calcTab]);
 
   const mainDisplay = errorMsg
     ? errorMsg
@@ -270,12 +311,70 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         ? formatMinutesAsTime(resultDisplayMinutes, clock24hMode)
         : '0:00';
 
+  const rallyResult = useMemo(() => {
+    const dist = Number(distInput.replace(',', '.'));
+    const speed = Number(speedInput.replace(',', '.'));
+    const hours = parseTimeToHours(timeInput);
+
+    if (solveTarget === 'speed') {
+      if (!Number.isFinite(dist) || dist <= 0 || !hours || hours <= 0) {
+        return { main: '--', unit: 'km/h', sub: 'Informe distância e tempo válidos' };
+      }
+      const kmh = dist / hours;
+      return {
+        main: kmh.toFixed(2).replace('.', ','),
+        unit: 'km/h',
+        sub: `${(kmh / 3.6).toFixed(2).replace('.', ',')} m/s · ${(60 / kmh).toFixed(2).replace('.', ',')} min/km`,
+      };
+    }
+
+    if (solveTarget === 'time') {
+      if (!Number.isFinite(dist) || dist <= 0 || !Number.isFinite(speed) || speed <= 0) {
+        return { main: '--:--:--', unit: 'HH:MM:SS', sub: 'Informe distância e média válidas' };
+      }
+      const h = dist / speed;
+      const totalMin = h * 60;
+      return {
+        main: formatHoursAsHms(h),
+        unit: 'HH:MM:SS',
+        sub: `${totalMin.toFixed(2).replace('.', ',')} min (${Math.round(h * 3600)} seg)`,
+      };
+    }
+
+    // solveTarget === 'distance'
+    if (!hours || hours <= 0 || !Number.isFinite(speed) || speed <= 0) {
+      return { main: '--', unit: 'km', sub: 'Informe tempo e média válidos' };
+    }
+    const km = speed * hours;
+    return {
+      main: km.toFixed(3).replace('.', ','),
+      unit: 'km',
+      sub: `${Math.round(km * 1000).toLocaleString('pt-BR')} metros`,
+    };
+  }, [solveTarget, distInput, timeInput, speedInput]);
+
+  const handleCopyDisplay = async (valueToCopy: string, which: 'time' | 'rally') => {
+    if (!valueToCopy || valueToCopy.startsWith('--')) return;
+    try {
+      await navigator.clipboard.writeText(valueToCopy);
+      if (which === 'time') {
+        setCopiedTime(true);
+        window.setTimeout(() => setCopiedTime(false), 1600);
+      } else {
+        setCopiedRally(true);
+        window.setTimeout(() => setCopiedRally(false), 1600);
+      }
+    } catch {
+      // Ignore clipboard failure
+    }
+  };
+
   const numBtnClass = isModal
-    ? 'min-h-[46px] sm:min-h-[54px] rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] text-xl font-extrabold text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]'
-    : 'min-h-[54px] sm:min-h-[68px] h-full rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] text-2xl sm:text-3xl font-black text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]';
+    ? 'min-h-[48px] sm:min-h-[54px] rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] text-xl font-extrabold text-[var(--ps-text)] shadow-sm transition-all active:scale-[0.96]'
+    : 'min-h-[54px] sm:min-h-[64px] h-full rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] text-2xl sm:text-3xl font-black text-[var(--ps-text)] shadow-sm transition-all active:scale-[0.96]';
   const opBtnClass = isModal
-    ? 'min-h-[46px] sm:min-h-[54px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xl font-extrabold text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]'
-    : 'min-h-[54px] sm:min-h-[68px] h-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-2xl sm:text-3xl font-black text-[var(--ps-text)] shadow-sm transition-transform active:scale-[0.96]';
+    ? 'min-h-[48px] sm:min-h-[54px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-xl font-extrabold text-[var(--ps-text)] shadow-sm transition-all active:scale-[0.96]'
+    : 'min-h-[54px] sm:min-h-[64px] h-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-2xl sm:text-3xl font-black text-[var(--ps-text)] shadow-sm transition-all active:scale-[0.96]';
 
   return (
     <div
@@ -284,33 +383,39 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 sm:px-4 sm:py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-2.5 sm:px-4 sm:py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Clock className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
+          {calcTab === 'time' ? (
+            <Clock className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
+          ) : (
+            <Gauge className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
+          )}
           <span className="truncate font-['Barlow_Condensed'] text-lg sm:text-xl font-extrabold tracking-wide uppercase">
-            Calculadora de Tempo
+            {calcTab === 'time' ? 'Calculadora de Tempo' : 'Média / Distância / Tempo'}
           </span>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setClock24hMode((v) => !v)}
-            className={`rounded-lg border px-2.5 py-1 font-mono text-[10px] sm:text-xs font-bold transition-colors whitespace-nowrap ${
-              clock24hMode
-                ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-accent)]'
-                : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)]'
-            }`}
-            title="Alterna entre total acumulado (>24h) e relógio de 24 horas"
-          >
-            {clock24hMode ? 'Relógio 24h' : 'Acumulado >24h'}
-          </button>
+          {calcTab === 'time' && (
+            <button
+              type="button"
+              onClick={() => setClock24hMode((v) => !v)}
+              className={`min-h-[34px] rounded-lg border px-2.5 py-1 font-mono text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${
+                clock24hMode
+                  ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-accent)]'
+                  : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)]'
+              }`}
+              title="Alterna entre total acumulado (>24h) e relógio de 24 horas"
+            >
+              {clock24hMode ? 'Relógio 24h' : 'Acumulado >24h'}
+            </button>
+          )}
 
           {isModal && onClose && (
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
               aria-label="Fechar calculadora"
             >
               <X className="h-4 w-4" />
@@ -319,113 +424,291 @@ const TimeCalculatorPanel: React.FC<TimeCalculatorPanelProps> = ({
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col p-3 sm:p-4 gap-2.5 sm:gap-3">
-        {/* Two-line High-Contrast ATM Display */}
-        <div
-          className={`rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-4 text-right font-mono tabular-nums flex flex-col justify-center ${
-            isModal ? 'py-2.5' : 'py-3.5 sm:py-5'
-          }`}
-        >
-          <div className="min-h-[18px] truncate text-xs sm:text-sm font-semibold text-[var(--ps-muted)]">
-            {historyText || (isScalarMode ? 'Multiplicador/divisor' : 'Hora:Min')}
-          </div>
-          <div
-            className={`mt-1 truncate font-black tracking-tight ${
-              errorMsg
-                ? 'text-xl text-red-500'
-                : isModal
-                  ? 'text-3xl text-[var(--ps-text)] sm:text-4xl'
-                  : 'text-4xl text-[var(--ps-text)] sm:text-5xl'
+      {/* Mode Switcher */}
+      <div className="px-3 pt-2.5 sm:px-4">
+        <div className="grid grid-cols-2 gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
+          <button
+            type="button"
+            onClick={() => setCalcTab('time')}
+            className={`min-h-[40px] rounded-lg px-2 text-xs font-extrabold uppercase transition-all ${
+              calcTab === 'time'
+                ? 'pitstop-btn-red'
+                : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
             }`}
           >
-            {mainDisplay}
-          </div>
-        </div>
-
-        {/* Exact 4x5 High-Contrast Keypad Grid */}
-        <div className="grid flex-1 grid-cols-4 grid-rows-5 gap-2 font-mono">
-          <button
-            type="button"
-            onClick={clearAll}
-            className={`${isModal ? 'min-h-[46px] text-lg' : 'min-h-[54px] sm:min-h-[68px] text-2xl'} h-full rounded-xl border border-amber-500/40 bg-amber-500/15 font-black text-[var(--ps-amber)] transition-transform active:scale-[0.96]`}
-          >
-            C
+            Hora : Minuto
           </button>
           <button
             type="button"
-            onClick={pressBackspace}
-            aria-label="Apagar último dígito"
-            className={`flex ${isModal ? 'min-h-[46px]' : 'min-h-[54px] sm:min-h-[68px]'} h-full items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] transition-transform active:scale-[0.96]`}
+            onClick={() => setCalcTab('rally')}
+            className={`min-h-[40px] rounded-lg px-2 text-xs font-extrabold uppercase transition-all ${
+              calcTab === 'rally'
+                ? 'pitstop-btn-red'
+                : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+            }`}
           >
-            <Delete className={isModal ? 'h-5 w-5' : 'h-6 w-6'} />
-          </button>
-          <button type="button" onClick={() => pressOperator('÷')} className={opBtnClass}>
-            ÷
-          </button>
-          <button type="button" onClick={() => pressOperator('×')} className={opBtnClass}>
-            ×
-          </button>
-
-          <button type="button" onClick={() => pressDigit('7')} className={numBtnClass}>
-            7
-          </button>
-          <button type="button" onClick={() => pressDigit('8')} className={numBtnClass}>
-            8
-          </button>
-          <button type="button" onClick={() => pressDigit('9')} className={numBtnClass}>
-            9
-          </button>
-          <button type="button" onClick={() => pressOperator('-')} className={opBtnClass}>
-            −
-          </button>
-
-          <button type="button" onClick={() => pressDigit('4')} className={numBtnClass}>
-            4
-          </button>
-          <button type="button" onClick={() => pressDigit('5')} className={numBtnClass}>
-            5
-          </button>
-          <button type="button" onClick={() => pressDigit('6')} className={numBtnClass}>
-            6
-          </button>
-          <button
-            type="button"
-            onClick={() => pressOperator('+')}
-            aria-label="Somar horas"
-            className={`pitstop-btn-red ${isModal ? 'min-h-[46px] text-2xl' : 'min-h-[54px] sm:min-h-[68px] text-3xl'} h-full rounded-xl font-black transition-transform active:scale-[0.95]`}
-          >
-            +
-          </button>
-
-          <button type="button" onClick={() => pressDigit('1')} className={numBtnClass}>
-            1
-          </button>
-          <button type="button" onClick={() => pressDigit('2')} className={numBtnClass}>
-            2
-          </button>
-          <button type="button" onClick={() => pressDigit('3')} className={numBtnClass}>
-            3
-          </button>
-          <button
-            type="button"
-            onClick={pressEquals}
-            className={`row-span-2 flex h-full items-center justify-center rounded-xl border border-emerald-500/50 bg-emerald-600 ${isModal ? 'text-2xl' : 'text-3xl sm:text-4xl'} font-black text-white shadow-lg transition-transform active:scale-[0.97] hover:bg-emerald-500`}
-          >
-            =
-          </button>
-
-          <button
-            type="button"
-            onClick={() => pressDigit('0')}
-            className={`${numBtnClass} col-span-2`}
-          >
-            0
-          </button>
-          <button type="button" onClick={() => pressDigit('00')} className={numBtnClass}>
-            00
+            Média / Dist. / Tempo
           </button>
         </div>
       </div>
+
+      {calcTab === 'time' ? (
+        <div className="flex flex-1 flex-col p-3 sm:p-4 gap-2.5 sm:gap-3">
+          {/* Two-line High-Contrast ATM Display + Quick Copy */}
+          <div
+            className={`rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-4 font-mono tabular-nums flex flex-col justify-center ${
+              isModal ? 'py-2.5' : 'py-3.5 sm:py-5'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleCopyDisplay(mainDisplay, 'time');
+                }}
+                disabled={Boolean(errorMsg)}
+                className="inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)] disabled:opacity-40"
+                title="Copiar horário exibido"
+              >
+                {copiedTime ? (
+                  <Check className="h-3 w-3 text-[var(--ps-emerald)]" />
+                ) : (
+                  <Copy className="h-3 w-3 text-[var(--ps-accent)]" />
+                )}
+                <span>{copiedTime ? 'Copiado' : 'Copiar'}</span>
+              </button>
+              <div className="min-h-[18px] truncate text-right text-xs sm:text-sm font-semibold text-[var(--ps-muted)]">
+                {historyText || (isScalarMode ? 'Multiplicador/divisor' : 'Hora:Min')}
+              </div>
+            </div>
+            <div
+              className={`mt-1 truncate text-right font-black tracking-tight tabular-nums ${
+                errorMsg
+                  ? 'text-xl text-[var(--ps-danger)]'
+                  : isModal
+                    ? 'text-3xl text-[var(--ps-text)] sm:text-4xl'
+                    : 'text-4xl text-[var(--ps-text)] sm:text-5xl'
+              }`}
+            >
+              {mainDisplay}
+            </div>
+          </div>
+
+          {/* Exact 4x5 High-Contrast Keypad Grid */}
+          <div className="grid flex-1 grid-cols-4 grid-rows-5 gap-2 font-mono">
+            <button
+              type="button"
+              onClick={clearAll}
+              className={`${isModal ? 'min-h-[48px] text-lg' : 'min-h-[54px] sm:min-h-[64px] text-2xl'} h-full rounded-xl border border-amber-500/40 bg-amber-500/15 font-black text-[var(--ps-amber)] transition-all active:scale-[0.96]`}
+            >
+              C
+            </button>
+            <button
+              type="button"
+              onClick={pressBackspace}
+              aria-label="Apagar último dígito"
+              className={`flex ${isModal ? 'min-h-[48px]' : 'min-h-[54px] sm:min-h-[64px]'} h-full items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] transition-all active:scale-[0.96]`}
+            >
+              <Delete className={isModal ? 'h-5 w-5' : 'h-6 w-6'} />
+            </button>
+            <button type="button" onClick={() => pressOperator('÷')} className={opBtnClass}>
+              ÷
+            </button>
+            <button type="button" onClick={() => pressOperator('×')} className={opBtnClass}>
+              ×
+            </button>
+
+            <button type="button" onClick={() => pressDigit('7')} className={numBtnClass}>
+              7
+            </button>
+            <button type="button" onClick={() => pressDigit('8')} className={numBtnClass}>
+              8
+            </button>
+            <button type="button" onClick={() => pressDigit('9')} className={numBtnClass}>
+              9
+            </button>
+            <button type="button" onClick={() => pressOperator('-')} className={opBtnClass}>
+              −
+            </button>
+
+            <button type="button" onClick={() => pressDigit('4')} className={numBtnClass}>
+              4
+            </button>
+            <button type="button" onClick={() => pressDigit('5')} className={numBtnClass}>
+              5
+            </button>
+            <button type="button" onClick={() => pressDigit('6')} className={numBtnClass}>
+              6
+            </button>
+            <button
+              type="button"
+              onClick={() => pressOperator('+')}
+              aria-label="Somar horas"
+              className={`pitstop-btn-red ${isModal ? 'min-h-[48px] text-2xl' : 'min-h-[54px] sm:min-h-[64px] text-3xl'} h-full rounded-xl font-black transition-all active:scale-[0.95]`}
+            >
+              +
+            </button>
+
+            <button type="button" onClick={() => pressDigit('1')} className={numBtnClass}>
+              1
+            </button>
+            <button type="button" onClick={() => pressDigit('2')} className={numBtnClass}>
+              2
+            </button>
+            <button type="button" onClick={() => pressDigit('3')} className={numBtnClass}>
+              3
+            </button>
+            <button
+              type="button"
+              onClick={pressEquals}
+              className={`row-span-2 flex h-full items-center justify-center rounded-xl border border-emerald-500/50 bg-emerald-600 ${isModal ? 'text-2xl' : 'text-3xl sm:text-4xl'} font-black text-white shadow-lg transition-all active:scale-[0.97] hover:bg-emerald-500`}
+            >
+              =
+            </button>
+
+            <button
+              type="button"
+              onClick={() => pressDigit('0')}
+              className={`${numBtnClass} col-span-2`}
+            >
+              0
+            </button>
+            <button type="button" onClick={() => pressDigit('00')} className={numBtnClass}>
+              00
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-1 flex-col justify-between p-3 sm:p-4 gap-3">
+          <div className="space-y-3">
+            {/* Target selector */}
+            <div>
+              <span className="ps-label block mb-1.5">Calcular</span>
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
+                {(
+                  [
+                    ['speed', 'Vel. Média'],
+                    ['time', 'Tempo'],
+                    ['distance', 'Distância'],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setSolveTarget(id)}
+                    className={`min-h-[44px] rounded-lg px-2 text-xs font-extrabold uppercase transition-all ${
+                      solveTarget === id
+                        ? 'pitstop-btn-red'
+                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* High-Contrast Result Card */}
+            <div className="rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] p-4 font-mono tabular-nums">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                  {solveTarget === 'speed'
+                    ? 'Velocidade Média'
+                    : solveTarget === 'time'
+                      ? 'Tempo do Trecho'
+                      : 'Distância Percorrida'}
+                </span>
+                <span className="rounded border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-0.5 text-[10px] font-extrabold text-[var(--ps-accent)] uppercase">
+                  {rallyResult.unit}
+                </span>
+              </div>
+              <p className="mt-1.5 text-4xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-5xl tabular-nums">
+                {rallyResult.main}
+              </p>
+              <p className="mt-2 text-xs font-bold text-[var(--ps-emerald)] tabular-nums">
+                {rallyResult.sub}
+              </p>
+            </div>
+
+            {/* Decimal Inputs */}
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              {solveTarget !== 'distance' && (
+                <label className="space-y-1">
+                  <span className="block text-xs font-bold text-[var(--ps-muted)] uppercase">
+                    Distância (km)
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={distInput}
+                    onChange={(e) => setDistInput(e.target.value)}
+                    placeholder="Ex: 4.50"
+                    className="min-h-[48px] w-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 font-mono text-base font-black text-[var(--ps-text)] tabular-nums focus:border-[var(--ps-accent)] focus:outline-none"
+                  />
+                </label>
+              )}
+
+              {solveTarget !== 'time' && (
+                <label className="space-y-1">
+                  <span className="block text-xs font-bold text-[var(--ps-muted)] uppercase">
+                    Tempo (min ou MM:SS)
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={timeInput}
+                    onChange={(e) => setTimeInput(e.target.value)}
+                    placeholder="Ex: 5 ou 05:30"
+                    className="min-h-[48px] w-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 font-mono text-base font-black text-[var(--ps-text)] tabular-nums focus:border-[var(--ps-accent)] focus:outline-none"
+                  />
+                </label>
+              )}
+
+              {solveTarget !== 'speed' && (
+                <label className="space-y-1 sm:col-span-2">
+                  <span className="block text-xs font-bold text-[var(--ps-muted)] uppercase">
+                    Velocidade Média (km/h)
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={speedInput}
+                    onChange={(e) => setSpeedInput(e.target.value)}
+                    placeholder="Ex: 54"
+                    className="min-h-[48px] w-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 font-mono text-base font-black text-[var(--ps-text)] tabular-nums focus:border-[var(--ps-accent)] focus:outline-none"
+                  />
+                </label>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setDistInput('');
+                setTimeInput('');
+                setSpeedInput('');
+              }}
+              className="pitstop-btn-metal inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl px-4 text-xs font-extrabold uppercase"
+            >
+              <RotateCcw className="h-4 w-4 text-[var(--ps-amber)]" />
+              <span>Limpar</span>
+            </button>
+            <button
+              type="button"
+              disabled={rallyResult.main.startsWith('--')}
+              onClick={() => {
+                void handleCopyDisplay(`${rallyResult.main} ${rallyResult.unit}`, 'rally');
+              }}
+              className="pitstop-btn-red inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl px-4 text-xs font-extrabold uppercase disabled:opacity-40"
+            >
+              {copiedRally ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              <span>{copiedRally ? 'Copiado!' : 'Copiar'}</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -8,6 +8,7 @@
 
 :root,
 [data-theme="pitstop"] {
+  color-scheme: dark;
   --ps-bg: #090A0D;
   --ps-surface: #111318;
   --ps-card: #181B22;
@@ -23,6 +24,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #FBBF24;
   --ps-emerald: #10B981;
+  --ps-danger: #FF3B30;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -30,6 +32,7 @@
 }
 
 [data-theme="pitstop_xl"] {
+  color-scheme: dark;
   font-size: 120%;
   --ps-bg: #090A0D;
   --ps-surface: #0E1015;
@@ -46,6 +49,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #FBBF24;
   --ps-emerald: #10B981;
+  --ps-danger: #FF453A;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -53,6 +57,7 @@
 }
 
 [data-theme="pitstop_light"] {
+  color-scheme: light;
   font-size: 100%;
   --ps-bg: #F5F7FA;
   --ps-surface: #FFFFFF;
@@ -69,6 +74,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #B45309;
   --ps-emerald: #047857;
+  --ps-danger: #C80500;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -76,6 +82,7 @@
 }
 
 [data-theme="pitstop_light_xl"] {
+  color-scheme: light;
   font-size: 120%;
   --ps-bg: #F5F7FA;
   --ps-surface: #FFFFFF;
@@ -92,6 +99,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #B45309;
   --ps-emerald: #047857;
+  --ps-danger: #C80500;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -100,6 +108,7 @@
 
 [data-theme="gt"],
 [data-theme="neo"] {
+  color-scheme: dark;
   font-size: 100%;
   --ps-bg: #090A0D;
   --ps-surface: #0E1015;
@@ -116,6 +125,7 @@
   --ps-accent-text: #090A0D;
   --ps-amber: #FACC15;
   --ps-emerald: #84CC16;
+  --ps-danger: #FF453A;
   --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
   --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
   --ps-font-mono: "Outfit", "JetBrains Mono", sans-serif;
@@ -123,6 +133,7 @@
 }
 
 [data-theme="neo_xl"] {
+  color-scheme: dark;
   font-size: 120%;
   --ps-bg: #090A0D;
   --ps-surface: #0E1015;
@@ -139,6 +150,7 @@
   --ps-accent-text: #090A0D;
   --ps-amber: #FACC15;
   --ps-emerald: #84CC16;
+  --ps-danger: #FF453A;
   --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
   --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
   --ps-font-mono: "Outfit", "JetBrains Mono", sans-serif;
@@ -146,6 +158,7 @@
 }
 
 [data-theme="daylight_pro"] {
+  color-scheme: light;
   font-size: 100%;
   --ps-bg: #F4F6F8;
   --ps-surface: #FFFFFF;
@@ -162,6 +175,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #B45309;
   --ps-emerald: #047857;
+  --ps-danger: #B91C1C;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -169,6 +183,7 @@
 }
 
 [data-theme="daylight_xl"] {
+  color-scheme: light;
   font-size: 120%;
   --ps-bg: #F4F6F8;
   --ps-surface: #FFFFFF;
@@ -185,6 +200,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #B45309;
   --ps-emerald: #047857;
+  --ps-danger: #B91C1C;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -192,6 +208,7 @@
 }
 
 [data-theme="rally_paper"] {
+  color-scheme: light;
   font-size: 112%;
   --ps-bg: #F7F4EC;
   --ps-surface: #FFFFFF;
@@ -208,6 +225,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #B45309;
   --ps-emerald: #047857;
+  --ps-danger: #B91C1C;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -215,6 +233,7 @@
 }
 
 [data-theme="solar_yellow_xl"] {
+  color-scheme: light;
   font-size: 122%;
   --ps-bg: #FEF08A;
   --ps-surface: #FFFFFF;
@@ -231,6 +250,7 @@
   --ps-accent-text: #FEF08A;
   --ps-amber: #92400E;
   --ps-emerald: #065F46;
+  --ps-danger: #991B1B;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -307,6 +327,7 @@
 }
 
 [data-theme="gulf_racing_xl"] {
+  color-scheme: light;
   font-size: 118%;
   --ps-bg: #E0F2FE;
   --ps-surface: #FFFFFF;
@@ -319,9 +340,11 @@
   --ps-muted: #0369A1;
   --ps-accent: #F97316;
   --ps-accent-2: #EA580C;
+  --ps-accent-soft: rgba(249, 115, 22, 0.16);
   --ps-accent-text: #FFFFFF;
   --ps-amber: #C2410C;
   --ps-emerald: #047857;
+  --ps-danger: #B91C1C;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -483,6 +506,7 @@
 }
 
 [data-theme="solar"] {
+  color-scheme: light;
   --ps-bg: #F1F5F9;
   --ps-surface: #FFFFFF;
   --ps-card: #F8FAFC;
@@ -498,6 +522,7 @@
   --ps-accent-text: #FFFFFF;
   --ps-amber: #B45309;
   --ps-emerald: #047857;
+  --ps-danger: #B91C1C;
   --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --ps-font-display: "Barlow Condensed", sans-serif;
   --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -687,16 +712,35 @@
     -webkit-tap-highlight-color: transparent;
     background-color: var(--ps-bg);
     color: var(--ps-text);
+    overflow-x: hidden;
   }
 
   h1, h2, .font-display-heading {
     text-wrap: balance;
   }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    transition:
+      transform 140ms cubic-bezier(0.16, 1, 0.3, 1),
+      background-color 150ms ease,
+      border-color 150ms ease,
+      color 150ms ease,
+      box-shadow 150ms ease,
+      opacity 150ms ease;
+  }
+
+  button:not(:disabled):active {
+    transform: scale(0.985);
+  }
 }
 
 .tabular-nums,
 .font-mono,
-.font-display {
+.font-display,
+input[type="number"],
+input[type="time"],
+input[type="date"] {
   font-variant-numeric: tabular-nums;
 }
 

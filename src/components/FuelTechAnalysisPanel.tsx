@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   ArrowLeft,
   Award,
   Crosshair,
-  Maximize2,
   Pause,
   Play,
   RotateCcw,
@@ -12,12 +10,8 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import {
-  analyzeTrackCornersAndBraking,
   buildTrackSectors,
   computeBrakePointOffsetNearDist,
-  computeFrictionCircleMetrics,
-  computeLapDeltaSeries,
-  computeLapTelemetrySummary,
   computeMultiLapSectorComparison,
   computeRunSectorMetrics,
   detectTelemetryCriticalPoints,
@@ -43,14 +37,13 @@ interface FuelTechAnalysisPanelProps {
   lap1Samples: VelocitySample[];
   lap2Samples: VelocitySample[];
   lap3Samples: VelocitySample[];
+  lapSelectorSlot?: React.ReactNode;
+  onSelectRefRun?: (runId: string) => void;
   onDeleteSession: () => void;
+  onDeleteRun?: (runId: string) => void;
 }
 
-const SLOT_COLORS = {
-  1: { hex: '#10B981', text: 'text-[#10B981]', border: 'border-[#10B981]/50', label: 'V1 Ref' },
-  2: { hex: '#FF2A2A', text: 'text-[#FF2A2A]', border: 'border-[#FF2A2A]/50', label: 'V2 Comp.A' },
-  3: { hex: '#38BDF8', text: 'text-[#38BDF8]', border: 'border-[#38BDF8]/50', label: 'V3 Comp.B' },
-} as const;
+type MapLayerMode = 'laps' | 'speed' | 'accel';
 
 function formatSectorSec(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return '--.--s';
@@ -67,11 +60,6 @@ function formatSignedKmh(delta: number | null): string {
   if (delta === null || !Number.isFinite(delta)) return '--';
   if (delta === 0) return '0';
   return `${delta > 0 ? '+' : ''}${delta}`;
-}
-
-function formatG(gVal: number | null): string {
-  if (gVal === null || !Number.isFinite(gVal)) return '--';
-  return `${gVal > 0 ? '+' : ''}${gVal.toFixed(2)}G`;
 }
 
 /**
@@ -159,19 +147,23 @@ function sampleSeriesInWindow(
 export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   sessionTrack,
   sessionRuns,
-  sessionOptimal,
   lap1,
   lap2,
   lap3,
   lap1Samples,
   lap2Samples,
   lap3Samples,
+  lapSelectorSlot,
+  onSelectRefRun,
   onDeleteSession,
+  onDeleteRun,
 }) => {
   const panel1Ref = useRef<SVGSVGElement | null>(null);
+  const panelTimeSlipRef = useRef<SVGSVGElement | null>(null);
   const panel2Ref = useRef<SVGSVGElement | null>(null);
   const panel3Ref = useRef<SVGSVGElement | null>(null);
   const fsPanelRef = useRef<SVGSVGElement | null>(null);
+  const fsTimeSlipRef = useRef<SVGSVGElement | null>(null);
   const isDraggingRef = useRef(false);
 
   const showLap2 = Boolean(lap2 && lap2Samples.length > 1 && lap2.id !== lap1?.id);
@@ -193,6 +185,10 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
   const [zoomSectorIdx, setZoomSectorIdx] = useState<number | null>(null);
   const [scrubDistM, setScrubDistM] = useState<number>(() => Math.round(maxDistM * 0.35));
+  const [mapLayerMode, setMapLayerMode] = useState<MapLayerMode>('laps');
+  const [showMapPeaks, setShowMapPeaks] = useState(false);
+  const [showMapSplits, setShowMapSplits] = useState(false);
+  const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string | null>(null);
   const [proFullscreen, setProFullscreen] = useState(false);
   const [proReplayPlaying, setProReplayPlaying] = useState(false);
 
@@ -242,15 +238,10 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   }, [viewStartM, viewEndM, proFullscreen]);
 
   useEffect(() => {
-    if (!proFullscreen) {
-      setProReplayPlaying(false);
-    }
-  }, [proFullscreen]);
-
-  useEffect(() => {
-    if (!proFullscreen || !proReplayPlaying) return;
-    const totalM = Math.round(maxDistM);
-    const stepM = Math.max(5, Math.round(totalM / 220));
+    if (!proReplayPlaying) return;
+    const minM = proFullscreen ? 0 : Math.round(viewStartM);
+    const totalM = proFullscreen ? Math.round(maxDistM) : Math.round(viewEndM);
+    const stepM = Math.max(4, Math.round((totalM - minM) / 220));
     const timer = window.setInterval(() => {
       setScrubDistM((prev) => {
         const next = prev + stepM;
@@ -262,61 +253,22 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       });
     }, 80);
     return () => window.clearInterval(timer);
-  }, [proFullscreen, proReplayPlaying, maxDistM]);
+  }, [proFullscreen, proReplayPlaying, maxDistM, viewStartM, viewEndM]);
 
-  const deltaSeries2 = useMemo(
-    () => (showLap2 ? computeLapDeltaSeries(lap1Samples, lap2Samples, 140) : []),
-    [showLap2, lap1Samples, lap2Samples]
-  );
-
-  const deltaSeries3 = useMemo(
-    () => (showLap3 ? computeLapDeltaSeries(lap1Samples, lap3Samples, 140) : []),
-    [showLap3, lap1Samples, lap3Samples]
-  );
-
-  const summaryCards = useMemo(() => {
-    const list: Array<{
-      slot: 1 | 2 | 3;
-      run: VelocityRun;
-      summary: ReturnType<typeof computeLapTelemetrySummary>;
-      totalDeltaSec: number | null;
-    }> = [];
-
-    if (lap1) {
-      list.push({
-        slot: 1,
-        run: lap1,
-        summary: computeLapTelemetrySummary(lap1),
-        totalDeltaSec: null,
-      });
-    }
-    if (showLap2 && lap2) {
-      list.push({
-        slot: 2,
-        run: lap2,
-        summary: computeLapTelemetrySummary(lap2, deltaSeries2),
-        totalDeltaSec: Number(((lap2.totalMs - (lap1?.totalMs ?? lap2.totalMs)) / 1000).toFixed(2)),
-      });
-    }
-    if (showLap3 && lap3) {
-      list.push({
-        slot: 3,
-        run: lap3,
-        summary: computeLapTelemetrySummary(lap3, deltaSeries3),
-        totalDeltaSec: Number(((lap3.totalMs - (lap1?.totalMs ?? lap3.totalMs)) / 1000).toFixed(2)),
-      });
-    }
-    return list;
-  }, [lap1, lap2, lap3, showLap2, showLap3, deltaSeries2, deltaSeries3]);
-
-  // Matriz completa de voltas & parciais (Melhor Volta como referência única)
+  // Matriz completa de voltas & parciais (Referência selecionável pelo piloto ou Melhor Volta)
   const raceChronoMatrix = useMemo(() => {
     const orderedRuns = [...sessionRuns].sort((a, b) => a.runNumber - b.runNumber);
     const sectors = buildTrackSectors(sessionTrack, orderedRuns);
+    const validRuns = orderedRuns.filter((r) => r.totalMs > 0);
     const bestRun =
-      orderedRuns.length > 0
-        ? [...orderedRuns].sort((a, b) => a.totalMs - b.totalMs)[0]
-        : null;
+      validRuns.length > 0
+        ? [...validRuns].sort((a, b) => a.totalMs - b.totalMs)[0]
+        : orderedRuns.length > 0
+          ? [...orderedRuns].sort((a, b) => a.totalMs - b.totalMs)[0]
+          : null;
+
+    const refRun =
+      (lap1 ? orderedRuns.find((r) => r.id === lap1.id) : null) ?? bestRun;
 
     const perRunMetrics = orderedRuns.map((run) => ({
       run,
@@ -326,6 +278,10 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     const bestRunMetrics =
       bestRun
         ? perRunMetrics.find((item) => item.run.id === bestRun.id)?.metrics ?? []
+        : [];
+    const refRunMetrics =
+      refRun
+        ? perRunMetrics.find((item) => item.run.id === refRun.id)?.metrics ?? []
         : [];
 
     const bestSectorMsList: Array<number | null> = sectors.map((_, secIdx) => {
@@ -339,95 +295,50 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       return best;
     });
 
+    const hasCompleteTheoretical =
+      bestSectorMsList.length > 0 &&
+      bestSectorMsList.every((ms): ms is number => typeof ms === 'number' && ms > 0);
+    const theoreticalBestMs = hasCompleteTheoretical
+      ? bestSectorMsList.reduce((acc, ms) => acc + ms, 0)
+      : bestRun?.totalMs ?? null;
+    const potentialGainSec =
+      theoreticalBestMs !== null && bestRun && bestRun.totalMs > 0
+        ? Number(((theoreticalBestMs - bestRun.totalMs) / 1000).toFixed(2))
+        : null;
+
+    let consistencyPct: number | null = null;
+    if (validRuns.length === 1) {
+      consistencyPct = 100;
+    } else if (validRuns.length >= 2) {
+      const mean = validRuns.reduce((sum, r) => sum + r.totalMs, 0) / validRuns.length;
+      if (mean > 0) {
+        const variance =
+          validRuns.reduce((sum, r) => sum + (r.totalMs - mean) ** 2, 0) / validRuns.length;
+        const stdDev = Math.sqrt(variance);
+        consistencyPct = Math.max(0, Math.min(100, Math.round((1 - stdDev / mean) * 100)));
+      }
+    }
+
     return {
       sectors,
       orderedRuns: perRunMetrics,
       bestRun,
+      refRun,
       bestRunMetrics,
+      refRunMetrics,
       bestSectorMsList,
+      theoreticalBestMs,
+      potentialGainSec,
+      consistencyPct,
     };
-  }, [sessionRuns, sessionTrack]);
+  }, [sessionRuns, sessionTrack, lap1]);
 
-  // Círculo de Atrito / Diagrama G-G (V1, V2, V3)
-  const ggAnalysis = useMemo(() => {
-    const downsampleGG = (raw: VelocitySample[], maxPts = 220) => {
-      const normalized = ensureTraceGForces(raw);
-      if (normalized.length <= maxPts) {
-        return normalized.map((s) => ({
-          latG: s.accelLatG ?? 0,
-          longG: s.accelLongG ?? 0,
-        }));
-      }
-      const step = normalized.length / maxPts;
-      const out: Array<{ latG: number; longG: number }> = [];
-      for (let i = 0; i < maxPts; i += 1) {
-        const idx = Math.min(normalized.length - 1, Math.floor(i * step));
-        const s = normalized[idx];
-        out.push({
-          latG: s.accelLatG ?? 0,
-          longG: s.accelLongG ?? 0,
-        });
-      }
-      return out;
-    };
-
-    const laps: Array<{
-      slot: 1 | 2 | 3;
-      runNumber: number;
-      points: Array<{ latG: number; longG: number }>;
-      metrics: ReturnType<typeof computeFrictionCircleMetrics>;
-    }> = [];
-
-    if (lap1 && lap1Samples.length > 1) {
-      laps.push({
-        slot: 1,
-        runNumber: lap1.runNumber,
-        points: downsampleGG(lap1Samples),
-        metrics: computeFrictionCircleMetrics(lap1Samples),
-      });
-    }
-    if (showLap2 && lap2 && lap2Samples.length > 1) {
-      laps.push({
-        slot: 2,
-        runNumber: lap2.runNumber,
-        points: downsampleGG(lap2Samples),
-        metrics: computeFrictionCircleMetrics(lap2Samples),
-      });
-    }
-    if (showLap3 && lap3 && lap3Samples.length > 1) {
-      laps.push({
-        slot: 3,
-        runNumber: lap3.runNumber,
-        points: downsampleGG(lap3Samples),
-        metrics: computeFrictionCircleMetrics(lap3Samples),
-      });
-    }
-
-    let peakAxis = 1.0;
-    for (const l of laps) {
-      for (const p of l.points) {
-        peakAxis = Math.max(peakAxis, Math.abs(p.latG), Math.abs(p.longG));
-      }
-    }
-    const maxScaleG = peakAxis > 1.25 ? 1.5 : 1.2;
-    return { laps, maxScaleG };
-  }, [lap1, lap2, lap3, lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
-
-  // Análise Automática de Curvas e Freadas (Entrada / Ápice / Saída)
-  const cornerAnalysis = useMemo(() => {
-    const laps: Array<{ slot: 1 | 2 | 3; runNumber: number; samples: VelocitySample[] }> = [];
-    if (lap1 && lap1Samples.length > 5) {
-      laps.push({ slot: 1, runNumber: lap1.runNumber, samples: lap1Samples });
-    }
-    if (showLap2 && lap2 && lap2Samples.length > 5) {
-      laps.push({ slot: 2, runNumber: lap2.runNumber, samples: lap2Samples });
-    }
-    if (showLap3 && lap3 && lap3Samples.length > 5) {
-      laps.push({ slot: 3, runNumber: lap3.runNumber, samples: lap3Samples });
-    }
-    if (laps.length === 0) return [];
-    return analyzeTrackCornersAndBraking(laps);
-  }, [lap1, lap2, lap3, lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
+  const jumpToSectorStart = (fromDistKm: number) => {
+    const targetM = Math.max(0, Math.min(Math.round(maxDistM), Math.round(fromDistKm * 1000)));
+    setProReplayPlaying(false);
+    setZoomSectorIdx(null);
+    setScrubDistM(targetM);
+  };
 
   // Resample traces cleanly across the active zoom window [viewStartM, viewEndM]
   const winSamples1 = useMemo(
@@ -500,6 +411,13 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   const p1Bottom = p1Top + p1PlotH;
   const zoneStripY = p1Bottom + 4;
   const zoneStripH = 7;
+
+  // Panel Time Slip (ΔT contínuo em segundos vs REF)
+  const pTsH = 124;
+  const pTsTop = 16;
+  const pTsPlotH = 86;
+  const pTsMidY = pTsTop + pTsPlotH / 2;
+  const pTsBottom = pTsTop + pTsPlotH;
 
   // Panel 2: Virtual Pedal (+G Accel / -G Brake)
   const p2H = 130;
@@ -643,6 +561,76 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         .join(' '),
     [winSamples3, viewStartM, viewEndM, maxLongGScale]
   );
+
+  // Time Slip / Delta de Tempo Contínuo (ΔT em segundos): negativo = mais rápido que REF (verde), positivo = mais lento (vermelho)
+  const timeSlip2Pts = useMemo(() => {
+    if (!showLap2 || winSamples1.length < 2 || winSamples2.length < 2) return [];
+    const commonMaxM = Math.min(maxDist1, maxDist2);
+    const pts: Array<{ distM: number; deltaSec: number }> = [];
+    const len = Math.min(winSamples1.length, winSamples2.length);
+    for (let i = 0; i < len; i += 1) {
+      const s1 = winSamples1[i];
+      const s2 = winSamples2[i];
+      const dM = s1.distKm * 1000;
+      if (dM > commonMaxM + 5) break;
+      pts.push({
+        distM: dM,
+        deltaSec: Number(((s2.stageElapsedMs - s1.stageElapsedMs) / 1000).toFixed(3)),
+      });
+    }
+    return pts;
+  }, [showLap2, winSamples1, winSamples2, maxDist1, maxDist2]);
+
+  const timeSlip3Pts = useMemo(() => {
+    if (!showLap3 || winSamples1.length < 2 || winSamples3.length < 2) return [];
+    const commonMaxM = Math.min(maxDist1, maxDist3);
+    const pts: Array<{ distM: number; deltaSec: number }> = [];
+    const len = Math.min(winSamples1.length, winSamples3.length);
+    for (let i = 0; i < len; i += 1) {
+      const s1 = winSamples1[i];
+      const s3 = winSamples3[i];
+      const dM = s1.distKm * 1000;
+      if (dM > commonMaxM + 5) break;
+      pts.push({
+        distM: dM,
+        deltaSec: Number(((s3.stageElapsedMs - s1.stageElapsedMs) / 1000).toFixed(3)),
+      });
+    }
+    return pts;
+  }, [showLap3, winSamples1, winSamples3, maxDist1, maxDist3]);
+
+  const primaryTimeSlipPts = showLap2 ? timeSlip2Pts : timeSlip3Pts;
+  const maxTimeSlipScaleSec = useMemo(() => {
+    const peak = Math.max(
+      0.5,
+      ...timeSlip2Pts.map((p) => Math.abs(p.deltaSec)),
+      ...timeSlip3Pts.map((p) => Math.abs(p.deltaSec))
+    );
+    return Math.min(15, Math.ceil(peak * 2) / 2);
+  }, [timeSlip2Pts, timeSlip3Pts]);
+
+  // Convenção visual RaceChrono/Racemator: mais rápido (-ΔT) sobe acima da linha 0.00s (verde), mais lento (+ΔT) desce abaixo (vermelho)
+  const yAtTimeSlip = (deltaSec: number) => {
+    const clamped = Math.max(-maxTimeSlipScaleSec, Math.min(maxTimeSlipScaleSec, -deltaSec));
+    return pTsMidY - (clamped / maxTimeSlipScaleSec) * (pTsPlotH / 2);
+  };
+
+  const primaryTimeSlipPolys = useMemo(
+    () =>
+      buildBicolorAreaPolygons(
+        primaryTimeSlipPts.map((p) => ({ x: xAtM(p.distM), val: -p.deltaSec })),
+        (gainVal) => yAtTimeSlip(-gainVal),
+        pTsMidY
+      ),
+    [primaryTimeSlipPts, viewStartM, viewEndM, maxTimeSlipScaleSec]
+  );
+
+  const timeSlipLine3 = useMemo(() => {
+    if (!showLap2 || timeSlip3Pts.length < 2) return '';
+    return timeSlip3Pts
+      .map((p) => `${xAtM(p.distM).toFixed(1)},${yAtTimeSlip(p.deltaSec).toFixed(1)}`)
+      .join(' ');
+  }, [showLap2, timeSlip3Pts, viewStartM, viewEndM, maxTimeSlipScaleSec]);
 
   // Panel 3: Lateral G
   const { latLine1, latArea1 } = useMemo(() => {
@@ -855,6 +843,74 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     [lap1Samples]
   );
 
+  const fsTimeSlip2Pts = useMemo(() => {
+    if (!showLap2 || fsSamples1.length < 2 || fsSamples2.length < 2) return [];
+    const commonMaxM = Math.min(maxDist1, maxDist2);
+    const pts: Array<{ distM: number; deltaSec: number }> = [];
+    const len = Math.min(fsSamples1.length, fsSamples2.length);
+    for (let i = 0; i < len; i += 1) {
+      const s1 = fsSamples1[i];
+      const s2 = fsSamples2[i];
+      const dM = s1.distKm * 1000;
+      if (dM > commonMaxM + 5) break;
+      pts.push({
+        distM: dM,
+        deltaSec: Number(((s2.stageElapsedMs - s1.stageElapsedMs) / 1000).toFixed(3)),
+      });
+    }
+    return pts;
+  }, [showLap2, fsSamples1, fsSamples2, maxDist1, maxDist2]);
+
+  const fsTimeSlip3Pts = useMemo(() => {
+    if (!showLap3 || fsSamples1.length < 2 || fsSamples3.length < 2) return [];
+    const commonMaxM = Math.min(maxDist1, maxDist3);
+    const pts: Array<{ distM: number; deltaSec: number }> = [];
+    const len = Math.min(fsSamples1.length, fsSamples3.length);
+    for (let i = 0; i < len; i += 1) {
+      const s1 = fsSamples1[i];
+      const s3 = fsSamples3[i];
+      const dM = s1.distKm * 1000;
+      if (dM > commonMaxM + 5) break;
+      pts.push({
+        distM: dM,
+        deltaSec: Number(((s3.stageElapsedMs - s1.stageElapsedMs) / 1000).toFixed(3)),
+      });
+    }
+    return pts;
+  }, [showLap3, fsSamples1, fsSamples3, maxDist1, maxDist3]);
+
+  const fsPrimaryTimeSlipPts = showLap2 ? fsTimeSlip2Pts : fsTimeSlip3Pts;
+  const fsMaxTimeSlipScaleSec = useMemo(() => {
+    const peak = Math.max(
+      0.5,
+      ...fsTimeSlip2Pts.map((p) => Math.abs(p.deltaSec)),
+      ...fsTimeSlip3Pts.map((p) => Math.abs(p.deltaSec))
+    );
+    return Math.min(15, Math.ceil(peak * 2) / 2);
+  }, [fsTimeSlip2Pts, fsTimeSlip3Pts]);
+
+  const fsYAtTimeSlip = (deltaSec: number) => {
+    const clamped = Math.max(-fsMaxTimeSlipScaleSec, Math.min(fsMaxTimeSlipScaleSec, -deltaSec));
+    return pTsMidY - (clamped / fsMaxTimeSlipScaleSec) * (pTsPlotH / 2);
+  };
+
+  const fsPrimaryTimeSlipPolys = useMemo(
+    () =>
+      buildBicolorAreaPolygons(
+        fsPrimaryTimeSlipPts.map((p) => ({ x: fsXAtM(p.distM), val: -p.deltaSec })),
+        (gainVal) => fsYAtTimeSlip(-gainVal),
+        pTsMidY
+      ),
+    [fsPrimaryTimeSlipPts, maxDistM, fsMaxTimeSlipScaleSec]
+  );
+
+  const fsTimeSlipLine3 = useMemo(() => {
+    if (!showLap2 || fsTimeSlip3Pts.length < 2) return '';
+    return fsTimeSlip3Pts
+      .map((p) => `${fsXAtM(p.distM).toFixed(1)},${fsYAtTimeSlip(p.deltaSec).toFixed(1)}`)
+      .join(' ');
+  }, [showLap2, fsTimeSlip3Pts, maxDistM, fsMaxTimeSlipScaleSec]);
+
   const fsYTicksKmh = [fsMaxSpd, Math.round(fsMaxSpd * 0.5), 0];
   const fsXTicksM = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxDistM * f));
   const fsScrubX = fsXAtM(scrubDistM);
@@ -870,82 +926,86 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* CTA: ABRIR ANÁLISE PRO (TELA CHEIA) */}
-      {lap1Samples.length > 1 && (
-        <button
-          type="button"
-          onClick={() => setProFullscreen(true)}
-          className="pitstop-btn-red flex min-h-[48px] w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left shadow-lg transition-transform active:scale-[0.99]"
-        >
-          <span className="flex items-center gap-2.5">
-            <Activity className="h-5 w-5 shrink-0" />
-            <span>
-              <span className="block font-['Barlow_Condensed'] text-base font-black tracking-wide uppercase sm:text-lg">
-                ABRIR ANÁLISE PRO (TELA CHEIA)
-              </span>
-              <span className="block font-mono text-[10px] opacity-90">
-                Mapa Satélite + Gráfico Sincronizado + Controle de Distância e Replay
-              </span>
-            </span>
-          </span>
-          <Maximize2 className="h-4 w-4 shrink-0" />
-        </button>
-      )}
-
-      {/* 0. DESTAQUE MELHOR VOLTA & MATRIZ GERAL DE VOLTAS/PARCIAIS */}
+      {/* 1. MELHOR VOLTA & MATRIZ GERAL DE VOLTAS & PARCIAIS NO TOPO */}
       <div className="space-y-2.5">
-        {/* Card Único de Destaque: Melhor Volta (Best Lap) */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#10B981]/50 bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] shadow-sm">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-full border-2 border-[#10B981] bg-[#10B981]/15 font-mono">
-              <Award className="h-4 w-4 text-[var(--ps-emerald)]" />
-              <span className="text-[9px] font-black text-[var(--ps-emerald)]">
-                {raceChronoMatrix.bestRun ? `#${raceChronoMatrix.bestRun.runNumber}` : '--'}
-              </span>
+        <div className="rounded-2xl border border-[#10B981]/50 bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] shadow-sm space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-full border-2 border-[#10B981] bg-[#10B981]/15 font-mono">
+                <Award className="h-4 w-4 text-[var(--ps-emerald)]" />
+                <span className="text-[9px] font-black text-[var(--ps-emerald)]">
+                  {raceChronoMatrix.bestRun ? `#${raceChronoMatrix.bestRun.runNumber}` : '--'}
+                </span>
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-extrabold tracking-wider text-[var(--ps-emerald)] uppercase">
+                  Melhor Volta · Referência da Sessão
+                </p>
+                <p className="font-mono text-2xl font-black leading-tight text-[var(--ps-text)] tabular-nums sm:text-3xl truncate">
+                  {formatStageDuration(raceChronoMatrix.bestRun?.totalMs ?? null)}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="text-[10px] font-extrabold tracking-wider text-[var(--ps-emerald)] uppercase">
-                Melhor Volta · Referência da Sessão
-              </p>
-              <p className="font-mono text-2xl font-black leading-tight text-[var(--ps-text)] tabular-nums sm:text-3xl truncate">
-                {formatStageDuration(raceChronoMatrix.bestRun?.totalMs ?? null)}
-              </p>
+
+            <div className="flex flex-wrap items-center gap-4 font-mono text-xs tabular-nums">
+              <div>
+                <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máx</p>
+                <p className="font-extrabold text-[var(--ps-text)]">
+                  {raceChronoMatrix.bestRun ? `${raceChronoMatrix.bestRun.maxSpeedKmh} km/h` : '--'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Distância</p>
+                <p className="font-extrabold text-[var(--ps-text)]">
+                  {raceChronoMatrix.bestRun ? `${raceChronoMatrix.bestRun.distanceKm.toFixed(2)} km` : '--'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Voltas</p>
+                <p className="font-extrabold text-[var(--ps-emerald)]">
+                  {raceChronoMatrix.orderedRuns.length}
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 font-mono text-xs tabular-nums">
-            <div>
-              <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máx</p>
-              <p className="font-extrabold text-[var(--ps-text)]">
-                {raceChronoMatrix.bestRun ? `${raceChronoMatrix.bestRun.maxSpeedKmh} km/h` : '--'}
-              </p>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--ps-border)] pt-2 font-mono text-[11px] tabular-nums">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                Volta Ideal:
+              </span>
+              <span className="font-black text-[var(--ps-text)]">
+                {formatStageDuration(raceChronoMatrix.theoreticalBestMs)}
+              </span>
+              {raceChronoMatrix.potentialGainSec !== null && (
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold ${
+                    raceChronoMatrix.potentialGainSec < 0
+                      ? 'bg-emerald-500/15 text-[var(--ps-emerald)]'
+                      : 'bg-[var(--ps-card)] text-[var(--ps-muted)]'
+                  }`}
+                >
+                  {formatSignedSec(raceChronoMatrix.potentialGainSec)}
+                </span>
+              )}
             </div>
-            <div>
-              <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Distância</p>
-              <p className="font-extrabold text-[var(--ps-text)]">
-                {raceChronoMatrix.bestRun ? `${raceChronoMatrix.bestRun.distanceKm.toFixed(2)} km` : '--'}
-              </p>
-            </div>
-            <div>
-              <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Voltas</p>
-              <p className="font-extrabold text-[var(--ps-emerald)]">
-                {raceChronoMatrix.orderedRuns.length}
-              </p>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                Consistência:
+              </span>
+              <span className="rounded bg-[var(--ps-card)] px-1.5 py-0.5 text-[11px] font-black text-[var(--ps-amber)]">
+                {raceChronoMatrix.consistencyPct !== null ? `${raceChronoMatrix.consistencyPct}%` : '--'}
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Tabela Geral Detalhada de Todas as Voltas & Parciais (Estilo Matriz RaceChrono) */}
         <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <div>
-              <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-                Matriz Geral de Voltas &amp; Parciais
-              </h3>
-              <p className="font-mono text-[10px] text-[var(--ps-muted)]">
-                Referência: Melhor Volta · Verde = Recorde da parcial · Vermelho = Acima da Melhor Volta
-              </p>
-            </div>
+            <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
+              Matriz Geral de Voltas &amp; Parciais
+            </h3>
             <button
               type="button"
               onClick={onDeleteSession}
@@ -965,68 +1025,104 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   <th className="px-2 py-2 text-right whitespace-nowrap">Delta</th>
                   {raceChronoMatrix.sectors.map((sec) => (
                     <th key={`hdr_p_${sec.index}`} className="px-2 py-2 text-right whitespace-nowrap">
-                      P{sec.index}
+                      <button
+                        type="button"
+                        onClick={() => jumpToSectorStart(sec.fromDistKm)}
+                        title={`Ir para o início da Parcial ${sec.index} no mapa e gráfico`}
+                        className="cursor-pointer font-bold uppercase text-[var(--ps-muted)] hover:text-[var(--ps-amber)] hover:underline"
+                      >
+                        P{sec.index}
+                      </button>
                     </th>
                   ))}
-                  <th className="py-2 pl-2 text-right whitespace-nowrap">Dist.</th>
+                  <th className="px-2 py-2 text-right whitespace-nowrap">Dist.</th>
+                  {onDeleteRun && <th className="py-2 pl-2 text-right whitespace-nowrap" aria-label="Ações" />}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--ps-border)]">
-                {/* Linhas Reais #1, #2, #3... */}
                 {raceChronoMatrix.orderedRuns.map(({ run, metrics }) => {
                   const isBestLap = raceChronoMatrix.bestRun?.id === run.id;
-                  const deltaVsBestSec =
-                    raceChronoMatrix.bestRun && run.totalMs > 0
-                      ? Number(((run.totalMs - raceChronoMatrix.bestRun.totalMs) / 1000).toFixed(2))
+                  const isRefLap = raceChronoMatrix.refRun?.id === run.id;
+                  const deltaVsRefSec =
+                    raceChronoMatrix.refRun && run.totalMs > 0 && raceChronoMatrix.refRun.totalMs > 0
+                      ? Number(((run.totalMs - raceChronoMatrix.refRun.totalMs) / 1000).toFixed(2))
                       : null;
+                  const isConfirmingDelete = confirmDeleteRunId === run.id;
 
                   return (
                     <tr
                       key={`mtx_${run.id}`}
-                      className={isBestLap ? 'bg-emerald-500/10' : 'hover:bg-[var(--ps-card)]'}
+                      className={
+                        isRefLap
+                          ? 'bg-emerald-500/12'
+                          : isBestLap
+                            ? 'bg-emerald-500/5'
+                            : 'hover:bg-[var(--ps-card)]'
+                      }
                     >
                       <td className="py-2 pr-2 whitespace-nowrap font-extrabold text-[var(--ps-text)]">
-                        #{run.runNumber}
-                        {isBestLap && (
-                          <span className="ml-1 rounded bg-emerald-500/20 px-1 py-0.5 text-[9px] text-[var(--ps-emerald)]">
-                            BEST
-                          </span>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => onSelectRefRun?.(run.id)}
+                          title={
+                            isRefLap
+                              ? `Volta #${run.runNumber} fixada como Referência (REF)`
+                              : `Toque para fixar Volta #${run.runNumber} como Referência (REF)`
+                          }
+                          className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-black transition-colors ${
+                            isRefLap
+                              ? 'border-[var(--ps-emerald)] bg-emerald-500/20 text-[var(--ps-emerald)]'
+                              : 'border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-text)] hover:border-[var(--ps-emerald)] hover:text-[var(--ps-emerald)]'
+                          }`}
+                        >
+                          <span>#{run.runNumber}</span>
+                          {isRefLap && (
+                            <span className="rounded bg-[var(--ps-emerald)] px-1 py-px text-[8px] font-black text-black">
+                              REF
+                            </span>
+                          )}
+                          {isBestLap && (
+                            <span className="rounded bg-amber-500/20 px-1 py-px text-[8px] font-black text-[var(--ps-amber)]">
+                              BEST
+                            </span>
+                          )}
+                        </button>
                       </td>
                       <td className="px-2 py-2 whitespace-nowrap font-black text-[var(--ps-text)]">
                         {formatStageDuration(run.totalMs)}
                       </td>
                       <td
                         className={`px-2 py-2 text-right whitespace-nowrap font-extrabold ${
-                          deltaVsBestSec === null
+                          deltaVsRefSec === null
                             ? 'text-[var(--ps-muted)]'
-                            : deltaVsBestSec <= 0
+                            : isRefLap || deltaVsRefSec <= 0
                               ? 'text-[var(--ps-emerald)]'
                               : 'text-[#FF2A2A]'
                         }`}
                       >
-                        {deltaVsBestSec === null
+                        {deltaVsRefSec === null
                           ? '--'
-                          : isBestLap
+                          : isRefLap
                             ? '0.00s'
-                            : formatSignedSec(deltaVsBestSec)}
+                            : formatSignedSec(deltaVsRefSec)}
                       </td>
                       {metrics.map((m, idx) => {
                         const secBest = raceChronoMatrix.bestSectorMsList[idx];
-                        const bestLapSecMs =
-                          raceChronoMatrix.bestRunMetrics[idx]?.durationMs ?? secBest;
+                        const refLapSecMs =
+                          raceChronoMatrix.refRunMetrics[idx]?.durationMs ?? secBest;
                         const isSecRecord =
                           m.durationMs !== null &&
                           secBest !== null &&
                           Math.abs(m.durationMs - secBest) <= 15;
-                        const isFasterThanBestLap =
+                        const isFasterThanRefLap =
                           m.durationMs !== null &&
-                          bestLapSecMs !== null &&
-                          m.durationMs - bestLapSecMs < -15;
+                          refLapSecMs !== null &&
+                          m.durationMs - refLapSecMs < -15;
                         const isSlower =
                           m.durationMs !== null &&
-                          bestLapSecMs !== null &&
-                          m.durationMs - bestLapSecMs > 15;
+                          refLapSecMs !== null &&
+                          m.durationMs - refLapSecMs > 15;
+                        const sec = raceChronoMatrix.sectors[idx];
 
                         return (
                           <td
@@ -1034,20 +1130,66 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                             className={`px-2 py-2 text-right whitespace-nowrap font-bold ${
                               isSecRecord
                                 ? 'bg-emerald-500/15 text-[var(--ps-emerald)] font-black'
-                                : isFasterThanBestLap
+                                : isFasterThanRefLap
                                   ? 'text-[var(--ps-emerald)]'
                                   : isSlower
                                     ? 'text-[#FF2A2A]'
                                     : 'text-[var(--ps-text)]'
                             }`}
                           >
-                            {formatSectorSec(m.durationMs)}
+                            {sec ? (
+                              <button
+                                type="button"
+                                onClick={() => jumpToSectorStart(sec.fromDistKm)}
+                                title={`Ir para P${sec.index} no mapa e gráfico`}
+                                className="cursor-pointer hover:underline"
+                              >
+                                {formatSectorSec(m.durationMs)}
+                              </button>
+                            ) : (
+                              formatSectorSec(m.durationMs)
+                            )}
                           </td>
                         );
                       })}
-                      <td className="py-2 pl-2 text-right whitespace-nowrap text-[var(--ps-muted)]">
+                      <td className="px-2 py-2 text-right whitespace-nowrap text-[var(--ps-muted)]">
                         {run.distanceKm.toFixed(2)}km
                       </td>
+                      {onDeleteRun && (
+                        <td className="py-2 pl-2 text-right whitespace-nowrap">
+                          {isConfirmingDelete ? (
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setConfirmDeleteRunId(null);
+                                  onDeleteRun(run.id);
+                                }}
+                                className="rounded bg-red-500 px-1.5 py-0.5 text-[9px] font-black text-white hover:bg-red-600"
+                              >
+                                Excluir
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteRunId(null)}
+                                className="rounded border border-[var(--ps-border)] bg-[var(--ps-card)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+                              >
+                                Não
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteRunId(run.id)}
+                              title={`Excluir volta #${run.runNumber}`}
+                              aria-label={`Excluir volta #${run.runNumber}`}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--ps-muted)] transition-colors hover:bg-red-500/15 hover:text-red-500"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -1057,459 +1199,18 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         </div>
       </div>
 
-      {/* 1. CARDS DE RESUMO COMPARATIVO (V1, V2, V3) */}
-      <div className="space-y-2">
-        <div
-          className={`grid grid-cols-1 gap-2 ${
-            summaryCards.length === 3
-              ? 'md:grid-cols-3'
-              : summaryCards.length === 2
-                ? 'sm:grid-cols-2'
-                : 'grid-cols-1'
-          }`}
-        >
-          {summaryCards.map(({ slot, run, summary, totalDeltaSec }) => {
-            const style = SLOT_COLORS[slot];
-            const isRef = slot === 1;
-            const totalBar = Math.max(1, summary.accelPct + summary.brakePct);
-            const accelWidth = Math.round((summary.accelPct / Math.max(100, totalBar)) * 100);
-            const brakeWidth = Math.round((summary.brakePct / Math.max(100, totalBar)) * 100);
+      {/* 2. SELETORES DE VOLTAS (V1 / V2 / V3) */}
+      {lapSelectorSlot}
 
-            return (
-              <div
-                key={`summary_card_${slot}_${run.id}`}
-                className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2"
-              >
-                <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] pb-1.5">
-                  <span className={`font-mono text-[11px] font-black uppercase ${style.text}`}>
-                    {style.label} · #{run.runNumber}
-                  </span>
-                  <div className="text-right font-mono tabular-nums">
-                    <span className="text-sm font-black text-[var(--ps-text)]">
-                      {formatStageDuration(run.totalMs)}
-                    </span>
-                    {!isRef && totalDeltaSec !== null && (
-                      <span
-                        className={`ml-1.5 text-xs font-extrabold ${
-                          totalDeltaSec <= 0 ? 'text-[var(--ps-emerald)]' : 'text-[#FF2A2A]'
-                        }`}
-                      >
-                        {formatSignedSec(totalDeltaSec)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 font-mono text-[11px] tabular-nums">
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Vel. Máx</span>
-                    <strong className="text-[var(--ps-text)]">{summary.maxSpeedKmh} km/h</strong>
-                  </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Vel. Méd</span>
-                    <strong className="text-[var(--ps-text)]">{summary.avgSpeedKmh} km/h</strong>
-                  </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Vantagem</span>
-                    <strong className={isRef ? 'text-[var(--ps-muted)]' : 'text-[var(--ps-emerald)]'}>
-                      {isRef
-                        ? 'Ref. 0.00s'
-                        : summary.bestAdvantageSec !== null
-                          ? formatSignedSec(summary.bestAdvantageSec)
-                          : '--'}
-                    </strong>
-                  </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] text-[var(--ps-muted)] uppercase">Atraso</span>
-                    <strong className={isRef ? 'text-[var(--ps-muted)]' : 'text-[#FF2A2A]'}>
-                      {isRef
-                        ? 'Base 0.00s'
-                          : summary.worstDelaySec !== null
-                            ? formatSignedSec(summary.worstDelaySec)
-                            : '--'}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="space-y-1 pt-0.5 font-mono text-[10px] tabular-nums">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-[var(--ps-emerald)]">Acel {summary.accelPct}%</span>
-                    <span className="text-[var(--ps-muted)]">
-                      Cruzeiro {Math.max(0, 100 - summary.accelPct - summary.brakePct)}%
-                    </span>
-                    <span className="font-bold text-[#FF2A2A]">Freio {summary.brakePct}%</span>
-                  </div>
-                  <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-[var(--ps-card-deep)]">
-                    <div className="h-full bg-[#10B981]" style={{ width: `${accelWidth}%` }} />
-                    <div
-                      className="h-full bg-[var(--ps-muted)]/45"
-                      style={{ width: `${Math.max(0, 100 - accelWidth - brakeWidth)}%` }}
-                    />
-                    <div className="h-full bg-[#FF2A2A]" style={{ width: `${brakeWidth}%` }} />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 2. FERRAMENTAS REAIS DE DATALOGGER (AiM / MoTeC / TrackAddict) */}
-      {/* 2A. CÍRCULO DE ATRITO / DIAGRAMA G-G (FRICTION CIRCLE) */}
-      {ggAnalysis.laps.length > 0 && (() => {
-        const size = 280;
-        const cx = size / 2;
-        const cy = size / 2;
-        const maxR = 112;
-        const scale = ggAnalysis.maxScaleG;
-        const r05 = (0.5 / scale) * maxR;
-        const r10 = (1.0 / scale) * maxR;
-        const pxX = (latG: number) => cx + (Math.max(-scale, Math.min(scale, latG)) / scale) * maxR;
-        const pxY = (longG: number) => cy - (Math.max(-scale, Math.min(scale, longG)) / scale) * maxR;
-
-        return (
-          <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-                  Círculo de Atrito · Diagrama G-G
-                </h3>
-                <p className="font-mono text-[10px] text-[var(--ps-muted)]">
-                  Força G Lateral (X) × Longitudinal (Y) · Eficiência de frenagem, curva e trail braking
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] font-bold">
-                {ggAnalysis.laps.map((l) => (
-                  <span key={`gg_leg_${l.slot}`} className={SLOT_COLORS[l.slot].text}>
-                    ● V{l.slot} #{l.runNumber}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-[260px_1fr] items-center">
-              {/* Plot Circular G-G */}
-              <div className="mx-auto w-full max-w-[260px] rounded-xl border border-[var(--ps-border)] bg-[#06070B] p-2">
-                <svg viewBox={`0 0 ${size} ${size}`} className="w-full h-auto">
-                  {/* Anel externo máximo */}
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r={maxR}
-                    fill="rgba(255,255,255,0.02)"
-                    stroke="#262A36"
-                    strokeWidth="1.2"
-                  />
-                  {/* Anel de 1.0G */}
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r={r10}
-                    fill="none"
-                    stroke="#475569"
-                    strokeWidth="1.2"
-                  />
-                  {/* Anel de 0.5G */}
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r={r05}
-                    fill="none"
-                    stroke="#334155"
-                    strokeDasharray="3 3"
-                    strokeWidth="1"
-                  />
-                  {/* Eixos X/Y */}
-                  <line x1={cx - maxR} y1={cy} x2={cx + maxR} y2={cy} stroke="#334155" strokeWidth="1" />
-                  <line x1={cx} y1={cy - maxR} x2={cx} y2={cy + maxR} stroke="#334155" strokeWidth="1" />
-
-                  {/* Rótulos dos Anéis e Eixos */}
-                  <text x={cx + 3} y={cy - r05 + 9} fill="#94A3B8" fontSize="8" fontFamily="monospace">
-                    0.5G
-                  </text>
-                  <text x={cx + 3} y={cy - r10 + 9} fill="#CBD5E1" fontSize="8.5" fontWeight="bold" fontFamily="monospace">
-                    1.0G
-                  </text>
-                  <text x={cx} y={13} textAnchor="middle" fill="#10B981" fontSize="8.5" fontWeight="bold" fontFamily="monospace">
-                    +ACEL
-                  </text>
-                  <text x={cx} y={size - 6} textAnchor="middle" fill="#FF2A2A" fontSize="8.5" fontWeight="bold" fontFamily="monospace">
-                    -FREIO
-                  </text>
-                  <text x={6} y={cy + 3} textAnchor="start" fill="#94A3B8" fontSize="8" fontWeight="bold" fontFamily="monospace">
-                    ESQ
-                  </text>
-                  <text x={size - 6} y={cy + 3} textAnchor="end" fill="#94A3B8" fontSize="8" fontWeight="bold" fontFamily="monospace">
-                    DIR
-                  </text>
-
-                  {/* Nuvem de pontos G-G por volta */}
-                  {ggAnalysis.laps.map((lap) => {
-                    const color = SLOT_COLORS[lap.slot].hex;
-                    const polyPts = lap.points
-                      .map((p) => `${pxX(p.latG).toFixed(1)},${pxY(p.longG).toFixed(1)}`)
-                      .join(' ');
-                    return (
-                      <g key={`gg_pts_${lap.slot}`}>
-                        <polyline
-                          fill="none"
-                          stroke={color}
-                          strokeOpacity="0.22"
-                          strokeWidth="1"
-                          points={polyPts}
-                        />
-                        {lap.points.map((p, idx) => (
-                          <circle
-                            key={`gg_${lap.slot}_${idx}`}
-                            cx={pxX(p.latG)}
-                            cy={pxY(p.longG)}
-                            r={lap.slot === 1 ? 2.1 : 1.8}
-                            fill={color}
-                            fillOpacity={lap.slot === 1 ? 0.72 : 0.65}
-                          />
-                        ))}
-                      </g>
-                    );
-                  })}
-
-                  {/* Marcadores vivos sincronizados com o cursor do Datalogger */}
-                  <circle
-                    cx={pxX(scrubPoint.latG1)}
-                    cy={pxY(scrubPoint.longG1)}
-                    r="5"
-                    fill="#10B981"
-                    stroke="#FFFFFF"
-                    strokeWidth="1.6"
-                  />
-                  {showLap2 && (
-                    <circle
-                      cx={pxX(scrubPoint.latG2)}
-                      cy={pxY(scrubPoint.longG2)}
-                      r="4.5"
-                      fill="#FF2A2A"
-                      stroke="#FFFFFF"
-                      strokeWidth="1.4"
-                    />
-                  )}
-                  {showLap3 && (
-                    <circle
-                      cx={pxX(scrubPoint.latG3)}
-                      cy={pxY(scrubPoint.longG3)}
-                      r="4.2"
-                      fill="#38BDF8"
-                      stroke="#FFFFFF"
-                      strokeWidth="1.4"
-                    />
-                  )}
-                </svg>
-              </div>
-
-              {/* Métricas de Eficiência G-G por Volta */}
-              <div className="space-y-2">
-                {ggAnalysis.laps.map((lap) => {
-                  const style = SLOT_COLORS[lap.slot];
-                  return (
-                    <div
-                      key={`gg_card_${lap.slot}`}
-                      className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 font-mono text-[11px] tabular-nums"
-                    >
-                      <div className="flex items-center justify-between border-b border-[var(--ps-border)] pb-1 mb-1.5">
-                        <span className={`font-black uppercase ${style.text}`}>
-                          V{lap.slot} #{lap.runNumber}
-                        </span>
-                        <span className="text-[10px] font-bold text-[var(--ps-amber)]">
-                          G Comb. Máx: {lap.metrics.peakCombinedG.toFixed(2)}G
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-4 gap-2 text-center">
-                        <div>
-                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Freio Máx</p>
-                          <p className="font-extrabold text-[#FF2A2A]">
-                            {lap.metrics.peakBrakeG.toFixed(2)}G
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Acel Máx</p>
-                          <p className="font-extrabold text-[var(--ps-emerald)]">
-                            +{lap.metrics.peakAccelG.toFixed(2)}G
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Curva Máx</p>
-                          <p className="font-extrabold text-[var(--ps-text)]">
-                            {lap.metrics.peakLatG.toFixed(2)}G
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[9px] text-[var(--ps-muted)] uppercase">Trail Brk</p>
-                          <p className="font-extrabold text-[#38BDF8]">
-                            {lap.metrics.trailBrakingPct}%
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* 2B. ANÁLISE AUTOMÁTICA DE CURVAS E FREADAS (ENTRADA / ÁPICE / SAÍDA) */}
-      {cornerAnalysis.length > 0 && (
-        <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-                Análise Automática de Curvas &amp; Freadas
-              </h3>
-              <p className="font-mono text-[10px] text-[var(--ps-muted)]">
-                Início da Frenagem, Ápice (Mínima) e Saída · toque na curva para posicionar no Datalogger
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] font-bold">
-              <span className="text-[var(--ps-emerald)]">V1 #{lap1?.runNumber ?? '-'} (Ref)</span>
-              {showLap2 && <span className="text-[#FF2A2A]">V2 #{lap2?.runNumber ?? '-'}</span>}
-              {showLap3 && <span className="text-[#38BDF8]">V3 #{lap3?.runNumber ?? '-'}</span>}
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums">
-              <thead>
-                <tr className="border-b border-[var(--ps-border-strong)] text-[10px] text-[var(--ps-muted)] uppercase">
-                  <th className="py-2 pr-2 whitespace-nowrap">Curva</th>
-                  <th className="px-1.5 py-2 whitespace-nowrap">Volta</th>
-                  <th className="px-1.5 py-2 text-right whitespace-nowrap">Início Freio</th>
-                  <th className="px-1.5 py-2 text-right whitespace-nowrap">Ápice (Mín)</th>
-                  <th className="px-1.5 py-2 text-right whitespace-nowrap">Saída</th>
-                  <th className="py-2 pl-1.5 text-right whitespace-nowrap">Ponto Freio</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--ps-border)]">
-                {cornerAnalysis.map((corner) =>
-                  corner.entries.map((entry, eIdx) => {
-                    const slotStyle = SLOT_COLORS[entry.slot];
-                    const isFirst = eIdx === 0;
-                    const isLast = eIdx === corner.entries.length - 1;
-                    const isNearCursor = Math.abs(scrubDistM - corner.refApexDistM) <= 35;
-
-                    return (
-                      <tr
-                        key={`crn_${corner.cornerIndex}_${entry.slot}`}
-                        onClick={() => setScrubDistM(corner.refApexDistM)}
-                        className={`cursor-pointer transition-colors hover:bg-[var(--ps-card)] ${
-                          isLast ? 'border-b border-[var(--ps-border-strong)]' : ''
-                        } ${isNearCursor ? 'bg-[var(--ps-card)]' : ''}`}
-                      >
-                        {isFirst && (
-                          <td
-                            rowSpan={corner.entries.length}
-                            className="py-2 pr-2 align-top whitespace-nowrap border-r border-[var(--ps-border)]"
-                          >
-                            <span className="font-sans text-xs font-extrabold text-[var(--ps-text)]">
-                              {corner.label}
-                            </span>
-                            <span className="block text-[10px] text-[var(--ps-muted)]">
-                              Ápice {corner.refApexDistM}m
-                            </span>
-                          </td>
-                        )}
-
-                        <td className="px-1.5 py-1.5 whitespace-nowrap">
-                          <span className={`font-extrabold ${slotStyle.text}`}>
-                            V{entry.slot} #{entry.runNumber}
-                          </span>
-                        </td>
-
-                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-[var(--ps-text)]">
-                            {entry.entrySpeedKmh} km/h
-                          </span>
-                          {entry.deltaEntryKmh !== null && (
-                            <span
-                              className={`block text-[10px] font-bold ${
-                                entry.deltaEntryKmh >= 0
-                                  ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
-                              }`}
-                            >
-                              {formatSignedKmh(entry.deltaEntryKmh)}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-[var(--ps-text)]">
-                            {entry.apexSpeedKmh} km/h
-                          </span>
-                          {entry.deltaApexKmh !== null && (
-                            <span
-                              className={`block text-[10px] font-bold ${
-                                entry.deltaApexKmh >= 0
-                                  ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
-                              }`}
-                            >
-                              {formatSignedKmh(entry.deltaApexKmh)}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-[var(--ps-text)]">
-                            {entry.exitSpeedKmh} km/h
-                          </span>
-                          {entry.deltaExitKmh !== null && (
-                            <span
-                              className={`block text-[10px] font-bold ${
-                                entry.deltaExitKmh >= 0
-                                  ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
-                              }`}
-                            >
-                              {formatSignedKmh(entry.deltaExitKmh)}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="py-1.5 pl-1.5 text-right whitespace-nowrap">
-                          {entry.brakeShiftM === null ? (
-                            <span className="text-[var(--ps-muted)]">
-                              {entry.brakeStartDistM}m
-                            </span>
-                          ) : entry.brakeShiftM > 2 ? (
-                            <span className="font-bold text-[var(--ps-emerald)]">
-                              +{entry.brakeShiftM}m tarde
-                            </span>
-                          ) : entry.brakeShiftM < -2 ? (
-                            <span className="font-bold text-[#FF2A2A]">
-                              {entry.brakeShiftM}m antes
-                            </span>
-                          ) : (
-                            <span className="font-bold text-[var(--ps-amber)]">Igual (0m)</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* 3. DATALOGGER AiM / MoTeC — 3 PAINÉIS SINCRONIZADOS + ZOOM POR PARCIAL */}
+      {/* 3. BLOCO PRINCIPAL UNIFICADO: MAPA SATÉLITE + DATALOGGER SINCRONIZADO */}
       <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-              Datalogger de Pilotagem · Velocidade, Pedal &amp; Força Lateral
+              Mapa de Traçado &amp; Datalogger Sincronizado
             </h3>
             <p className="font-mono text-[10px] text-[var(--ps-muted)]">
-              3 painéis sincronizados · selecione uma Parcial abaixo para ampliar retas e curvas
+              Velocidade, Pedal &amp; Força Lateral sincronizados com o replay da volta
             </p>
           </div>
 
@@ -1532,6 +1233,137 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
             )}
           </div>
         </div>
+
+        {/* Mapa Satélite Interativo com Seletor Rápido de 3 Camadas Visuais no Topo */}
+        {lap1Samples.length > 1 && (
+          <div className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] px-2.5 py-2 font-mono text-[10px] tabular-nums">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <div
+                  className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] p-0.5"
+                  role="tablist"
+                  aria-label="Camada visual do traçado no mapa"
+                >
+                  {(
+                    [
+                      { id: 'laps', label: 'Por Volta (V1/V2/V3)' },
+                      { id: 'speed', label: 'Velocidade (km/h)' },
+                      { id: 'accel', label: 'Frenagem / Acel.' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={mapLayerMode === opt.id}
+                      onClick={() => setMapLayerMode(opt.id)}
+                      className={`rounded-md px-2 py-1 text-[10px] font-extrabold transition-colors ${
+                        mapLayerMode === opt.id
+                          ? 'pitstop-btn-red'
+                          : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  aria-pressed={showMapPeaks}
+                  onClick={() => setShowMapPeaks((v) => !v)}
+                  className={`rounded-lg border px-2 py-1 text-[10px] font-extrabold transition-colors ${
+                    showMapPeaks
+                      ? 'border-[var(--ps-amber)] bg-amber-500/15 text-[var(--ps-amber)]'
+                      : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                  }`}
+                  title="Exibir ou ocultar balões de pico de velocidade sobre o traçado"
+                >
+                  Picos
+                </button>
+
+                <button
+                  type="button"
+                  aria-pressed={showMapSplits}
+                  onClick={() => setShowMapSplits((v) => !v)}
+                  className={`rounded-lg border px-2 py-1 text-[10px] font-extrabold transition-colors ${
+                    showMapSplits
+                      ? 'border-sky-500/70 bg-sky-500/15 text-sky-400'
+                      : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                  }`}
+                  title="Exibir ou ocultar marcadores de Largada, Parciais (P1..Pn) e Chegada sobre o traçado"
+                >
+                  Parciais
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9px] font-bold">
+                {mapLayerMode === 'laps' ? (
+                  <>
+                    <span className="text-[#10B981]">━ V1</span>
+                    {showLap2 && <span className="text-[#FF2A2A]">━ V2</span>}
+                    {showLap3 && <span className="text-[#38BDF8]">━ V3</span>}
+                  </>
+                ) : mapLayerMode === 'speed' ? (
+                  <>
+                    <span className="text-[#10B981]">■ Alta</span>
+                    <span className="text-[#F59E0B]">■ Média</span>
+                    <span className="text-[#FF2A2A]">■ Baixa</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[#10B981]">■ Acel (+G)</span>
+                    <span className="text-[#F59E0B]">■ Neutro</span>
+                    <span className="text-[#FF2A2A]">■ Freio (-G)</span>
+                  </>
+                )}
+                <span className="text-[var(--ps-muted)]">·</span>
+                <span className="text-[var(--ps-text)]">
+                  Dist: <strong className="text-[var(--ps-amber)]">{scrubPoint.distKmStr}km</strong>
+                </span>
+              </div>
+            </div>
+
+            <VelocityMapboxView
+              trackId={`${sessionTrack?.id || 'session'}_synced`}
+              editableTrace={lap1Samples}
+              ghostTrace={showLap2 ? lap2Samples : undefined}
+              thirdTrace={showLap3 ? lap3Samples : undefined}
+              offsetGhostTrace={showLap2 || showLap3}
+              orderedTraps={showMapSplits && sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+              postEditIdx={0}
+              vehicleStyle="lap1"
+              currentPos={
+                scrubPoint.s1
+                  ? { lat: scrubPoint.s1.lat, lon: scrubPoint.s1.lon }
+                  : null
+              }
+              navHeadingDeg={scrubPoint.s1?.headingDeg ?? null}
+              ghostCar={
+                showLap2 && scrubPoint.s2
+                  ? {
+                      lat: scrubPoint.s2.lat,
+                      lon: scrubPoint.s2.lon,
+                      headingDeg: scrubPoint.s2.headingDeg,
+                    }
+                  : null
+              }
+              thirdCar={
+                showLap3 && scrubPoint.s3
+                  ? {
+                      lat: scrubPoint.s3.lat,
+                      lon: scrubPoint.s3.lon,
+                      headingDeg: scrubPoint.s3.headingDeg,
+                    }
+                  : null
+              }
+              heatmapMode={mapLayerMode}
+              showSpeedBadges={showMapPeaks}
+              onFullscreenToggle={() => setProFullscreen(true)}
+              containerClassName="relative h-60 w-full overflow-hidden bg-[#000000] sm:h-80"
+            />
+          </div>
+        )}
 
         {/* Botões de Zoom por Trecho / Parcial */}
         {sectorComparison.rows.length > 0 && (
@@ -1568,87 +1400,9 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           </div>
         )}
 
-        {/* Mapa Satélite Sincronizado com Badges de Velocidade + Cursor em Tempo Real */}
+        {/* Resumo Prático Fixo ao Tocar no Gráfico (VEL + ΔT TIME SLIP + ACEL/FREIO G + FRENAGEM) */}
         {lap1Samples.length > 1 && (
-          <div className="overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] px-2.5 py-1.5 font-mono text-[10px] tabular-nums">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                <span className="font-bold text-[var(--ps-text)]">
-                  Dist:{' '}
-                  <strong className="text-[var(--ps-amber)]">{scrubPoint.distKmStr} km</strong> (
-                  {scrubPoint.distM}m)
-                </span>
-                <span className="font-bold">
-                  <span className="text-[var(--ps-emerald)]">V1: {scrubPoint.speed1 ?? '--'}</span>
-                  {showLap2 && (
-                    <>
-                      <span className="text-[var(--ps-muted)]"> vs </span>
-                      <span className="text-[#FF2A2A]">V2: {scrubPoint.speed2 ?? '--'}</span>
-                    </>
-                  )}
-                  <span className="text-[var(--ps-muted)]"> km/h</span>
-                </span>
-                {showLap2 && scrubPoint.timeDelta2vs1Sec !== null && (
-                  <span
-                    className={`font-black ${
-                      scrubPoint.timeDelta2vs1Sec <= 0
-                        ? 'text-[var(--ps-emerald)]'
-                        : 'text-[#FF2A2A]'
-                    }`}
-                  >
-                    Δ Tempo V2: {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 text-[9px] font-bold">
-                <span className="text-[#10B981]">■ Picos Máx</span>
-                <span className="text-[#FF2A2A]">■ Ápices Curva</span>
-              </div>
-            </div>
-            <VelocityMapboxView
-              trackId={`${sessionTrack?.id || 'session'}_synced`}
-              editableTrace={lap1Samples}
-              ghostTrace={showLap2 ? lap2Samples : undefined}
-              thirdTrace={showLap3 ? lap3Samples : undefined}
-              offsetGhostTrace={showLap2 || showLap3}
-              orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
-              postEditIdx={0}
-              vehicleStyle="lap1"
-              currentPos={
-                scrubPoint.s1
-                  ? { lat: scrubPoint.s1.lat, lon: scrubPoint.s1.lon }
-                  : null
-              }
-              navHeadingDeg={scrubPoint.s1?.headingDeg ?? null}
-              ghostCar={
-                showLap2 && scrubPoint.s2
-                  ? {
-                      lat: scrubPoint.s2.lat,
-                      lon: scrubPoint.s2.lon,
-                      headingDeg: scrubPoint.s2.headingDeg,
-                    }
-                  : null
-              }
-              thirdCar={
-                showLap3 && scrubPoint.s3
-                  ? {
-                      lat: scrubPoint.s3.lat,
-                      lon: scrubPoint.s3.lon,
-                      headingDeg: scrubPoint.s3.headingDeg,
-                    }
-                  : null
-              }
-              heatmapMode="speed"
-              showSpeedBadges={true}
-              onFullscreenToggle={() => setProFullscreen(true)}
-              containerClassName="relative h-56 w-full overflow-hidden bg-[#000000] sm:h-72"
-            />
-          </div>
-        )}
-
-        {/* Resumo Prático Fixo ao Tocar no Gráfico */}
-        {lap1Samples.length > 1 && (
-          <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 font-mono text-[10px] tabular-nums sm:grid-cols-3 sm:text-[11px]">
+          <div className="grid grid-cols-2 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 font-mono text-[10px] tabular-nums lg:grid-cols-4 sm:text-[11px]">
             {/* 1. Vel V1 vs V2 (Δ km/h) */}
             <div>
               <span className="text-[var(--ps-muted)] uppercase">
@@ -1681,9 +1435,57 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               </p>
             </div>
 
-            {/* 2. Frenagem / Aceleração (G) & Carga Lateral */}
+            {/* 2. Time Slip / Delta de Tempo Instantâneo (ΔT) */}
             <div>
-              <span className="text-[var(--ps-muted)] uppercase">Frenagem / Aceleração &amp; Lat G</span>
+              <span className="text-[var(--ps-muted)] uppercase">
+                Time Slip (ΔT) @ {scrubPoint.distM}m
+              </span>
+              <p className="mt-0.5 font-extrabold">
+                {showLap2 && scrubPoint.timeDelta2vs1Sec !== null ? (
+                  <>
+                    <span
+                      className={
+                        scrubPoint.timeDelta2vs1Sec <= 0
+                          ? 'text-[var(--ps-emerald)]'
+                          : 'text-[#FF2A2A]'
+                      }
+                    >
+                      V2 {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
+                    </span>
+                    <span
+                      className={`ml-1.5 rounded px-1 py-0.5 text-[9px] font-black ${
+                        scrubPoint.timeDelta2vs1Sec <= 0
+                          ? 'bg-emerald-500/15 text-[var(--ps-emerald)]'
+                          : 'bg-red-500/15 text-[#FF2A2A]'
+                      }`}
+                    >
+                      {scrubPoint.timeDelta2vs1Sec <= 0 ? 'GANHO' : 'PERDA'}
+                    </span>
+                  </>
+                ) : showLap3 && scrubPoint.timeDelta3vs1Sec !== null ? (
+                  <span
+                    className={
+                      scrubPoint.timeDelta3vs1Sec <= 0
+                        ? 'text-[var(--ps-emerald)]'
+                        : 'text-[#FF2A2A]'
+                    }
+                  >
+                    V3 {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
+                  </span>
+                ) : (
+                  <span className="text-[var(--ps-muted)]">--.--s (selecione V2)</span>
+                )}
+                {showLap2 && showLap3 && scrubPoint.timeDelta3vs1Sec !== null && (
+                  <span className="ml-2 text-[#38BDF8]">
+                    · V3 {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
+                  </span>
+                )}
+              </p>
+            </div>
+
+            {/* 3. Frenagem / Aceleração (G) & Carga Lateral */}
+            <div>
+              <span className="text-[var(--ps-muted)] uppercase">Acel / Frenagem &amp; Lat G</span>
               <p className="mt-0.5 font-extrabold">
                 <span className="text-[var(--ps-emerald)]">
                   {scrubPoint.longG1 >= 0 ? '+' : ''}
@@ -1704,7 +1506,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               </p>
             </div>
 
-            {/* 3. Distância do Ponto de Frenagem */}
+            {/* 4. Distância do Ponto de Frenagem */}
             <div>
               <span className="text-[var(--ps-muted)] uppercase">Ponto de Frenagem (V2 vs V1)</span>
               <p className="mt-0.5 font-extrabold">
@@ -1961,11 +1763,182 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               </svg>
             </div>
 
-            {/* PAINEL 2 — PEDAL VIRTUAL (+G ACELERAÇÃO vs. -G FRENAGEM) */}
+            {/* PAINEL 2 — TIME SLIP / DELTA DE TEMPO CONTÍNUO (ΔT vs REF) */}
             <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5">
               <div className="mb-0.5 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
                 <span className="font-bold uppercase">
-                  Painel 2 · Pedal Virtual (Aceleração +G vs. Frenagem -G)
+                  Painel 2 · Time Slip / Delta de Tempo Contínuo (ΔT vs V1)
+                </span>
+                <span>
+                  <strong className="text-[var(--ps-emerald)]">Verde (-s) = Mais Rápido</strong> ·{' '}
+                  <strong className="text-[#FF2A2A]">Vermelho (+s) = Mais Lento</strong>
+                  {showLap2 && showLap3 ? ' · Tracejado Ciano = V3' : ''}
+                </span>
+              </div>
+              {showLap2 || showLap3 ? (
+                <svg
+                  ref={panelTimeSlipRef}
+                  viewBox={`0 0 ${chartW} ${pTsH}`}
+                  className="h-28 w-full touch-none select-none cursor-crosshair sm:h-32"
+                  onPointerDown={(e) => {
+                    isDraggingRef.current = true;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    updateScrubFromSvg(panelTimeSlipRef.current, e.clientX);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!isDraggingRef.current && e.pointerType === 'touch') return;
+                    if (isDraggingRef.current || e.buttons === 1) {
+                      updateScrubFromSvg(panelTimeSlipRef.current, e.clientX);
+                    }
+                  }}
+                  onPointerUp={(e) => {
+                    isDraggingRef.current = false;
+                    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    }
+                  }}
+                  onPointerCancel={() => {
+                    isDraggingRef.current = false;
+                  }}
+                >
+                  <defs>
+                    <clipPath id="ts-clip-gain">
+                      <rect x={padL} y={pTsTop - 4} width={plotW} height={pTsMidY - pTsTop + 4} />
+                    </clipPath>
+                    <clipPath id="ts-clip-loss">
+                      <rect x={padL} y={pTsMidY} width={plotW} height={pTsBottom - pTsMidY + 4} />
+                    </clipPath>
+                  </defs>
+
+                  {[-maxTimeSlipScaleSec, 0, maxTimeSlipScaleSec].map((dTick) => {
+                    const y = yAtTimeSlip(dTick);
+                    return (
+                      <g key={`ts_y_${dTick}`}>
+                        <line
+                          x1={padL}
+                          y1={y}
+                          x2={chartW - padR}
+                          y2={y}
+                          stroke={dTick === 0 ? 'var(--ps-muted)' : 'var(--ps-border)'}
+                          strokeOpacity={dTick === 0 ? '0.65' : '0.8'}
+                          strokeDasharray={dTick === 0 ? undefined : '3 3'}
+                        />
+                        <text
+                          x={padL - 5}
+                          y={y + 3}
+                          textAnchor="end"
+                          fill={
+                            dTick < 0 ? '#10B981' : dTick > 0 ? '#FF2A2A' : 'var(--ps-text)'
+                          }
+                          fontSize="8.5"
+                          fontFamily="monospace"
+                        >
+                          {dTick === 0
+                            ? '0.0s'
+                            : `${dTick > 0 ? '+' : ''}${dTick.toFixed(1)}s`}
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {visibleSectorDividers.map((sec, idx) => (
+                    <line
+                      key={`ts_sec_${idx}`}
+                      x1={xAtM(sec.toM)}
+                      y1={pTsTop}
+                      x2={xAtM(sec.toM)}
+                      y2={pTsBottom}
+                      stroke="var(--ps-muted)"
+                      strokeOpacity="0.45"
+                      strokeWidth="1"
+                      strokeDasharray="4 4"
+                    />
+                  ))}
+
+                  {primaryTimeSlipPolys.posPoly && (
+                    <polygon fill="#10B981" fillOpacity="0.28" points={primaryTimeSlipPolys.posPoly} />
+                  )}
+                  {primaryTimeSlipPolys.negPoly && (
+                    <polygon fill="#FF2A2A" fillOpacity="0.28" points={primaryTimeSlipPolys.negPoly} />
+                  )}
+                  {primaryTimeSlipPolys.linePts && (
+                    <>
+                      <polyline
+                        fill="none"
+                        stroke="#10B981"
+                        strokeWidth="2.2"
+                        clipPath="url(#ts-clip-gain)"
+                        points={primaryTimeSlipPolys.linePts}
+                      />
+                      <polyline
+                        fill="none"
+                        stroke="#FF2A2A"
+                        strokeWidth="2.2"
+                        clipPath="url(#ts-clip-loss)"
+                        points={primaryTimeSlipPolys.linePts}
+                      />
+                    </>
+                  )}
+
+                  {showLap2 && timeSlipLine3 && (
+                    <polyline
+                      fill="none"
+                      stroke="#38BDF8"
+                      strokeWidth="1.6"
+                      strokeDasharray="4 3"
+                      points={timeSlipLine3}
+                    />
+                  )}
+
+                  <line
+                    x1={scrubX}
+                    y1={pTsTop}
+                    x2={scrubX}
+                    y2={pTsBottom}
+                    stroke="#FF2A2A"
+                    strokeWidth="1.6"
+                  />
+                  {(showLap2 ? scrubPoint.timeDelta2vs1Sec : scrubPoint.timeDelta3vs1Sec) !==
+                    null && (() => {
+                    const activeDelta = showLap2
+                      ? scrubPoint.timeDelta2vs1Sec!
+                      : scrubPoint.timeDelta3vs1Sec!;
+                    return (
+                      <circle
+                        cx={scrubX}
+                        cy={yAtTimeSlip(activeDelta)}
+                        r="3.8"
+                        fill={activeDelta <= 0 ? '#10B981' : '#FF2A2A'}
+                        stroke="#FFFFFF"
+                        strokeWidth="1.3"
+                      />
+                    );
+                  })()}
+                  {showLap2 && showLap3 && scrubPoint.timeDelta3vs1Sec !== null && (
+                    <circle
+                      cx={scrubX}
+                      cy={yAtTimeSlip(scrubPoint.timeDelta3vs1Sec)}
+                      r="3"
+                      fill="#38BDF8"
+                      stroke="#FFFFFF"
+                      strokeWidth="1"
+                    />
+                  )}
+                </svg>
+              ) : (
+                <p className="py-5 text-center font-mono text-[10px] text-[var(--ps-muted)]">
+                  Selecione <strong className="text-[#FF2A2A]">Volta 2</strong> ou{' '}
+                  <strong className="text-[#38BDF8]">Volta 3</strong> acima para visualizar o Delta
+                  de Tempo contínuo (ΔT).
+                </p>
+              )}
+            </div>
+
+            {/* PAINEL 3 — PEDAL VIRTUAL (+G ACELERAÇÃO vs. -G FRENAGEM) */}
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5">
+              <div className="mb-0.5 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
+                <span className="font-bold uppercase">
+                  Painel 3 · Pedal Virtual (Aceleração +G vs. Frenagem -G)
                 </span>
                 <span>
                   <strong className="text-[var(--ps-emerald)]">Verde = Acel</strong> ·{' '}
@@ -2118,11 +2091,11 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               </svg>
             </div>
 
-            {/* PAINEL 3 — FORÇA LATERAL EM CURVA (LAT G) */}
+            {/* PAINEL 4 — FORÇA LATERAL EM CURVA (LAT G) */}
             <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5">
               <div className="mb-0.5 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
                 <span className="font-bold uppercase">
-                  Painel 3 · Força Lateral em Curva (Lat G)
+                  Painel 4 · Força Lateral em Curva (Lat G)
                 </span>
                 <span>Aderência lateral (+Esq / -Dir)</span>
               </div>
@@ -2270,228 +2243,87 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           </p>
         )}
 
-        {/* Slider fino de posição sincronizado com os 3 painéis */}
+        {/* Slider fino de posição + Replay sincronizado com Mapa e os 3 painéis */}
         {lap1Samples.length > 1 && (
-          <div className="flex items-center gap-2 pt-0.5">
-            <Crosshair className="h-3.5 w-3.5 shrink-0 text-[var(--ps-amber)]" />
-            <input
-              type="range"
-              aria-label="Cursor de distância sincronizado nos 3 painéis"
-              min={Math.round(viewStartM)}
-              max={Math.round(viewEndM)}
-              value={Math.max(Math.round(viewStartM), Math.min(Math.round(viewEndM), scrubDistM))}
-              onChange={(e) => setScrubDistM(Number(e.target.value))}
-              className="w-full accent-[var(--ps-emerald)]"
-            />
-            <button
-              type="button"
-              onClick={() => setScrubDistM(Math.round(viewStartM))}
-              className="inline-flex h-7 items-center gap-1 rounded border border-[var(--ps-border)] bg-[var(--ps-card)] px-2 font-mono text-[10px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-              title="Voltar cursor ao início do trecho"
-            >
-              <RotateCcw className="h-3 w-3" />
-              <span>{Math.round(viewStartM)}m</span>
-            </button>
-          </div>
-        )}
-      </div>
+          <div className="space-y-2 pt-0.5">
+            <div className="flex items-center gap-2">
+              <Crosshair className="h-3.5 w-3.5 shrink-0 text-[var(--ps-amber)]" />
+              <input
+                type="range"
+                aria-label="Cursor de distância sincronizado nos 3 painéis"
+                min={Math.round(viewStartM)}
+                max={Math.round(viewEndM)}
+                value={Math.max(Math.round(viewStartM), Math.min(Math.round(viewEndM), scrubDistM))}
+                onChange={(e) => {
+                  setProReplayPlaying(false);
+                  setScrubDistM(Number(e.target.value));
+                }}
+                className="w-full accent-[var(--ps-emerald)]"
+              />
+              <span className="shrink-0 font-mono text-[10px] font-bold text-[var(--ps-muted)] tabular-nums">
+                {scrubPoint.distM}m/{Math.round(viewEndM)}m
+              </span>
+            </div>
 
-      {/* 4. TABELA EXPANDIDA POR TRECHO (SETORES — ATÉ 3 VOLTAS LADO A LADO) */}
-      <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)] space-y-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase sm:text-lg">
-              Telemetria por Trecho (Parciais)
-            </h3>
-            <p className="font-mono text-[10px] text-[var(--ps-muted)]">
-              {sectorComparison.rows.some((r) => r.isTrapBased)
-                ? 'Marcos oficiais (Traps) · toque no trecho para ampliar zoom no datalogger'
-                : '4 parciais iguais · toque no trecho para ampliar zoom no datalogger'}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[10px]">
-            <span className="font-bold text-[var(--ps-emerald)]">V1 #{lap1?.runNumber ?? '-'}</span>
-            {showLap2 && (
-              <span className="font-bold text-[#FF2A2A]">V2 #{lap2?.runNumber ?? '-'}</span>
-            )}
-            {showLap3 && (
-              <span className="font-bold text-[#38BDF8]">V3 #{lap3?.runNumber ?? '-'}</span>
-            )}
-          </div>
-        </div>
-
-        {sectorComparison.rows.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums">
-              <thead>
-                <tr className="border-b border-[var(--ps-border)] text-[10px] text-[var(--ps-muted)] uppercase">
-                  <th className="py-2 pr-2">Parcial</th>
-                  <th className="px-1.5 py-2">Volta</th>
-                  <th className="px-1.5 py-2 text-right">Tempo (Δ)</th>
-                  <th className="px-1.5 py-2 text-right">V.Máx (Δ)</th>
-                  <th className="px-1.5 py-2 text-right">V.Mín (Δ)</th>
-                  <th className="px-1.5 py-2 text-right">V.Méd (Δ)</th>
-                  <th className="py-2 pl-1.5 text-right">Freio / Acel</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--ps-border)]">
-                {sectorComparison.rows.map((row) => {
-                  const isScrubInside =
-                    scrubDistM >= row.fromDistM && scrubDistM <= row.toDistM;
-
-                  return row.entries.map((entry, entryIdx) => {
-                    const slotStyle = SLOT_COLORS[entry.slot];
-                    const isFirstInSector = entryIdx === 0;
-                    const isLastInSector = entryIdx === row.entries.length - 1;
-                    const rowBorder = isLastInSector
-                      ? 'border-b border-[var(--ps-border-strong)]'
-                      : 'border-b border-[var(--ps-border)]';
-
-                    return (
-                      <tr
-                        key={`${row.index}_${entry.slot}`}
-                        onClick={() => {
-                          setZoomSectorIdx(row.index);
-                          setScrubDistM(Math.round((row.fromDistM + row.toDistM) / 2));
-                        }}
-                        className={`cursor-pointer transition-colors hover:bg-[var(--ps-card)] ${rowBorder} ${
-                          isScrubInside ? 'bg-[var(--ps-card)]' : ''
-                        }`}
-                      >
-                        {isFirstInSector && (
-                          <td
-                            rowSpan={row.entries.length}
-                            className="py-2 pr-2 align-top whitespace-nowrap border-r border-[var(--ps-border)]"
-                          >
-                            <span className="font-sans text-xs font-extrabold text-[var(--ps-text)]">
-                              P{row.index} · {row.label}
-                            </span>
-                            <span className="block text-[10px] text-[var(--ps-muted)]">
-                              {row.fromDistM}–{row.toDistM}m
-                            </span>
-                          </td>
-                        )}
-
-                        <td className="px-1.5 py-1.5 whitespace-nowrap">
-                          <span className={`font-extrabold ${slotStyle.text}`}>
-                            V{entry.slot} #{entry.runNumber}
-                          </span>
-                        </td>
-
-                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-[var(--ps-text)]">
-                            {formatSectorSec(entry.metrics.durationMs)}
-                          </span>
-                          {entry.timeDeltaSec !== null && (
-                            <span
-                              className={`block text-[10px] font-bold ${
-                                entry.timeDeltaSec <= 0
-                                  ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
-                              }`}
-                            >
-                              {formatSignedSec(entry.timeDeltaSec)}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-[var(--ps-text)]">
-                            {entry.metrics.maxSpeedKmh ?? '--'}
-                          </span>
-                          {entry.maxSpeedDeltaKmh !== null && (
-                            <span
-                              className={`block text-[10px] font-bold ${
-                                entry.maxSpeedDeltaKmh >= 0
-                                  ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
-                              }`}
-                            >
-                              {formatSignedKmh(entry.maxSpeedDeltaKmh)}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-[var(--ps-text)]">
-                            {entry.metrics.minSpeedKmh ?? '--'}
-                          </span>
-                          {entry.minSpeedDeltaKmh !== null && (
-                            <span
-                              className={`block text-[10px] font-bold ${
-                                entry.minSpeedDeltaKmh >= 0
-                                  ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
-                              }`}
-                            >
-                              {formatSignedKmh(entry.minSpeedDeltaKmh)}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
-                          <span className="font-bold text-[var(--ps-text)]">
-                            {entry.metrics.avgSpeedKmh ?? '--'}
-                          </span>
-                          {entry.avgSpeedDeltaKmh !== null && (
-                            <span
-                              className={`block text-[10px] font-bold ${
-                                entry.avgSpeedDeltaKmh >= 0
-                                  ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
-                              }`}
-                            >
-                              {formatSignedKmh(entry.avgSpeedDeltaKmh)}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="py-1.5 pl-1.5 text-right whitespace-nowrap">
-                          <span className="text-[#FF2A2A] font-bold">
-                            {formatG(entry.metrics.peakBrakeG)}
-                          </span>
-                          <span className="block text-[10px] text-[var(--ps-emerald)] font-bold">
-                            {formatG(entry.metrics.peakAccelG)}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  });
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="py-4 text-xs text-[var(--ps-muted)]">
-            Grave ou selecione voltas com amostras GPS para calcular as parciais comparativas.
-          </p>
-        )}
-      </div>
-
-      {/* 5. VOLTA IDEAL POR PARCIAIS */}
-      {sessionOptimal.sectors.length > 0 && (
-        <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 text-[var(--ps-text)]">
-          <h3 className="text-xs font-bold tracking-wider text-[var(--ps-amber)] uppercase">
-            Volta Ideal por Parciais (Marcos)
-          </h3>
-          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {sessionOptimal.sectors.map((sec) => (
-              <div
-                key={sec.sectorIndex}
-                className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2 font-mono"
+            <div className="grid grid-cols-4 gap-1.5 font-mono text-[11px] font-extrabold">
+              <button
+                type="button"
+                onClick={() => {
+                  setProReplayPlaying(false);
+                  setScrubDistM((prev) => Math.max(Math.round(viewStartM), prev - 10));
+                }}
+                className="flex min-h-[34px] items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-text)] hover:border-[var(--ps-border-strong)] active:scale-95"
               >
-                <p className="font-sans text-xs font-bold text-[var(--ps-text)]">{sec.label}</p>
-                <p className="mt-0.5 text-lg font-extrabold text-[var(--ps-amber)] tabular-nums">
-                  {formatStageDuration(sec.bestMs)}
-                </p>
-                <p className="text-[10px] text-[var(--ps-muted)]">
-                  {sec.bestRunNumber ? `Volta #${sec.bestRunNumber}` : 'Sem registro'}
-                </p>
-              </div>
-            ))}
+                -10m
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!proReplayPlaying && scrubDistM >= Math.round(viewEndM) - 5) {
+                    setScrubDistM(Math.round(viewStartM));
+                  }
+                  setProReplayPlaying((v) => !v);
+                }}
+                className="pitstop-btn-red flex min-h-[34px] items-center justify-center gap-1 rounded-lg px-2 font-black active:scale-95"
+              >
+                {proReplayPlaying ? (
+                  <>
+                    <Pause className="h-3.5 w-3.5 shrink-0" />
+                    <span>Pausar</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3.5 w-3.5 shrink-0 fill-current" />
+                    <span>Replay</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProReplayPlaying(false);
+                  setScrubDistM((prev) => Math.min(Math.round(viewEndM), prev + 10));
+                }}
+                className="flex min-h-[34px] items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] text-[var(--ps-text)] hover:border-[var(--ps-border-strong)] active:scale-95"
+              >
+                +10m
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProReplayPlaying(false);
+                  setScrubDistM(Math.round(viewStartM));
+                }}
+                className="flex min-h-[34px] items-center justify-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card)] px-2 text-[var(--ps-muted)] hover:text-[var(--ps-text)] active:scale-95"
+                title="Voltar cursor ao início do trecho"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>Início</span>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* MODO ANÁLISE PRO EM TELA CHEIA (MAPA ~45% + TELEMETRIA/GRÁFICO + CONTROLES ~55%) */}
       {proFullscreen && lap1Samples.length > 1 && (
@@ -2560,7 +2392,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               ghostTrace={showLap2 ? lap2Samples : undefined}
               thirdTrace={showLap3 ? lap3Samples : undefined}
               offsetGhostTrace={showLap2 || showLap3}
-              orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+              orderedTraps={showMapSplits && sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
               postEditIdx={0}
               vehicleStyle="lap1"
               currentPos={
@@ -2587,17 +2419,60 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                     }
                   : null
               }
-              heatmapMode="speed"
-              showSpeedBadges={true}
+              heatmapMode={mapLayerMode}
+              showSpeedBadges={showMapPeaks}
               isExternalFullscreen={true}
               onFullscreenToggle={() => {
                 setProFullscreen(false);
                 setProReplayPlaying(false);
               }}
               topLeftOverlay={
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/90 px-2 py-1 font-mono text-[9px] font-bold backdrop-blur-xs">
-                  <span className="text-[#10B981]">■ Picos Máx</span>
-                  <span className="text-[#FF2A2A]">■ Ápices Curva</span>
+                <div className="pointer-events-auto inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 p-1 font-mono text-[9px] font-bold backdrop-blur-xs">
+                  {(
+                    [
+                      { id: 'laps', label: 'Voltas' },
+                      { id: 'speed', label: 'Vel.' },
+                      { id: 'accel', label: 'Freio/Acel' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={`fs_layer_${opt.id}`}
+                      type="button"
+                      onClick={() => setMapLayerMode(opt.id)}
+                      className={`rounded px-1.5 py-0.5 font-extrabold transition-colors ${
+                        mapLayerMode === opt.id
+                          ? 'pitstop-btn-red'
+                          : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <span className="mx-0.5 h-3 w-px bg-[var(--ps-border)]" />
+                  <button
+                    type="button"
+                    aria-pressed={showMapPeaks}
+                    onClick={() => setShowMapPeaks((v) => !v)}
+                    className={`rounded px-1.5 py-0.5 font-extrabold transition-colors ${
+                      showMapPeaks
+                        ? 'bg-amber-500/20 text-[var(--ps-amber)]'
+                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                    }`}
+                  >
+                    Picos
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={showMapSplits}
+                    onClick={() => setShowMapSplits((v) => !v)}
+                    className={`rounded px-1.5 py-0.5 font-extrabold transition-colors ${
+                      showMapSplits
+                        ? 'bg-sky-500/20 text-sky-400'
+                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                    }`}
+                  >
+                    Parciais
+                  </button>
                 </div>
               }
               containerClassName="relative h-full w-full overflow-hidden bg-[#000000]"
@@ -2608,7 +2483,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           <div className="flex min-h-0 flex-1 flex-col bg-[var(--ps-bg)]">
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
               {/* Card de Leitura Instantânea */}
-              <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-[10px] tabular-nums sm:grid-cols-3 sm:text-[11px]">
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-[10px] tabular-nums lg:grid-cols-4 sm:text-[11px]">
                 <div>
                   <span className="text-[var(--ps-muted)] uppercase">
                     Velocidade @ {scrubPoint.distKmStr} km
@@ -2640,7 +2515,43 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
                 <div>
                   <span className="text-[var(--ps-muted)] uppercase">
-                    Frenagem / Aceleração &amp; Lat G
+                    Time Slip (ΔT) @ {scrubPoint.distM}m
+                  </span>
+                  <p className="mt-0.5 font-extrabold">
+                    {showLap2 && scrubPoint.timeDelta2vs1Sec !== null ? (
+                      <span
+                        className={
+                          scrubPoint.timeDelta2vs1Sec <= 0
+                            ? 'text-[var(--ps-emerald)]'
+                            : 'text-[#FF2A2A]'
+                        }
+                      >
+                        V2 {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
+                      </span>
+                    ) : showLap3 && scrubPoint.timeDelta3vs1Sec !== null ? (
+                      <span
+                        className={
+                          scrubPoint.timeDelta3vs1Sec <= 0
+                            ? 'text-[var(--ps-emerald)]'
+                            : 'text-[#FF2A2A]'
+                        }
+                      >
+                        V3 {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
+                      </span>
+                    ) : (
+                      <span className="text-[var(--ps-muted)]">--.--s</span>
+                    )}
+                    {showLap2 && showLap3 && scrubPoint.timeDelta3vs1Sec !== null && (
+                      <span className="ml-1.5 text-[#38BDF8]">
+                        · V3 {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                <div>
+                  <span className="text-[var(--ps-muted)] uppercase">
+                    Acel / Frenagem &amp; Lat G
                   </span>
                   <p className="mt-0.5 font-extrabold">
                     <span className="text-[var(--ps-emerald)]">
@@ -2911,6 +2822,143 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   )}
                 </svg>
               </div>
+
+              {(showLap2 || showLap3) && (
+                <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2">
+                  <div className="mb-1 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
+                    <span className="font-bold uppercase">
+                      Time Slip · Delta de Tempo (ΔT vs V1)
+                    </span>
+                    <span>
+                      <strong className="text-[var(--ps-emerald)]">Verde = Mais Rápido</strong> ·{' '}
+                      <strong className="text-[#FF2A2A]">Vermelho = Mais Lento</strong>
+                    </span>
+                  </div>
+                  <svg
+                    ref={fsTimeSlipRef}
+                    viewBox={`0 0 ${chartW} ${pTsH}`}
+                    className="h-24 w-full touch-none select-none cursor-crosshair sm:h-28"
+                    onPointerDown={(e) => {
+                      isDraggingRef.current = true;
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      updateFsScrubFromSvg(fsTimeSlipRef.current, e.clientX);
+                    }}
+                    onPointerMove={(e) => {
+                      if (!isDraggingRef.current && e.pointerType === 'touch') return;
+                      if (isDraggingRef.current || e.buttons === 1) {
+                        updateFsScrubFromSvg(fsTimeSlipRef.current, e.clientX);
+                      }
+                    }}
+                    onPointerUp={(e) => {
+                      isDraggingRef.current = false;
+                      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                      }
+                    }}
+                    onPointerCancel={() => {
+                      isDraggingRef.current = false;
+                    }}
+                  >
+                    <defs>
+                      <clipPath id="fs-ts-clip-gain">
+                        <rect x={padL} y={pTsTop - 4} width={plotW} height={pTsMidY - pTsTop + 4} />
+                      </clipPath>
+                      <clipPath id="fs-ts-clip-loss">
+                        <rect x={padL} y={pTsMidY} width={plotW} height={pTsBottom - pTsMidY + 4} />
+                      </clipPath>
+                    </defs>
+
+                    {[-fsMaxTimeSlipScaleSec, 0, fsMaxTimeSlipScaleSec].map((dTick) => {
+                      const y = fsYAtTimeSlip(dTick);
+                      return (
+                        <g key={`fs_ts_y_${dTick}`}>
+                          <line
+                            x1={padL}
+                            y1={y}
+                            x2={chartW - padR}
+                            y2={y}
+                            stroke={dTick === 0 ? 'var(--ps-muted)' : 'var(--ps-border)'}
+                            strokeOpacity={dTick === 0 ? '0.65' : '0.8'}
+                            strokeDasharray={dTick === 0 ? undefined : '3 3'}
+                          />
+                          <text
+                            x={padL - 5}
+                            y={y + 3}
+                            textAnchor="end"
+                            fill={
+                              dTick < 0 ? '#10B981' : dTick > 0 ? '#FF2A2A' : 'var(--ps-text)'
+                            }
+                            fontSize="8.5"
+                            fontFamily="monospace"
+                          >
+                            {dTick === 0
+                              ? '0.0s'
+                              : `${dTick > 0 ? '+' : ''}${dTick.toFixed(1)}s`}
+                          </text>
+                        </g>
+                      );
+                    })}
+
+                    {fsPrimaryTimeSlipPolys.posPoly && (
+                      <polygon fill="#10B981" fillOpacity="0.28" points={fsPrimaryTimeSlipPolys.posPoly} />
+                    )}
+                    {fsPrimaryTimeSlipPolys.negPoly && (
+                      <polygon fill="#FF2A2A" fillOpacity="0.28" points={fsPrimaryTimeSlipPolys.negPoly} />
+                    )}
+                    {fsPrimaryTimeSlipPolys.linePts && (
+                      <>
+                        <polyline
+                          fill="none"
+                          stroke="#10B981"
+                          strokeWidth="2.2"
+                          clipPath="url(#fs-ts-clip-gain)"
+                          points={fsPrimaryTimeSlipPolys.linePts}
+                        />
+                        <polyline
+                          fill="none"
+                          stroke="#FF2A2A"
+                          strokeWidth="2.2"
+                          clipPath="url(#fs-ts-clip-loss)"
+                          points={fsPrimaryTimeSlipPolys.linePts}
+                        />
+                      </>
+                    )}
+                    {showLap2 && fsTimeSlipLine3 && (
+                      <polyline
+                        fill="none"
+                        stroke="#38BDF8"
+                        strokeWidth="1.6"
+                        strokeDasharray="4 3"
+                        points={fsTimeSlipLine3}
+                      />
+                    )}
+                    <line
+                      x1={fsScrubX}
+                      y1={pTsTop}
+                      x2={fsScrubX}
+                      y2={pTsBottom}
+                      stroke="#FF2A2A"
+                      strokeWidth="1.8"
+                    />
+                    {(showLap2 ? scrubPoint.timeDelta2vs1Sec : scrubPoint.timeDelta3vs1Sec) !==
+                      null && (() => {
+                      const activeDelta = showLap2
+                        ? scrubPoint.timeDelta2vs1Sec!
+                        : scrubPoint.timeDelta3vs1Sec!;
+                      return (
+                        <circle
+                          cx={fsScrubX}
+                          cy={fsYAtTimeSlip(activeDelta)}
+                          r="3.8"
+                          fill={activeDelta <= 0 ? '#10B981' : '#FF2A2A'}
+                          stroke="#FFFFFF"
+                          strokeWidth="1.3"
+                        />
+                      );
+                    })()}
+                  </svg>
+                </div>
+              )}
             </div>
 
             {/* Controles Ergonômicos de Replay e Distância na Base */}

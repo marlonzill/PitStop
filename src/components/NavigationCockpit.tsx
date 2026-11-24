@@ -382,13 +382,13 @@ const TnavHorizontalColorBar: React.FC<{
               : isAhead
                 ? 'text-[var(--ps-emerald)]'
                 : isLate
-                  ? 'text-[#FF2A2A]'
+                  ? 'text-[var(--ps-danger)]'
                   : 'text-[var(--ps-muted)]'
           }
         >
           {statusLabel}
         </span>
-        <span className={isLate ? 'text-[#FF2A2A]' : 'text-[var(--ps-muted)]'}>
+        <span className={isLate ? 'text-[var(--ps-danger)]' : 'text-[var(--ps-muted)]'}>
           Atrasado +
         </span>
       </div>
@@ -536,7 +536,7 @@ const DigitalSpeedometer: React.FC<{
       : Math.abs(diff) <= 1.5
         ? 'text-[var(--ps-emerald)]'
         : diff > 0
-          ? 'text-[#FF2A2A]'
+          ? 'text-[var(--ps-danger)]'
           : 'text-[var(--ps-muted)]';
 
   return (
@@ -1031,7 +1031,7 @@ const PlanilhaRow = React.memo<PlanilhaRowProps>(({
               e.stopPropagation();
               onSyncToTulipa(realIdx);
             }}
-            className="mt-0.5 rounded bg-zinc-950 px-1.5 py-0.5 font-mono text-[8px] font-extrabold tracking-wide text-sky-300 hover:bg-zinc-800 sm:mt-1 sm:px-2 sm:text-[9px]"
+            className="mt-0.5 rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-1.5 py-0.5 font-mono text-[8px] font-extrabold tracking-wide text-[var(--ps-accent)] hover:border-[var(--ps-accent)] sm:mt-1 sm:px-2 sm:text-[9px]"
           >
             AQUI / SINC.
           </button>
@@ -2287,7 +2287,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                     {pd.showDeltaMeters && opts.pDeltaMeters !== null && (
                       <span>
                         Dif:{' '}
-                        <strong className={opts.pDeltaMeters >= 0 ? 'text-[var(--ps-emerald)]' : 'text-[#FF2A2A]'}>
+                        <strong className={opts.pDeltaMeters >= 0 ? 'text-[var(--ps-emerald)]' : 'text-[var(--ps-danger)]'}>
                           {opts.pDeltaMeters >= 0 ? '+' : ''}
                           {opts.pDeltaMeters} m
                         </strong>
@@ -2352,7 +2352,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                                 ? 'text-[var(--ps-text)]'
                                 : opts.pDeltaSec < 0
                                   ? 'text-[var(--ps-emerald)]'
-                                  : 'text-[#FF2A2A]'
+                                  : 'text-[var(--ps-danger)]'
                         }`}
                       >
                         {nonTimed ? 'n.e.' : formatTnavReadout(opts.pDeltaSec)}
@@ -2458,18 +2458,18 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               <p className="text-xs text-[var(--ps-muted)]">
                 Canal: <strong className="text-[var(--ps-text)]">{pairingPresence.transport.toUpperCase()}</strong>
               </p>
-              <div className="flex justify-center gap-2 pt-1">
+              <div className="flex flex-wrap justify-center gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => playPairingBell()}
-                  className="pitstop-btn-metal rounded-lg px-4 py-2 text-xs font-bold"
+                  className="pitstop-btn-metal min-h-[44px] rounded-lg px-4 text-xs font-bold"
                 >
                   Testar Sinetinha
                 </button>
                 <button
                   type="button"
                   onClick={() => setSoundEnabled((s) => !s)}
-                  className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 py-2 text-xs font-bold text-[var(--ps-muted)]"
+                  className="min-h-[44px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
                 >
                   {soundEnabled ? 'Som Ativo' : 'Som Mudo'}
                 </button>
@@ -2524,8 +2524,8 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             </p>
 
             {parseError && (
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/50 bg-red-500/15 p-3 text-left text-xs text-red-500">
-                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#FF2A2A]" />
+              <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/50 bg-red-500/15 p-3 text-left text-xs font-semibold text-[var(--ps-danger)]">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ps-danger)]" />
                 <span>{parseError}</span>
               </div>
             )}
@@ -2578,7 +2578,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
         ? { text: 'text-[var(--ps-emerald)]', label: 'NO TEMPO IDEAL', bg: 'bg-emerald-500' }
         : deltaSec < 0
           ? { text: 'text-[var(--ps-emerald)]', label: 'ADIANTADO · TIRE O PÉ', bg: 'bg-emerald-500' }
-          : { text: 'text-[#FF2A2A]', label: 'ATRASADO · ACELERE', bg: 'bg-[#E10600]' };
+          : { text: 'text-[var(--ps-danger)]', label: 'ATRASADO · ACELERE', bg: 'bg-[#E10600]' };
 
   const hasPmmChangeSoon =
     currentTulipa &&
@@ -2661,7 +2661,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               type="button"
               onClick={() => setSoundEnabled((s) => !s)}
               title={soundEnabled ? 'Desativar bipes e voz' : 'Ativar bipes e voz'}
-              className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
+              className="inline-flex h-[42px] w-[42px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
             >
               {soundEnabled ? (
                 <Volume2 className="h-4 w-4 text-[var(--ps-accent)]" />
@@ -2673,7 +2673,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
             <button
               type="button"
               onClick={() => setFunctionsOpen(true)}
-              className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-[11px] font-semibold text-[var(--ps-text)] hover:bg-[var(--ps-card)] whitespace-nowrap shrink-0 sm:text-xs"
+              className="inline-flex min-h-[42px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-semibold text-[var(--ps-text)] hover:bg-[var(--ps-card)] whitespace-nowrap shrink-0"
             >
               <Settings2 className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
               <span>Funções</span>
@@ -2683,7 +2683,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               <button
                 type="button"
                 onClick={handleStartNavigation}
-                className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap sm:text-xs"
+                className="pitstop-btn-red inline-flex min-h-[42px] items-center gap-1.5 rounded-lg px-4 text-xs font-extrabold tracking-wide uppercase whitespace-nowrap"
               >
                 <Play className="h-3.5 w-3.5 fill-current" />
                 <span>Largada</span>
@@ -2692,7 +2692,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               <button
                 type="button"
                 onClick={() => setIsRunning(false)}
-                className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3.5 text-[11px] font-extrabold tracking-wide uppercase whitespace-nowrap sm:text-xs"
+                className="pitstop-btn-metal inline-flex min-h-[42px] items-center gap-1.5 rounded-lg px-4 text-xs font-extrabold tracking-wide uppercase whitespace-nowrap"
               >
                 <Pause className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
                 <span>Pausar</span>
@@ -2707,10 +2707,10 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               Boolean((t.notes && t.notes.trim()) || t.notesImageDataUrl || t.imageIsComposite)
             ) ||
             roadbook.totalKm < 0.5) && (
-          <div className="border-t border-amber-500/30 bg-amber-950/25 px-4 py-2 text-xs text-amber-200 sm:px-5">
+          <div className="border-t border-amber-500/35 bg-amber-500/12 px-4 py-2 text-xs text-[var(--ps-text)] sm:px-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <FileSearch className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                <FileSearch className="h-3.5 w-3.5 text-[var(--ps-amber)] shrink-0" />
                 <span>
                   {(roadbook.raceParameters?.notesCount ?? 0) === 0 &&
                   !roadbook.tulipas.some((t) =>
@@ -2722,7 +2722,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-amber-500/40 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-amber-300 hover:bg-slate-800">
+                <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1 rounded-md border border-amber-500/45 bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-bold text-[var(--ps-amber)] hover:border-[var(--ps-accent)]">
                   <FileSearch className="h-3 w-3" />
                   <span>Inspecionar .NBP</span>
                   <input
@@ -2740,7 +2740,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowStructureReport((v) => !v)}
-                    className="rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-slate-800"
+                    className="min-h-[36px] rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                   >
                     {showStructureReport ? 'Ocultar' : 'Ver Estrutura'}
                   </button>
@@ -2748,40 +2748,40 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               </div>
             </div>
             {showStructureReport && fileStructureReport && (
-              <div className="mt-2 rounded-lg border border-slate-800 bg-black p-3">
+              <div className="mt-2 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] p-3">
                 <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-mono text-[10px] font-bold text-sky-400 uppercase">
+                  <span className="font-mono text-[10px] font-bold text-[var(--ps-accent)] uppercase">
                     Estrutura do Arquivo
                   </span>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
                       onClick={handleDownloadDiagnosticTxt}
-                      className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-sky-300 hover:bg-slate-800"
+                      className="inline-flex items-center gap-1 rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-semibold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                     >
-                      <Download className="h-3 w-3" />
+                      <Download className="h-3 w-3 text-[var(--ps-accent)]" />
                       <span>Baixar .TXT p/ Enviar</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleCopyStructureReport}
-                      className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-slate-200 hover:bg-slate-800"
+                      className="inline-flex items-center gap-1 rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-semibold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
                     >
                       {copiedReport ? (
                         <>
-                          <Check className="h-3 w-3 text-emerald-400" />
+                          <Check className="h-3 w-3 text-[var(--ps-emerald)]" />
                           <span>Copiado</span>
                         </>
                       ) : (
                         <>
-                          <Copy className="h-3 w-3 text-sky-400" />
+                          <Copy className="h-3 w-3 text-[var(--ps-accent)]" />
                           <span>Copiar</span>
                         </>
                       )}
                     </button>
                   </div>
                 </div>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-slate-300">
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-[var(--ps-muted)]">
                   {fileStructureReport}
                 </pre>
               </div>
@@ -2860,7 +2860,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 </div>
                 <div
                   className={`mt-0.5 font-mono text-2xl font-extrabold leading-none tracking-tight tabular-nums sm:text-4xl lg:text-5xl ${
-                    isRunning ? 'text-[#FF2A2A]' : 'text-[var(--ps-muted)]'
+                    isRunning ? 'text-[var(--ps-danger)]' : 'text-[var(--ps-muted)]'
                   }`}
                 >
                   {(() => {
@@ -2902,7 +2902,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                             ? 'text-[var(--ps-emerald)]'
                             : deltaSec < 0
                               ? 'text-[var(--ps-emerald)]'
-                              : 'text-[#E10600]'
+                              : 'text-[var(--ps-danger)]'
                     }`}
                   >
                     {isNonTimedSection ? 'n.e.' : formatTnavReadout(deltaSec)}
@@ -2949,7 +2949,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <span className="truncate text-[9px] font-bold tracking-tight text-[var(--ps-muted)] uppercase sm:text-[10px]">
                   Vel
                 </span>
-                <div className="my-0.5 font-mono text-lg font-extrabold leading-tight text-[#FF2A2A] tabular-nums sm:my-1 sm:text-3xl">
+                <div className="my-0.5 font-mono text-lg font-extrabold leading-tight text-[var(--ps-danger)] tabular-nums sm:my-1 sm:text-3xl">
                   {currentSpeedKmh.toFixed(0)}
                 </div>
                 <span className="font-mono text-[9px] text-[var(--ps-muted)] sm:text-[10px]">km/h</span>
@@ -2960,7 +2960,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   <span className="sm:hidden">Média</span>
                   <span className="hidden sm:inline">Média (Vel/TDN)</span>
                 </span>
-                <div className="my-0.5 font-mono text-lg font-extrabold leading-tight text-[#FF2A2A] tabular-nums sm:my-1 sm:text-3xl">
+                <div className="my-0.5 font-mono text-lg font-extrabold leading-tight text-[var(--ps-danger)] tabular-nums sm:my-1 sm:text-3xl">
                   {currentTulipa
                     ? isNonTimedSection
                       ? currentTulipa.type
@@ -3395,7 +3395,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               type="button"
               onClick={() => setFunctionsOpen(true)}
               title="Abrir Funções do Navegador"
-              className="flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-1 text-[var(--ps-accent)] transition-colors hover:bg-[var(--ps-card)]"
+              className="flex min-h-[48px] flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-1 text-[var(--ps-accent)] transition-all hover:bg-[var(--ps-card)] active:scale-[0.98]"
             >
               <span className="text-[8px] font-bold tracking-wider text-[var(--ps-muted)] uppercase sm:text-[9px]">
                 Função
@@ -3408,7 +3408,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               onClick={() => adjustOdometer(-manualStepKm)}
               title={`Diminuir hodômetro manualmente em ${Math.round(manualStepKm * 1000)}m`}
               aria-label={`Diminuir hodômetro em ${Math.round(manualStepKm * 1000)} metros`}
-              className="flex min-h-[44px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] font-mono text-2xl font-black text-[var(--ps-muted)] transition-colors hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)] sm:text-3xl"
+              className="flex min-h-[48px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] font-mono text-2xl font-black text-[var(--ps-muted)] transition-all hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)] active:scale-[0.98] sm:text-3xl"
             >
               −
             </button>
@@ -3419,7 +3419,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 setManualStepKm((s) => (s === 0.01 ? 0.05 : s === 0.05 ? 0.1 : 0.01))
               }
               title="Toque para alternar o incremento manual (±10m, ±50m, ±100m)"
-              className="min-w-0 flex min-h-[44px] flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 text-center text-[var(--ps-text)] transition-colors hover:border-[var(--ps-accent)]"
+              className="min-w-0 flex min-h-[48px] flex-col items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2 text-center text-[var(--ps-text)] transition-all hover:border-[var(--ps-accent)] active:scale-[0.98]"
             >
               <span className="truncate font-mono text-sm font-black leading-tight tabular-nums text-[var(--ps-text)] sm:text-lg">
                 {(() => {
@@ -3440,7 +3440,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               onClick={() => adjustOdometer(manualStepKm)}
               title={`Aumentar hodômetro manualmente em ${Math.round(manualStepKm * 1000)}m`}
               aria-label={`Aumentar hodômetro em ${Math.round(manualStepKm * 1000)} metros`}
-              className="flex min-h-[44px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] font-mono text-2xl font-black text-[var(--ps-muted)] transition-colors hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)] sm:text-3xl"
+              className="flex min-h-[48px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] font-mono text-2xl font-black text-[var(--ps-muted)] transition-all hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)] active:scale-[0.98] sm:text-3xl"
             >
               +
             </button>
@@ -3449,7 +3449,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
               type="button"
               onClick={() => syncToTulipa(activeTulipaIdx)}
               title="Sincronizar hodômetro com a tulipa atual (OK / Lap)"
-              className="pitstop-btn-red flex min-h-[44px] flex-col items-center justify-center rounded-lg px-1 transition-colors active:scale-[0.98]"
+              className="pitstop-btn-red flex min-h-[48px] flex-col items-center justify-center rounded-lg px-1 transition-all active:scale-[0.98]"
             >
               <span className="font-mono text-base font-black leading-none sm:text-lg">OK</span>
               <span className="text-[8px] font-extrabold tracking-wide uppercase sm:text-[9px]">
@@ -3475,7 +3475,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <button
                   type="button"
                   onClick={() => setFunctionsOpen(false)}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--ps-muted)] hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)]"
+                  className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--ps-muted)] hover:bg-[var(--ps-card)] hover:text-[var(--ps-text)]"
                   aria-label="Fechar funções"
                 >
                   <X className="h-5 w-5" />
@@ -3488,7 +3488,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   <div className="flex items-center gap-2 min-w-0">
                     <span
                       className={`font-mono text-[10px] font-extrabold tracking-widest uppercase ${
-                        isRunning ? 'text-[#FF2A2A]' : 'text-[var(--ps-muted)]'
+                        isRunning ? 'text-[var(--ps-danger)]' : 'text-[var(--ps-muted)]'
                       }`}
                     >
                       {isRunning ? 'EM PROVA' : 'PRONTO'}
@@ -3784,7 +3784,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                 <div>
                   <div className="flex items-center justify-between text-xs font-semibold text-[var(--ps-muted)]">
                     <span>Troca Antecipada de Referência</span>
-                    <span className="font-mono text-[#FF2A2A]">{transitionAdvanceM}m</span>
+                    <span className="font-mono font-bold text-[var(--ps-danger)]">{transitionAdvanceM}m</span>
                   </div>
                   <div className="mt-2 grid grid-cols-4 gap-2">
                     {[0, 2, 5, 10, 15, 20, 30, 50].map((m) => (

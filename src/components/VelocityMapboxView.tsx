@@ -62,7 +62,7 @@ interface VelocityMapboxViewProps {
   headingUp?: boolean;
   onToggleHeadingUp?: () => void;
   navHeadingDeg?: number | null;
-  heatmapMode?: 'none' | 'speed' | 'accel';
+  heatmapMode?: 'none' | 'laps' | 'speed' | 'accel';
   showSpeedBadges?: boolean;
   containerClassName?: string;
   placementKind?: TrapKind | null;
@@ -178,8 +178,8 @@ function createVehicleMarkerElement(
   variant: VehicleVariant = 'default'
 ): HTMLDivElement {
   const el = document.createElement('div');
-  el.style.width = '34px';
-  el.style.height = '38px';
+  el.style.width = '18px';
+  el.style.height = '18px';
   el.style.display = 'flex';
   el.style.alignItems = 'center';
   el.style.justifyContent = 'center';
@@ -197,62 +197,26 @@ function createVehicleMarkerElement(
             ? '#F59E0B'
             : '#E10600';
   const strokeColor = variant === 'lapB' ? '#111214' : '#FFFFFF';
-  const badgeText =
-    variant === 'lap1'
-      ? 'V1'
-      : variant === 'lap2'
-        ? 'V2'
-        : variant === 'lap3'
-          ? 'V3'
-          : variant === 'lapA'
-            ? 'A'
-            : variant === 'lapB'
-              ? 'B'
-              : '';
 
   const svgNS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNS, 'svg');
-  svg.setAttribute('width', '28');
-  svg.setAttribute('height', '28');
+  svg.setAttribute('width', '15');
+  svg.setAttribute('height', '15');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.dataset.carArrow = '1';
   svg.style.transform = `rotate(${typeof headingDeg === 'number' ? headingDeg : 0}deg)`;
   svg.style.transformOrigin = '50% 50%';
-  svg.style.filter = 'drop-shadow(0 2px 5px rgba(0,0,0,0.9))';
+  svg.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.85))';
 
   const path = document.createElementNS(svgNS, 'path');
   path.setAttribute('d', 'M12 2L20 20L12 16L4 20Z');
   path.setAttribute('fill', fillColor);
   path.setAttribute('stroke', strokeColor);
-  path.setAttribute('stroke-width', '2.1');
+  path.setAttribute('stroke-width', '1.4');
   path.setAttribute('stroke-linejoin', 'round');
   svg.appendChild(path);
 
   el.appendChild(svg);
-
-  if (badgeText) {
-    const badge = document.createElement('span');
-    badge.textContent = badgeText;
-    badge.style.position = 'absolute';
-    badge.style.top = '-4px';
-    badge.style.right = '-3px';
-    badge.style.minWidth = '16px';
-    badge.style.height = '15px';
-    badge.style.display = 'inline-flex';
-    badge.style.alignItems = 'center';
-    badge.style.justifyContent = 'center';
-    badge.style.borderRadius = '4px';
-    badge.style.fontFamily = 'monospace';
-    badge.style.fontSize = '9px';
-    badge.style.fontWeight = '900';
-    badge.style.lineHeight = '1';
-    badge.style.padding = '0 3px';
-    badge.style.background = '#050608';
-    badge.style.color = fillColor;
-    badge.style.border = `1.5px solid ${fillColor}`;
-    badge.style.boxShadow = '0 1px 4px rgba(0,0,0,0.85)';
-    el.appendChild(badge);
-  }
 
   return el;
 }
@@ -508,121 +472,146 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     return () => window.clearTimeout(t);
   }, [isFullscreen]);
 
-  // Renderiza traçados: V3 (ciano tracejada -2.6m), V2 (vermelha tracejada +2.6m) e V1 (Mapa de Calor por cima)
+  // Renderiza traçados paralelos finos (V1 = 0m, V2 = +1.8m, V3 = -1.8m) e modos de camada (Volta / Vel / Acel-Freio)
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
     if (!routeLayer) return;
     routeLayer.clearLayers();
 
-    // 1. Linha da Volta 3 (Ciano tracejada por baixo, deslocamento -2.6m)
-    if (thirdTrace && thirdTrace.length > 1) {
-      const thirdLatLngs = offsetTraceLatLngs(
-        thirdTrace,
-        offsetGhostTrace ? -2.6 : 0
-      );
-      L.polyline(thirdLatLngs, {
-        color: '#050608',
-        weight: 7,
-        opacity: 0.65,
-        dashArray: '8 8',
-        lineCap: 'round',
-      }).addTo(routeLayer);
-      L.polyline(thirdLatLngs, {
-        color: '#38BDF8',
-        weight: 5,
-        opacity: 0.9,
-        dashArray: '8 8',
-        lineCap: 'round',
-      }).addTo(routeLayer);
-    }
+    const hasLap2 = Boolean(ghostTrace && ghostTrace.length > 1);
+    const hasLap3 = Boolean(thirdTrace && thirdTrace.length > 1);
+    const hasComparison = hasLap2 || hasLap3;
+    const strokeWeight = hasComparison ? 2.6 : 3.2;
+    const casingWeight = strokeWeight + 1.2;
 
-    // 2. Linha da Volta 2 por baixo (vermelha tracejada, deslocamento +2.6m no Mapa Único)
-    if (ghostTrace && ghostTrace.length > 1) {
-      const ghostLatLngs = offsetTraceLatLngs(
-        ghostTrace,
-        offsetGhostTrace ? 2.6 : 0
-      );
-      L.polyline(ghostLatLngs, {
-        color: '#050608',
-        weight: 8,
-        opacity: 0.65,
-        dashArray: '10 8',
-        lineCap: 'round',
-      }).addTo(routeLayer);
-      L.polyline(ghostLatLngs, {
-        color: '#FF2A2A',
-        weight: 5.5,
-        opacity: 0.92,
-        dashArray: '10 8',
-        lineCap: 'round',
-      }).addTo(routeLayer);
-      L.polyline(ghostLatLngs, {
-        color: '#FFFFFF',
-        weight: 1.5,
-        opacity: 0.45,
-        dashArray: '10 8',
-        lineCap: 'round',
-      }).addTo(routeLayer);
-    }
+    const allTraces = [
+      ...(editableTrace.length > 1 ? editableTrace : []),
+      ...(hasLap2 && ghostTrace ? ghostTrace : []),
+      ...(hasLap3 && thirdTrace ? thirdTrace : []),
+    ];
+    const maxSpd = Math.max(
+      60,
+      ...allTraces.map((s) => (Number.isFinite(s.speedKmh) ? s.speedKmh : 0))
+    );
+    const minSpd = Math.min(
+      maxSpd - 10,
+      ...allTraces.map((s) => (Number.isFinite(s.speedKmh) ? s.speedKmh : maxSpd))
+    );
 
-    // 3. Linha da Volta 1 (ou principal) por cima
-    if (editableTrace.length > 1) {
-      const hasComparison = Boolean(
-        (ghostTrace && ghostTrace.length > 1) || (thirdTrace && thirdTrace.length > 1)
-      );
-      const topWeight = hasComparison ? 4 : 4.5;
+    const drawHeatmapTrace = (
+      trace: VelocitySample[],
+      offsetM: number,
+      mode: 'speed' | 'accel'
+    ) => {
+      if (trace.length < 2) return;
+      const latLngs = offsetTraceLatLngs(trace, offsetM);
+      const groups: Array<{ color: string; pts: [number, number][] }> = [];
 
-      if (heatmapMode === 'none') {
-        const latLngs: [number, number][] = editableTrace.map((s) => [s.lat, s.lon]);
-        L.polyline(latLngs, { color: '#FFFFFF', weight: 6, opacity: 0.85 }).addTo(routeLayer);
-        L.polyline(latLngs, { color: '#E10600', weight: 3.5, opacity: 0.95 }).addTo(routeLayer);
-      } else {
-        const maxSpd = Math.max(
-          60,
-          ...editableTrace.map((s) => (Number.isFinite(s.speedKmh) ? s.speedKmh : 0))
-        );
-        const minSpd = Math.min(
-          maxSpd - 10,
-          ...editableTrace.map((s) => (Number.isFinite(s.speedKmh) ? s.speedKmh : maxSpd))
-        );
+      for (let i = 1; i < trace.length; i += 1) {
+        const prev = trace[i - 1];
+        const curr = trace[i];
+        let segColor = '#f59e0b';
 
-        for (let i = 1; i < editableTrace.length; i += 1) {
-          const prev = editableTrace[i - 1];
-          const curr = editableTrace[i];
-          let segColor = '#f59e0b';
+        if (mode === 'speed') {
+          const ratio = Math.max(
+            0,
+            Math.min(1, (curr.speedKmh - minSpd) / Math.max(15, maxSpd - minSpd))
+          );
+          segColor = ratio >= 0.66 ? '#10b981' : ratio >= 0.33 ? '#f59e0b' : '#E10600';
+        } else {
+          const longG =
+            typeof curr.accelLongG === 'number'
+              ? curr.accelLongG
+              : computeSampleGForces(prev, curr).accelLongG;
+          segColor = longG > 0.06 ? '#10b981' : longG < -0.06 ? '#E10600' : '#f59e0b';
+        }
 
-          if (heatmapMode === 'speed') {
-            const ratio = Math.max(
-              0,
-              Math.min(1, (curr.speedKmh - minSpd) / Math.max(15, maxSpd - minSpd))
-            );
-            segColor =
-              ratio >= 0.66 ? '#10b981' : ratio >= 0.33 ? '#f59e0b' : '#E10600';
-          } else {
-            const longG =
-              typeof curr.accelLongG === 'number'
-                ? curr.accelLongG
-                : computeSampleGForces(prev, curr).accelLongG;
-            segColor =
-              longG > 0.06 ? '#10b981' : longG < -0.06 ? '#E10600' : '#f59e0b';
-          }
-
-          L.polyline(
-            [
-              [prev.lat, prev.lon],
-              [curr.lat, curr.lon],
-            ],
-            { color: '#000000', weight: topWeight + 2.5, opacity: 0.55 }
-          ).addTo(routeLayer);
-          L.polyline(
-            [
-              [prev.lat, prev.lon],
-              [curr.lat, curr.lon],
-            ],
-            { color: segColor, weight: topWeight, opacity: 0.98 }
-          ).addTo(routeLayer);
+        const lastGroup = groups[groups.length - 1];
+        if (lastGroup && lastGroup.color === segColor) {
+          lastGroup.pts.push(latLngs[i]);
+        } else {
+          groups.push({ color: segColor, pts: [latLngs[i - 1], latLngs[i]] });
         }
       }
+
+      for (const g of groups) {
+        L.polyline(g.pts, {
+          color: '#050608',
+          weight: casingWeight,
+          opacity: 0.42,
+          lineCap: 'round',
+          lineJoin: 'round',
+        }).addTo(routeLayer);
+        L.polyline(g.pts, {
+          color: g.color,
+          weight: strokeWeight,
+          opacity: 0.96,
+          lineCap: 'round',
+          lineJoin: 'round',
+        }).addTo(routeLayer);
+      }
+    };
+
+    const drawSolidTrace = (
+      trace: VelocitySample[],
+      offsetM: number,
+      color: string,
+      casingColor = '#050608',
+      casingOpacity = 0.45
+    ) => {
+      if (trace.length < 2) return;
+      const latLngs = offsetTraceLatLngs(trace, offsetM);
+      L.polyline(latLngs, {
+        color: casingColor,
+        weight: casingWeight,
+        opacity: casingOpacity,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(routeLayer);
+      L.polyline(latLngs, {
+        color,
+        weight: strokeWeight,
+        opacity: 0.96,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(routeLayer);
+    };
+
+    if (heatmapMode === 'laps') {
+      if (hasLap3 && thirdTrace) {
+        drawSolidTrace(thirdTrace, offsetGhostTrace ? -1.8 : 0, '#38BDF8');
+      }
+      if (hasLap2 && ghostTrace) {
+        drawSolidTrace(ghostTrace, offsetGhostTrace ? 1.8 : 0, '#FF2A2A');
+      }
+      if (editableTrace.length > 1) {
+        drawSolidTrace(editableTrace, 0, '#10B981');
+      }
+      return;
+    }
+
+    if (heatmapMode === 'speed' || heatmapMode === 'accel') {
+      if (hasLap3 && thirdTrace) {
+        drawHeatmapTrace(thirdTrace, offsetGhostTrace ? -1.8 : 0, heatmapMode);
+      }
+      if (hasLap2 && ghostTrace) {
+        drawHeatmapTrace(ghostTrace, offsetGhostTrace ? 1.8 : 0, heatmapMode);
+      }
+      if (editableTrace.length > 1) {
+        drawHeatmapTrace(editableTrace, 0, heatmapMode);
+      }
+      return;
+    }
+
+    // Modo padrão ('none' — Editor de Pista / Mapa Ao Vivo)
+    if (hasLap3 && thirdTrace) {
+      drawSolidTrace(thirdTrace, offsetGhostTrace ? -1.8 : 0, '#38BDF8');
+    }
+    if (hasLap2 && ghostTrace) {
+      drawSolidTrace(ghostTrace, offsetGhostTrace ? 1.8 : 0, '#FF2A2A');
+    }
+    if (editableTrace.length > 1) {
+      drawSolidTrace(editableTrace, 0, '#E10600', '#FFFFFF', 0.78);
     }
   }, [editableTrace, ghostTrace, thirdTrace, offsetGhostTrace, heatmapMode]);
 
@@ -862,8 +851,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
-          iconSize: [34, 38],
-          iconAnchor: [17, 19],
+          iconSize: [18, 18],
+          iconAnchor: [9, 9],
         });
         const marker = L.marker([currentPos.lat, currentPos.lon], {
           icon,
@@ -885,10 +874,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       primaryMarkerRef.current = null;
     }
 
-    // Carro 2 (Volta 2 Vermelho com badge "V2")
+    // Carro 2 (Volta 2 Vermelho)
     if (ghostCar) {
       const [gLat, gLon] = offsetGhostTrace
-        ? offsetPointAlongTrace(ghostTrace, ghostCar.lat, ghostCar.lon, 2.6)
+        ? offsetPointAlongTrace(ghostTrace, ghostCar.lat, ghostCar.lon, 1.8)
         : [ghostCar.lat, ghostCar.lon];
 
       if (!ghostMarkerRef.current) {
@@ -896,8 +885,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
-          iconSize: [34, 38],
-          iconAnchor: [17, 19],
+          iconSize: [18, 18],
+          iconAnchor: [9, 9],
         });
         const marker = L.marker([gLat, gLon], {
           icon,
@@ -919,10 +908,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       ghostMarkerRef.current = null;
     }
 
-    // Carro 3 (Volta 3 Ciano com badge "V3")
+    // Carro 3 (Volta 3 Ciano)
     if (thirdCar) {
       const [tLat, tLon] = offsetGhostTrace
-        ? offsetPointAlongTrace(thirdTrace, thirdCar.lat, thirdCar.lon, -2.6)
+        ? offsetPointAlongTrace(thirdTrace, thirdCar.lat, thirdCar.lon, -1.8)
         : [thirdCar.lat, thirdCar.lon];
 
       if (!thirdMarkerRef.current) {
@@ -930,8 +919,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
-          iconSize: [34, 38],
-          iconAnchor: [17, 19],
+          iconSize: [18, 18],
+          iconAnchor: [9, 9],
         });
         const marker = L.marker([tLat, tLon], {
           icon,

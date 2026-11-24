@@ -142,7 +142,7 @@ export const AccountSubscriptionPanel: React.FC = () => {
         <section className="rounded-xl border border-amber-500/35 bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="space-y-1">
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 font-mono text-[10px] font-black tracking-wider text-amber-300 uppercase">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 font-mono text-[10px] font-black tracking-wider text-[var(--ps-amber)] uppercase">
                 DESATIVADO / MODO DEV
               </span>
               <h2 className="font-['Barlow_Condensed'] text-2xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
@@ -150,7 +150,7 @@ export const AccountSubscriptionPanel: React.FC = () => {
               </h2>
             </div>
 
-            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 font-mono text-xs font-black text-emerald-400 uppercase">
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 font-mono text-xs font-black text-[var(--ps-emerald)] uppercase">
               <Crown className="h-3.5 w-3.5" />
               <span>100% PRO LIBERADO</span>
             </span>
@@ -168,10 +168,10 @@ export const AccountSubscriptionPanel: React.FC = () => {
               {[
                 'Navegação & Planilha T15 (.NBP/.TXT)',
                 'Droid Piloto & Pareamento Sala/BLE',
-                'Cronômetro SS & 11 Layouts de Cockpit',
+                'Cronômetro SS & 13 Layouts de Cockpit',
                 'Datalogger 3 Voltas & Vídeo Overlay HUD',
                 'Controle de Câmeras GoPro BLE',
-                'Satcron Ao Vivo & Todos os 10 Temas',
+                'Satcron Ao Vivo & Todos os 24 Temas',
               ].map((feat) => (
                 <div key={feat} className="flex items-center gap-2">
                   <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ps-emerald)]" />
@@ -433,13 +433,13 @@ export const AccountSubscriptionPanel: React.FC = () => {
         <div
           className={`rounded-xl border p-4 space-y-2.5 ${
             isPro
-              ? 'border-emerald-500/50 bg-emerald-950/15'
+              ? 'border-emerald-500/50 bg-emerald-500/10'
               : 'border-[var(--ps-accent)]/60 bg-[var(--ps-surface)]'
           }`}
         >
           <div className="flex items-center justify-between">
             <span className="inline-flex items-center gap-1.5 font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-              <Crown className="h-4 w-4 text-amber-400" />
+              <Crown className="h-4 w-4 text-[var(--ps-amber)]" />
               <span>Plano PRO Completo</span>
             </span>
             <span className="rounded bg-[var(--ps-accent)] px-2 py-0.5 font-mono text-[10px] font-black text-[var(--ps-accent-text)] uppercase">
@@ -452,16 +452,16 @@ export const AccountSubscriptionPanel: React.FC = () => {
               'Cronômetro SS / Circuito com Parciais e Delta Time',
               'Datalogger 3 Voltas, G-G Circle & Vídeo Overlay HUD',
               'Automação Multi-GoPro BLE & Satcron Ao Vivo',
-              'Todos os 10 Temas Visuais Exclusivos',
+              'Todos os 24 Temas Visuais Exclusivos',
             ].map((item) => (
               <li key={item} className="flex items-center gap-2">
-                <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <Sparkles className="h-3.5 w-3.5 shrink-0 text-[var(--ps-amber)]" />
                 <span>{item}</span>
               </li>
             ))}
           </ul>
           {!isPro && (
-            <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+            <div className="rounded-lg border border-amber-500/35 bg-amber-500/12 px-3 py-2 text-[11px] font-medium text-[var(--ps-text)]">
               Para liberar o Plano PRO na sua conta, solicite a ativação ao administrador informando seu e-mail cadastrado.
             </div>
           )}

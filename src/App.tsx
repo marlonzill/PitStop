@@ -68,6 +68,7 @@ const OrganizerBackoffice = isCompetitorEnv
 export type SettingsSubMenu =
   | 'hub'
   | 'modality'
+  | 'velocity'
   | 'account'
   | 'theme'
   | 'collector'
@@ -284,7 +285,7 @@ export default function App() {
                   onClick={() => setActiveTab('inicial')}
                   aria-label="Início"
                   title="Início"
-                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'inicial'
                       ? 'pitstop-btn-red'
                       : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -310,7 +311,7 @@ export default function App() {
                     }}
                     aria-label="Regularidade"
                     title="Regularidade"
-                    className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
+                    className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
                       activeTab === 'navegacao'
                         ? 'pitstop-btn-red'
                         : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -321,7 +322,7 @@ export default function App() {
                       <span className="lg:hidden">Regul.</span>
                       <span className="hidden lg:inline">Regularidade</span>
                       {!isPro && (
-                        <span className="rounded bg-amber-500/20 px-1 py-0.5 font-mono text-[8px] font-black text-amber-400">
+                        <span className="rounded bg-amber-500/20 px-1 py-0.5 font-mono text-[8px] font-black text-[var(--ps-amber)]">
                           PRO
                         </span>
                       )}
@@ -336,7 +337,7 @@ export default function App() {
                     }}
                     aria-label="Velocidade"
                     title="Velocidade"
-                    className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
+                    className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
                       activeTab === 'velocidade'
                         ? 'pitstop-btn-red'
                         : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -353,7 +354,7 @@ export default function App() {
                   onClick={() => setActiveTab('calculadora')}
                   aria-label="Calculadora"
                   title="Calculadora"
-                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'calculadora'
                       ? 'pitstop-btn-red'
                       : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -369,7 +370,7 @@ export default function App() {
                   onClick={() => openSettingsSection('hub')}
                   aria-label="Configurações"
                   title="Configurações"
-                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[44px] flex-col lg:min-h-[38px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-colors whitespace-nowrap ${
+                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'configuracoes'
                       ? 'pitstop-btn-red'
                       : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'

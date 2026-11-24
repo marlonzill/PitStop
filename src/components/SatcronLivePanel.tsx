@@ -3,10 +3,12 @@ import {
   ExternalLink,
   Filter,
   RefreshCw,
+  SearchX,
   Trophy,
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import { CockpitSelect } from './CockpitSelect';
 import {
   DEFAULT_SATCRON_URL,
   fetchSatcronStagesClient,
@@ -256,8 +258,8 @@ export const SatcronLivePanel: React.FC = () => {
             <span
               className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 font-mono text-[10px] font-bold ${
                 isOnline
-                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
-                  : 'border-amber-500/40 bg-amber-500/15 text-amber-400'
+                  ? 'border-emerald-500/40 bg-emerald-500/15 text-[var(--ps-emerald)]'
+                  : 'border-amber-500/40 bg-amber-500/15 text-[var(--ps-amber)]'
               }`}
             >
               {isOnline ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
@@ -268,7 +270,7 @@ export const SatcronLivePanel: React.FC = () => {
               href={activeSourceHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-xl border border-[var(--ps-accent)]/60 bg-[var(--ps-accent-soft)] px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] transition-colors hover:bg-[var(--ps-accent)] hover:text-[var(--ps-accent-text)] whitespace-nowrap"
+              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-[var(--ps-accent)]/60 bg-[var(--ps-accent-soft)] px-3 text-[11px] font-extrabold text-[var(--ps-text)] transition-all active:scale-[0.98] hover:bg-[var(--ps-accent)] hover:text-[var(--ps-accent-text)] whitespace-nowrap"
             >
               <ExternalLink className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
               <span>Abrir Painel Oficial</span>
@@ -281,7 +283,7 @@ export const SatcronLivePanel: React.FC = () => {
             e.preventDefault();
             triggerIframeReload(urlInput, selectedMod, selectedSs);
           }}
-          className="flex flex-col gap-2 sm:flex-row"
+          className="flex flex-col gap-2.5 sm:flex-row"
         >
           <input
             type="url"
@@ -289,62 +291,56 @@ export const SatcronLivePanel: React.FC = () => {
             onChange={(e) => setUrlInput(e.target.value)}
             placeholder="https://satcron.com/stages/?race=novaitalia26&mod=1&ss=G"
             aria-label="Link da prova no Satcron"
-            className="min-h-[40px] min-w-0 flex-1 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 font-mono text-xs text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
+            className="min-h-[48px] min-w-0 flex-1 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 font-mono text-xs text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
           />
           <button
             type="submit"
-            className="pitstop-btn-red inline-flex h-[40px] items-center justify-center gap-1.5 rounded-xl px-4 text-xs font-extrabold uppercase sm:shrink-0"
+            className="pitstop-btn-red inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl px-5 text-xs font-extrabold uppercase sm:shrink-0"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${(loadingData || (!iframeLoaded && effectiveViewMode === 'iframe')) && isOnline ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 ${(loadingData || (!iframeLoaded && effectiveViewMode === 'iframe')) && isOnline ? 'animate-spin' : ''}`} />
             <span>Atualizar</span>
           </button>
         </form>
 
         {/* Modality & Stage Selectors */}
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <label className="space-y-1">
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+          <div className="space-y-1">
             <span className="ps-label block">Modalidade</span>
-            <select
+            <CockpitSelect
+              ariaLabel="Selecionar modalidade Satcron"
               value={selectedMod}
-              onChange={(e) => {
-                const nextMod = e.target.value;
+              options={modalityOptions.map((m) => ({
+                value: m.id,
+                label: m.name,
+              }))}
+              onChange={(nextMod) => {
                 setSelectedMod(nextMod);
                 setSelectedCategory('ALL');
                 triggerIframeReload(urlInput, nextMod, selectedSs);
               }}
-              className="min-h-[38px] w-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
-            >
-              {modalityOptions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </label>
+            />
+          </div>
 
-          <label className="space-y-1">
+          <div className="space-y-1">
             <span className="ps-label block">Especial / Acumulado</span>
-            <select
+            <CockpitSelect
+              ariaLabel="Selecionar especial ou acumulado geral"
               value={selectedSs}
-              onChange={(e) => {
-                const nextSs = e.target.value;
+              options={stageChoices.map((stId) => ({
+                value: stId,
+                label: stId === 'G' ? 'Acumulado Geral (G)' : `Especial SS${stId}`,
+              }))}
+              onChange={(nextSs) => {
                 setSelectedSs(nextSs);
                 triggerIframeReload(urlInput, selectedMod, nextSs);
               }}
-              className="min-h-[38px] w-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
-            >
-              {stageChoices.map((stId) => (
-                <option key={stId} value={stId}>
-                  {stId === 'G' ? 'Acumulado Geral (G)' : `Especial SS${stId}`}
-                </option>
-              ))}
-            </select>
-          </label>
+            />
+          </div>
         </div>
       </div>
 
       {invalidUrlError && (
-        <div className="rounded-xl border border-amber-500/60 bg-amber-500/15 p-3 text-xs font-semibold text-amber-400">
+        <div className="rounded-xl border border-amber-500/60 bg-amber-500/15 p-3 text-xs font-semibold text-[var(--ps-amber)]">
           {invalidUrlError}
         </div>
       )}
@@ -354,24 +350,26 @@ export const SatcronLivePanel: React.FC = () => {
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 py-2.5">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Filter className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
-            <label className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
               <span className="shrink-0 font-mono text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                 Categoria:
               </span>
-              <select
-                aria-label="Filtrar resultados por categoria"
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="min-h-[38px] min-w-0 flex-1 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-extrabold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none sm:max-w-xs"
-              >
-                <option value="ALL">Todas Categorias</option>
-                {categoryOptions.map((cat) => (
-                  <option key={cat.value} value={cat.value}>
-                    {cat.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <div className="min-w-0 flex-1 sm:max-w-xs">
+                <CockpitSelect
+                  compact
+                  ariaLabel="Filtrar resultados por categoria"
+                  value={selectedCategory}
+                  options={[
+                    { value: 'ALL', label: 'Todas Categorias' },
+                    ...categoryOptions.map((cat) => ({
+                      value: cat.value,
+                      label: cat.label,
+                    })),
+                  ]}
+                  onChange={(val) => setSelectedCategory(val)}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -482,9 +480,19 @@ export const SatcronLivePanel: React.FC = () => {
                   </table>
                 </div>
               ) : (
-                <p className="py-6 text-center font-mono text-xs text-[var(--ps-muted)]">
-                  Nenhum competidor encontrado na categoria selecionada ({selectedCategory}).
-                </p>
+                <div className="flex flex-col items-center gap-2.5 py-8 text-center">
+                  <SearchX className="h-6 w-6 text-[var(--ps-muted)]" />
+                  <p className="font-mono text-xs text-[var(--ps-muted)]">
+                    Nenhum competidor na categoria <strong className="text-[var(--ps-text)]">{selectedCategory}</strong>.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory('ALL')}
+                    className="pitstop-btn-metal min-h-[40px] rounded-xl px-4 text-xs font-bold"
+                  >
+                    Ver Todas as Categorias
+                  </button>
+                </div>
               )
             ) : primaryParsedTable ? (
               <div className="overflow-x-auto">
@@ -539,13 +547,13 @@ export const SatcronLivePanel: React.FC = () => {
           </div>
         )
       ) : (
-        <div className="rounded-2xl border border-amber-500/50 bg-[var(--ps-surface)] p-5 text-center space-y-2">
-          <WifiOff className="mx-auto h-6 w-6 text-amber-400" />
-          <p className="text-xs font-bold text-amber-400">
-            Sem conexão com a internet no momento.
+        <div className="rounded-2xl border border-amber-500/50 bg-[var(--ps-surface)] p-6 text-center space-y-2.5">
+          <WifiOff className="mx-auto h-7 w-7 text-[var(--ps-amber)]" />
+          <p className="text-sm font-bold text-[var(--ps-amber)]">
+            Sem conexão com a internet
           </p>
-          <p className="text-[11px] text-[var(--ps-muted)]">
-            Conecte-se à internet para visualizar os resultados em tempo real do Satcron.
+          <p className="text-xs text-[var(--ps-muted)]">
+            Conecte-se à internet para acompanhar a cronometragem ao vivo do Satcron.
           </p>
         </div>
       )}

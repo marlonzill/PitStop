@@ -44,6 +44,19 @@ export const SettingsWireframeArt: React.FC<SettingsWireframeArtProps> = ({ menu
           <circle cx="86" cy="52" r="3.5" />
         </svg>
       );
+    case 'velocity':
+      return (
+        <svg {...commonProps}>
+          {/* Speedometer Tach Arc + GPS Telemetry Needle */}
+          <path d="M18 62 A30 30 0 1 1 74 62" />
+          <path d="M25 60 A22 22 0 1 1 67 60" strokeDasharray="3 3" />
+          <path d="M46 54 L63 36" />
+          <circle cx="46" cy="54" r="3.5" />
+          <rect x="28" y="66" width="36" height="10" rx="2" />
+          <path d="M78 24 H94 M86 16 V32" opacity="0.65" />
+          <circle cx="86" cy="24" r="5" opacity="0.7" />
+        </svg>
+      );
     case 'theme':
       return (
         <svg {...commonProps}>

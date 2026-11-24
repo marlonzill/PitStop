@@ -16,6 +16,7 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Compass,
   Copy,
@@ -48,8 +49,21 @@ import {
   UploadCloud,
   Volume2,
   Wifi,
+  X,
 } from 'lucide-react';
-import { VelocityCockpitLayoutEditor } from './VelocityCockpitLayoutEditor';
+import { LayoutMiniSchematic, VelocityCockpitLayoutEditor } from './VelocityCockpitLayoutEditor';
+import {
+  VELOCITY_COCKPIT_READY_PRESETS,
+  useVelocityCockpitLayout,
+} from '../utils/velocityCockpitLayout';
+import { useVelocityEngineConfig } from '../utils/velocityPrefs';
+import {
+  disconnectExternalGps,
+  forgetSavedExternalGps,
+  reconnectSavedExternalGps,
+  scanAndConnectExternalGps,
+  useExternalGpsBle,
+} from '../utils/externalGpsBle';
 import type { SettingsSubMenu } from '../App';
 import type { ParsedRoadbook, RallyMode } from '../types/rally';
 import {
@@ -174,21 +188,21 @@ function getGpsQuality(accuracyM: number | null): {
   barClass: string;
 } {
   if (accuracyM === null) {
-    return { bars: 0, label: 'Aguardando', toneClass: 'text-[#B5B5B5]', barClass: 'bg-zinc-700' };
+    return { bars: 0, label: 'Aguardando', toneClass: 'text-[var(--ps-muted)]', barClass: 'bg-[var(--ps-border-strong)]' };
   }
   if (accuracyM <= 5) {
-    return { bars: 5, label: 'Excelente', toneClass: 'text-emerald-400', barClass: 'bg-emerald-400' };
+    return { bars: 5, label: 'Excelente', toneClass: 'text-[var(--ps-emerald)]', barClass: 'bg-[var(--ps-emerald)]' };
   }
   if (accuracyM <= 10) {
-    return { bars: 4, label: 'Ótimo', toneClass: 'text-emerald-400', barClass: 'bg-emerald-400' };
+    return { bars: 4, label: 'Ótimo', toneClass: 'text-[var(--ps-emerald)]', barClass: 'bg-[var(--ps-emerald)]' };
   }
   if (accuracyM <= 20) {
-    return { bars: 3, label: 'Bom', toneClass: 'text-amber-400', barClass: 'bg-amber-400' };
+    return { bars: 3, label: 'Bom', toneClass: 'text-[var(--ps-amber)]', barClass: 'bg-[var(--ps-amber)]' };
   }
   if (accuracyM <= 40) {
-    return { bars: 2, label: 'Fraco', toneClass: 'text-[#C0C4C9]', barClass: 'bg-[#C0C4C9]' };
+    return { bars: 2, label: 'Fraco', toneClass: 'text-[var(--ps-muted)]', barClass: 'bg-[var(--ps-muted)]' };
   }
-  return { bars: 1, label: 'Instável', toneClass: 'text-[#FF2A2A]', barClass: 'bg-[#E10600]' };
+  return { bars: 1, label: 'Instável', toneClass: 'text-[var(--ps-danger)]', barClass: 'bg-[var(--ps-danger)]' };
 }
 
 function formatClockOnly(tsMs: number): string {
@@ -262,6 +276,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   onOpenApuracao,
 }) => {
   const [settings, updateSettings] = useNavSettings();
+  const [velEngine, updateVelEngine] = useVelocityEngineConfig();
+  const extGps = useExternalGpsBle();
+  const cockpitLayout = useVelocityCockpitLayout();
+  const [showVelLayoutPicker, setShowVelLayoutPicker] = useState(false);
   const { user, isPro, isAdmin } = useAuthSession();
   const [activeMenu, setActiveMenu] = useState<SettingsSubMenu>(initialMenu);
 
@@ -996,12 +1014,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   };
 
   const renderBatteryIcon = () => {
-    if (battery.charging) return <BatteryCharging className="h-4 w-4 text-emerald-400" />;
-    if (battery.levelPct === null) return <Battery className="h-4 w-4 text-[#C0C4C9]" />;
-    if (battery.levelPct <= 15) return <BatteryWarning className="h-4 w-4 text-[#FF2A2A]" />;
-    if (battery.levelPct <= 30) return <BatteryLow className="h-4 w-4 text-amber-400" />;
-    if (battery.levelPct <= 70) return <BatteryMedium className="h-4 w-4 text-[#C0C4C9]" />;
-    return <BatteryFull className="h-4 w-4 text-emerald-400" />;
+    if (battery.charging) return <BatteryCharging className="h-4 w-4 text-[var(--ps-emerald)]" />;
+    if (battery.levelPct === null) return <Battery className="h-4 w-4 text-[var(--ps-muted)]" />;
+    if (battery.levelPct <= 15) return <BatteryWarning className="h-4 w-4 text-[var(--ps-danger)]" />;
+    if (battery.levelPct <= 30) return <BatteryLow className="h-4 w-4 text-[var(--ps-amber)]" />;
+    if (battery.levelPct <= 70) return <BatteryMedium className="h-4 w-4 text-[var(--ps-muted)]" />;
+    return <BatteryFull className="h-4 w-4 text-[var(--ps-emerald)]" />;
   };
 
   const handleExportBackup = async () => {
@@ -1117,50 +1135,79 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const activeRoadbookItem = savedRoadbooks.find((r) => r.id === activeRoadbookId) ?? null;
   const pilotActiveCount = Object.values(settings.pilotDisplay).filter(Boolean).length;
 
+  const activeVelLayoutId =
+    cockpitLayout.config.layoutId === 'custom' ? 'classic' : cockpitLayout.config.layoutId;
+  const activeVelPreset =
+    VELOCITY_COCKPIT_READY_PRESETS.find((item) => item.id === activeVelLayoutId) ??
+    VELOCITY_COCKPIT_READY_PRESETS[0];
+
   const activeThemeMeta =
     APP_THEME_OPTIONS.find((t) => t.id === settings.appTheme) ?? APP_THEME_OPTIONS[0];
 
   const menuTitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
     modality: 'Modalidade do Rally',
-    account: 'Conta & Assinatura (FREE / PRO)',
-    theme: 'Temas & Visual do Painel',
-    collector: 'Coletor & Envio para Admin',
+    velocity: 'Velocidade & GPS',
+    account: 'Conta & Assinatura',
+    theme: 'Temas Visuais',
+    collector: 'Coletor GPS',
     roadbooks: 'Planilhas & Livros de Bordo',
-    clock: 'Ajuste de Hora (Manual / Automática)',
+    clock: 'Hora & GPS',
     pairing: 'Pareamento Navegador ↔ Piloto',
-    pilot: 'Tela do Piloto (Personalização)',
-    calibration: 'Aferição do Hodômetro & W Fino',
-    alerts: 'Alertas, Road Book & Atalhos',
-    gopro: 'Câmeras GoPro (Bluetooth BLE)',
+    pilot: 'Tela do Piloto',
+    calibration: 'Aferição do Hodômetro',
+    alerts: 'Alertas & Atalhos',
+    gopro: 'Câmeras GoPro (BLE)',
     backup: 'Backup & Dados Offline',
-    system: 'Sistema, Tela, GPS & Permissões',
+    system: 'Sistema & Permissões',
+  };
+
+  const menuSubtitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
+    modality: 'Alterne entre Rally de Regularidade e Rally de Velocidade.',
+    velocity: 'Layout do cockpit ao vivo, receptor GPS, HDOP e força G (IMU).',
+    account: 'Gerencie perfil, plano e liberações de recursos avançados.',
+    theme: 'Paletas escuras, diurnas de alto contraste e fontes XL ampliadas.',
+    collector: 'Colete passagens de PCs por GPS e envie à apuração.',
+    roadbooks: 'Importe, inspecione e ative livros de bordo (.NBP / .TXT / .ZIP).',
+    clock: 'Sincronize hora oficial da prova por GPS ou ajuste manual.',
+    pairing: 'Conecte o celular do Navegador (Mestre) aos visores do Piloto.',
+    pilot: 'Escolha quais leituras e alertas ficam visíveis na tela do Piloto.',
+    calibration: 'Calibre o fator W Fino e o erro percentual do hodômetro.',
+    alerts: 'Bipes, avisos de voz, rolagem de planilha e teclas físicas.',
+    gopro: 'Pareie e controle múltiplas câmeras GoPro via Bluetooth BLE.',
+    backup: 'Exporte ou restaure configurações, pistas e livros de bordo.',
+    system: 'Status do GPS, bateria, orientação da tela e permissões.',
   };
 
   return (
     <div className="mx-auto max-w-4xl space-y-3 text-[var(--ps-text)]">
-      {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] pb-2.5">
-        <div className="flex min-w-0 items-center gap-2">
+      {/* Standardized Settings & Submenu Header Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2.5 sm:px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           {activeMenu !== 'hub' && (
             <button
               type="button"
               onClick={() => navigateMenu('hub')}
-              className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+              className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-extrabold text-[var(--ps-text)] transition-all active:scale-[0.98] hover:border-[var(--ps-accent)]"
             >
               <ArrowLeft className="h-4 w-4 text-[var(--ps-accent)]" />
-              <span>Menus</span>
+              <span>Voltar</span>
             </button>
           )}
-          <div className="min-w-0">
-            <p className="font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--ps-accent)] uppercase">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[10px] font-bold tracking-[0.16em] text-[var(--ps-accent)] uppercase">
               Configurações
             </p>
-            <h1 className="text-base font-extrabold tracking-widest text-[var(--ps-text)] uppercase">
-              {activeMenu === 'hub' ? 'CENTRAL DE AJUSTES' : menuTitleMap[activeMenu]}
+            <h1 className="truncate font-['Barlow_Condensed'] text-xl font-black tracking-wide text-[var(--ps-text)] uppercase leading-tight sm:text-2xl">
+              {activeMenu === 'hub' ? 'Central de Ajustes' : menuTitleMap[activeMenu]}
             </h1>
+            <p className="truncate text-[11px] text-[var(--ps-muted)]">
+              {activeMenu === 'hub'
+                ? 'Modalidade, temas visuais, GPS, planilhas e ajustes do veículo.'
+                : menuSubtitleMap[activeMenu]}
+            </p>
           </div>
         </div>
-        <span className="shrink-0 font-mono text-xs font-semibold text-[var(--ps-muted)] tabular-nums">
+        <span className="shrink-0 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1 font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
           {formatClockOnly(nowMs + settings.clockOffsetMs)}
         </span>
       </div>
@@ -1175,6 +1222,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               title: 'MODALIDADE DO RALLY',
               subtitle:
                 rallyMode === 'velocidade' ? 'Rally Velocidade' : 'Rally Regularidade',
+            },
+            {
+              id: 'velocity' as const,
+              accentColor: '#E10600',
+              title: 'VELOCIDADE & GPS',
+              subtitle: `${activeVelPreset.shortName} · GPS & IMU`,
             },
             {
               id: 'account' as const,
@@ -1334,6 +1387,389 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               />
             </button>
           ))}
+        </div>
+      )}
+
+      {/* SUBMENU: VELOCIDADE & GPS */}
+      {activeMenu === 'velocity' && (
+        <div className="space-y-4">
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-3">
+            <div>
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                Layout do Cockpit Ao Vivo
+              </h2>
+              <p className="text-xs text-[var(--ps-muted)]">
+                Selecione o painel exibido durante a cronometragem de especiais e circuitos.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowVelLayoutPicker(true)}
+              className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-3 text-left transition-colors hover:border-[var(--ps-accent)] active:scale-[0.99]"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="shrink-0">
+                  <LayoutMiniSchematic
+                    id={activeVelPreset.id}
+                    accent={activeVelPreset.accentColor}
+                  />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-['Barlow_Condensed'] text-base font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                    Layout Ativo no Cockpit
+                  </p>
+                  <p className="truncate font-mono text-[11px] font-bold text-[var(--ps-muted)]">
+                    {activeVelPreset.code} · {activeVelPreset.shortName.toUpperCase()}
+                  </p>
+                </div>
+              </div>
+
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[var(--ps-accent)]/40 bg-[var(--ps-accent)]/15 px-2.5 py-1.5 font-mono text-[11px] font-extrabold text-[var(--ps-accent)] uppercase">
+                <span>Alterar</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </span>
+            </button>
+          </section>
+
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-3">
+            <div>
+              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                Receptor GPS &amp; Motor de Cronometragem
+              </h2>
+              <p className="text-xs text-[var(--ps-muted)]">
+                Configure fonte GPS ou Simulador, detecção automática de pista, tolerância HDOP e acelerômetro IMU.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-bold text-[var(--ps-text)]">Fonte de Telemetria</p>
+                    <p className="text-[11px] text-[var(--ps-muted)]">
+                      GPS Interno (1 Hz), Receptor BLE 10Hz/25Hz ou Simulador
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex flex-wrap rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => updateVelEngine({ source: 'gps' })}
+                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
+                          velEngine.source === 'gps' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
+                        }`}
+                      >
+                        GPS Interno
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateVelEngine({ source: 'ble_gps' })}
+                        className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold ${
+                          velEngine.source === 'ble_gps'
+                            ? 'pitstop-btn-red'
+                            : 'text-[var(--ps-muted)]'
+                        }`}
+                      >
+                        <Bluetooth className="h-3 w-3 shrink-0" />
+                        <span>GPS Externo Bluetooth (10Hz / 25Hz)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateVelEngine({ source: 'simulator' })}
+                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
+                          velEngine.source === 'simulator'
+                            ? 'pitstop-btn-red'
+                            : 'text-[var(--ps-muted)]'
+                        }`}
+                      >
+                        Simulador
+                      </button>
+                    </div>
+                    {velEngine.source === 'simulator' && (
+                      <div className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
+                        {([1, 2, 4] as const).map((x) => (
+                          <button
+                            key={x}
+                            type="button"
+                            onClick={() => updateVelEngine({ simMultiplier: x })}
+                            className={`rounded px-2 py-1 font-mono text-[10px] font-bold ${
+                              velEngine.simMultiplier === x
+                                ? 'pitstop-btn-red'
+                                : 'text-[var(--ps-muted)]'
+                            }`}
+                          >
+                            {x}x
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {velEngine.source === 'ble_gps' && (
+                  <div className="rounded-lg border border-sky-500/35 bg-sky-500/10 p-3 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold text-[var(--ps-text)] flex items-center gap-1.5">
+                          <Satellite className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                          <span className="truncate">
+                            {extGps.connected
+                              ? `${extGps.deviceName || 'GPS BLE'} · ${extGps.protocol || 'Ativo'}`
+                              : extGps.savedDevice
+                              ? `Salvo: ${extGps.savedDevice.name}`
+                              : 'RaceBox Mini / Mini S 25Hz · NMEA BLE (Garmin, Qstarz, Dual)'}
+                          </span>
+                        </p>
+                        <p className="mt-0.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
+                          {extGps.connected
+                            ? `${extGps.measuredHz} Hz medidos${
+                                extGps.satellites !== null ? ` · ${extGps.satellites} SAT` : ''
+                              }${extGps.accuracyM !== null ? ` · ±${extGps.accuracyM}m` : ''}`
+                            : 'Protocolos: RaceBox UBX Binary (25 Hz) e NMEA-0183 ($GPRMC/$GNRMC/$GPGGA)'}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {extGps.connected ? (
+                          <button
+                            type="button"
+                            onClick={() => void disconnectExternalGps()}
+                            className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-red-500"
+                          >
+                            Desconectar
+                          </button>
+                        ) : (
+                          <>
+                            {extGps.savedDevice && (
+                              <button
+                                type="button"
+                                disabled={extGps.connecting || extGps.scanning}
+                                onClick={() => void reconnectSavedExternalGps()}
+                                className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-sky-500/50 bg-[var(--ps-surface)] px-3 text-xs font-bold text-sky-400 disabled:opacity-50"
+                              >
+                                {extGps.connecting ? 'Conectando...' : 'Reconectar'}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={extGps.scanning || extGps.connecting}
+                              onClick={() => void scanAndConnectExternalGps()}
+                              className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold disabled:opacity-50"
+                            >
+                              <Bluetooth className="h-3.5 w-3.5" />
+                              <span>{extGps.scanning ? 'Buscando...' : 'Parear GPS BLE'}</span>
+                            </button>
+                          </>
+                        )}
+                        {extGps.savedDevice && (
+                          <button
+                            type="button"
+                            onClick={() => forgetSavedExternalGps()}
+                            className="inline-flex min-h-[36px] items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 text-xs text-[var(--ps-muted)] hover:text-red-400"
+                            title="Esquecer receptor salvo"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {extGps.errorMsg && (
+                      <p className="text-[11px] font-semibold text-[var(--ps-amber)]">
+                        {extGps.errorMsg}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 transition-colors hover:border-[var(--ps-border-strong)]">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[var(--ps-text)]">
+                    Detecção Automática de Pista (GPS)
+                  </p>
+                  <p className="text-[11px] text-[var(--ps-muted)]">
+                    Reconhece pistas salvas num raio de{' '}
+                    {velEngine.autoDetectRadiusM >= 1000
+                      ? `${(velEngine.autoDetectRadiusM / 1000).toFixed(1)} km`
+                      : `${velEngine.autoDetectRadiusM} metros`}{' '}
+                    da Largada.
+                  </p>
+                </div>
+                <span className="relative inline-flex shrink-0 items-center">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-checked={velEngine.autoDetectTrack}
+                    checked={velEngine.autoDetectTrack}
+                    onChange={(e) => updateVelEngine({ autoDetectTrack: e.target.checked })}
+                    className="peer sr-only"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-6 w-11 items-center rounded-full border p-[2px] transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ps-accent)] ${
+                      velEngine.autoDetectTrack
+                        ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)]'
+                        : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]'
+                    }`}
+                  >
+                    <span
+                      className={`h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                        velEngine.autoDetectTrack ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 transition-colors hover:border-[var(--ps-border-strong)]">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[var(--ps-text)]">Auto-Snap Dinâmico (HDOP)</p>
+                  <p className="text-[11px] text-[var(--ps-muted)]">
+                    Expande o portal proporcionalmente à precisão horizontal do GPS.
+                  </p>
+                </div>
+                <span className="relative inline-flex shrink-0 items-center">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-checked={velEngine.autoSnapHdop}
+                    checked={velEngine.autoSnapHdop}
+                    onChange={(e) => updateVelEngine({ autoSnapHdop: e.target.checked })}
+                    className="peer sr-only"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-6 w-11 items-center rounded-full border p-[2px] transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ps-accent)] ${
+                      velEngine.autoSnapHdop
+                        ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)]'
+                        : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]'
+                    }`}
+                  >
+                    <span
+                      className={`h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                        velEngine.autoSnapHdop ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 transition-colors hover:border-[var(--ps-border-strong)]">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[var(--ps-text)]">
+                    Acelerômetro &amp; Força G (IMU)
+                  </p>
+                  <p className="text-[11px] text-[var(--ps-muted)]">
+                    Combina sensores internos com variação cinemática de velocidade.
+                  </p>
+                </div>
+                <span className="relative inline-flex shrink-0 items-center">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-checked={velEngine.useDeviceImu}
+                    checked={velEngine.useDeviceImu}
+                    onChange={(e) => updateVelEngine({ useDeviceImu: e.target.checked })}
+                    className="peer sr-only"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-6 w-11 items-center rounded-full border p-[2px] transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ps-accent)] ${
+                      velEngine.useDeviceImu
+                        ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)]'
+                        : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]'
+                    }`}
+                  >
+                    <span
+                      className={`h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                        velEngine.useDeviceImu ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </span>
+                </span>
+              </label>
+            </div>
+          </section>
+
+          {showVelLayoutPicker && (
+            <div
+              className="fixed inset-0 z-[80] flex items-end justify-center bg-black/80 p-2 backdrop-blur-sm sm:items-center sm:p-4"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Selecionar Layout do Cockpit Ao Vivo"
+            >
+              <div className="flex max-h-[88dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--ps-border)] px-4 py-3">
+                  <div className="min-w-0">
+                    <h3 className="font-['Barlow_Condensed'] text-lg font-black tracking-wide uppercase sm:text-xl">
+                      Layout do Cockpit Ao Vivo
+                    </h3>
+                    <p className="truncate text-[11px] text-[var(--ps-muted)]">
+                      Toque em qualquer modelo para aplicar imediatamente (
+                      {VELOCITY_COCKPIT_READY_PRESETS.length} layouts)
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowVelLayoutPicker(false)}
+                    aria-label="Fechar seletor de layouts"
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3 sm:p-4">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {VELOCITY_COCKPIT_READY_PRESETS.map((item) => {
+                      const selected = activeVelLayoutId === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            cockpitLayout.setLayoutId(item.id);
+                            setShowVelLayoutPicker(false);
+                          }}
+                          aria-pressed={selected}
+                          className={`group flex flex-col justify-between gap-2 rounded-xl border p-2.5 text-left transition-all ${
+                            selected
+                              ? 'border-[var(--ps-accent)] bg-[var(--ps-card)] ring-1 ring-[var(--ps-accent)]/50 shadow-md'
+                              : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-border-strong)]'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <LayoutMiniSchematic id={item.id} accent={item.accentColor} />
+                            <span
+                              className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                                selected
+                                  ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                                  : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-transparent'
+                              }`}
+                            >
+                              <Check className="h-3 w-3" strokeWidth={3} />
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1 font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                              <span className={selected ? 'text-[var(--ps-accent)]' : ''}>
+                                {item.code}
+                              </span>
+                              <span>·</span>
+                              <span className="truncate">{item.tag}</span>
+                            </div>
+                            <p className="mt-0.5 truncate font-['Barlow_Condensed'] text-sm font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                              {item.shortName}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1655,23 +2091,23 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </label>
 
             {rbError && (
-              <div className="flex items-start gap-2 rounded-lg border border-red-800/70 bg-red-950/50 p-3 text-xs text-red-200">
-                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#FF2A2A]" />
+              <div className="flex items-start gap-2 rounded-lg border border-red-500/45 bg-red-500/12 p-3 text-xs font-semibold text-[var(--ps-danger)]">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ps-danger)]" />
                 <span>{rbError}</span>
               </div>
             )}
 
             {rbSuccess && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/40 bg-emerald-950/30 p-3 text-xs text-emerald-200">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/12 p-3 text-xs font-semibold text-[var(--ps-emerald)]">
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--ps-emerald)]" />
                   <span>{rbSuccess}</span>
                 </div>
                 {onOpenNavigation && (
                   <button
                     type="button"
                     onClick={onOpenNavigation}
-                    className="pitstop-btn-red inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold uppercase"
+                    className="pitstop-btn-red inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold uppercase"
                   >
                     <Navigation className="h-3.5 w-3.5" />
                     <span>Ir para Regularidade</span>
@@ -1733,7 +2169,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       onClick={handleCopyStructureReport}
                       className="inline-flex items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ps-muted)]"
                     >
-                      {copiedReport ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-[var(--ps-accent)]" />}
+                      {copiedReport ? <Check className="h-3.5 w-3.5 text-[var(--ps-emerald)]" /> : <Copy className="h-3.5 w-3.5 text-[var(--ps-accent)]" />}
                       <span>{copiedReport ? 'Copiado' : 'Copiar'}</span>
                     </button>
                   </div>
@@ -1768,7 +2204,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     <div
                       key={item.id ?? item.fileName}
                       className={`flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between ${
-                        isActive ? 'bg-[#E10600]/10' : ''
+                        isActive ? 'bg-[var(--ps-accent-soft)]' : ''
                       }`}
                     >
                       <div className="min-w-0">
@@ -1780,7 +2216,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                             {item.sourceFormat || 'TXT'}
                           </span>
                           {isActive && (
-                            <span className="font-mono text-[10px] font-extrabold text-emerald-400 uppercase">
+                            <span className="font-mono text-[10px] font-extrabold text-[var(--ps-emerald)] uppercase">
                               · Ativa
                             </span>
                           )}
@@ -1950,12 +2386,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <span
                     className={`font-mono font-bold ${
                       !settings.pairing.enabled
-                        ? 'text-zinc-500'
+                        ? 'text-[var(--ps-muted)]'
                         : pairingPresence.status === 'connected'
-                          ? 'text-emerald-400'
+                          ? 'text-[var(--ps-emerald)]'
                           : pairingPresence.status === 'connecting'
-                            ? 'text-amber-400'
-                            : 'text-[#FF2A2A]'
+                            ? 'text-[var(--ps-amber)]'
+                            : 'text-[var(--ps-danger)]'
                     }`}
                   >
                     {!settings.pairing.enabled
@@ -1995,7 +2431,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                         pairing: { ...settings.pairing, transportMode: modeOpt.id },
                       })
                     }
-                    className={`min-h-[32px] rounded-md px-2.5 transition-colors whitespace-nowrap ${
+                    className={`min-h-[34px] rounded-md px-2.5 transition-colors whitespace-nowrap ${
                       settings.pairing.transportMode === modeOpt.id
                         ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
                         : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -2010,7 +2446,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <button
                   type="button"
                   onClick={() => playPairingBell()}
-                  className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-bold whitespace-nowrap"
+                  className="pitstop-btn-metal inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-bold whitespace-nowrap"
                 >
                   <Bell className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
                   <span>Testar Sinetinha</span>
@@ -2018,12 +2454,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyPilotLink}
-                  className="pitstop-btn-metal inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-bold whitespace-nowrap"
+                  className="pitstop-btn-metal inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-bold whitespace-nowrap"
                 >
                   {copiedPilotLink ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    <Check className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
                   ) : (
-                    <Share2 className="h-3.5 w-3.5 text-sky-400" />
+                    <Share2 className="h-3.5 w-3.5 text-sky-500" />
                   )}
                   <span>{copiedPilotLink ? 'Copiado!' : 'Copiar Link Piloto'}</span>
                 </button>
@@ -2838,7 +3274,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             )}
 
             {clockSyncFeedback && (
-              <p className="text-xs font-semibold text-emerald-400">{clockSyncFeedback}</p>
+              <p className="text-xs font-semibold text-[var(--ps-emerald)]">{clockSyncFeedback}</p>
             )}
           </section>
         </div>
@@ -3082,13 +3518,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             )}
 
             {pendingQueue.length > 0 && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/12 px-3 py-2 text-xs font-semibold text-[var(--ps-amber)]">
                 <span>{pendingQueue.length} coleta(s) na fila offline aguardando envio</span>
                 <button
                   type="button"
                   disabled={retryingQueue}
                   onClick={handleRetryQueue}
-                  className="inline-flex min-h-[32px] items-center gap-1 rounded-md bg-amber-400 px-2.5 text-xs font-extrabold text-black"
+                  className="inline-flex min-h-[36px] items-center gap-1 rounded-md bg-amber-400 px-3 text-xs font-extrabold text-zinc-950"
                 >
                   <UploadCloud className="h-3.5 w-3.5" />
                   <span>{retryingQueue ? 'Enviando...' : 'Reenviar Agora'}</span>
@@ -3247,27 +3683,27 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <button
                   type="button"
                   onClick={() => setConfirmResetDefaults(true)}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-red-500/60 hover:text-red-300"
+                  className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-red-500/60 hover:text-[var(--ps-danger)]"
                 >
                   <RotateCcw className="h-4 w-4" />
                   <span>Restaurar Ajustes Padrão</span>
                 </button>
               ) : (
-                <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-950/25 px-3 py-1.5">
-                  <span className="flex-1 text-xs font-semibold text-red-200">
+                <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/12 px-3 py-1.5">
+                  <span className="flex-1 text-xs font-semibold text-[var(--ps-danger)]">
                     Confirmar reset?
                   </span>
                   <button
                     type="button"
                     onClick={handleResetDefaultSettings}
-                    className="rounded-lg bg-[var(--ps-accent)] px-3 py-1.5 text-xs font-extrabold text-[var(--ps-accent-text)]"
+                    className="min-h-[36px] rounded-lg bg-[var(--ps-accent)] px-3 py-1.5 text-xs font-extrabold text-[var(--ps-accent-text)]"
                   >
                     Sim
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmResetDefaults(false)}
-                    className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 py-1.5 text-xs text-[var(--ps-muted)]"
+                    className="min-h-[36px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 py-1.5 text-xs text-[var(--ps-muted)]"
                   >
                     Não
                   </button>

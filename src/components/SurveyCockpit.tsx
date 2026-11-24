@@ -6,17 +6,20 @@ import {
   ArrowUp,
   ArrowUpLeft,
   ArrowUpRight,
+  Clock,
   Compass,
   CornerUpLeft,
   CornerUpRight,
   Flag,
   MapPin,
+  Mountain,
   Navigation,
   Pause,
   Pencil,
   Play,
   RotateCcw,
   Satellite,
+  Settings2,
   ShieldAlert,
   Upload,
   Volume2,
@@ -200,6 +203,62 @@ function renderManeuverIcon(kind: ManeuverKind) {
   }
 }
 
+interface SurveyGaugeVisibility {
+  total: boolean;
+  trip: boolean;
+  speed: boolean;
+  avgSpeed: boolean;
+  maxSpeed: boolean;
+  officialClock: boolean;
+  altitude: boolean;
+  gpsAccuracy: boolean;
+  heading: boolean;
+}
+
+const SURVEY_GAUGE_PREFS_KEY = 'pitstop_survey_gauge_visibility_v1';
+
+const DEFAULT_SURVEY_GAUGE_VISIBILITY: SurveyGaugeVisibility = {
+  total: true,
+  trip: true,
+  speed: true,
+  avgSpeed: true,
+  maxSpeed: true,
+  officialClock: true,
+  altitude: true,
+  gpsAccuracy: true,
+  heading: true,
+};
+
+function loadSurveyGaugePrefs(): SurveyGaugeVisibility {
+  try {
+    const raw = localStorage.getItem(SURVEY_GAUGE_PREFS_KEY);
+    if (!raw) return DEFAULT_SURVEY_GAUGE_VISIBILITY;
+    return { ...DEFAULT_SURVEY_GAUGE_VISIBILITY, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_SURVEY_GAUGE_VISIBILITY;
+  }
+}
+
+const SurveyOfficialClockCard: React.FC<{ clockOffsetMs: number }> = ({ clockOffsetMs }) => {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+      <p className="ps-label truncate">Horário Oficial (CH)</p>
+      <p className="mt-1 font-mono text-[clamp(1.25rem,5.4vw,1.85rem)] leading-none font-black text-[var(--ps-emerald)] tabular-nums">
+        {formatClockTime(nowMs + clockOffsetMs)}
+      </p>
+      <p className="mt-1 inline-flex items-center justify-center gap-1 font-mono text-[10px] text-[var(--ps-muted)]">
+        <Clock className="h-3 w-3 text-[var(--ps-emerald)]" />
+        <span>GPS SYNC</span>
+      </p>
+    </div>
+  );
+};
+
 interface SurveyCockpitProps {
   isActive?: boolean;
 }
@@ -242,6 +301,11 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   const [wazeVoiceEnabled, setWazeVoiceEnabled] = useState(true);
   const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(null);
   const [headingDeg, setHeadingDeg] = useState<number | null>(null);
+  const [altitudeM, setAltitudeM] = useState<number | null>(null);
+  const [showGaugeConfig, setShowGaugeConfig] = useState(false);
+  const [gaugeVisibility, setGaugeVisibility] = useState<SurveyGaugeVisibility>(() =>
+    loadSurveyGaugePrefs()
+  );
 
   const kalmanRef = useRef(createGpsKalmanProcessor());
   const isCountingRef = useRef(isCounting);
@@ -258,6 +322,14 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       // ignore storage errors
     }
   }, [reccePrefs]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SURVEY_GAUGE_PREFS_KEY, JSON.stringify(gaugeVisibility));
+    } catch {
+      // ignore storage errors
+    }
+  }, [gaugeVisibility]);
 
   // Build ordered navigable points from KML/KMZ (either polyline trace or traps fallback)
   const routeSamples: VelocitySample[] = useMemo(() => {
@@ -307,6 +379,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       rawSpeedMs: number | null,
       rawHeading: number | null,
       accM: number | null,
+      altM: number | null,
       ts: number
     ) => {
       if (cancelled) return;
@@ -325,6 +398,9 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       setCurrentPos({ lat: filtered.lat, lon: filtered.lon });
       if (filtered.headingDeg !== null) {
         setHeadingDeg(filtered.headingDeg);
+      }
+      if (altM !== null && Number.isFinite(altM)) {
+        setAltitudeM(Math.round(altM));
       }
 
       if (isCountingRef.current && filtered.distStepM > 0) {
@@ -356,6 +432,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                   pos.coords.speed ?? null,
                   pos.coords.heading ?? null,
                   pos.coords.accuracy ?? null,
+                  pos.coords.altitude ?? null,
                   pos.timestamp || Date.now()
                 );
               }
@@ -378,6 +455,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               pos.coords.speed ?? null,
               pos.coords.heading ?? null,
               pos.coords.accuracy ?? null,
+              pos.coords.altitude ?? null,
               pos.timestamp || Date.now()
             ),
           () => {
@@ -739,9 +817,59 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             <span>KML/KMZ</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowGaugeConfig((v) => !v)}
+            className={`inline-flex min-h-[34px] items-center gap-1 rounded-xl border px-2.5 text-xs font-bold whitespace-nowrap transition-colors ${
+              showGaugeConfig
+                ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                : 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+            }`}
+            title="Configurar campos visíveis"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            <span>Campos</span>
+          </button>
+
           <SurveyClockBadge clockOffsetMs={settings.clockOffsetMs} />
         </div>
       </section>
+
+      {showGaugeConfig && (
+        <section className="grid grid-cols-2 gap-1.5 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 text-[11px] sm:grid-cols-3">
+          {(
+            [
+              ['total', 'Odômetro Total'],
+              ['trip', 'Hodômetro Trip'],
+              ['speed', 'Vel. Atual'],
+              ['avgSpeed', 'Vel. Média'],
+              ['maxSpeed', 'Vel. Máxima'],
+              ['officialClock', 'Horário CH (GPS)'],
+              ['altitude', 'Altitude'],
+              ['gpsAccuracy', 'Sinal GPS'],
+              ['heading', 'Rumo (CAP)'],
+            ] as const
+          ).map(([key, label]) => (
+            <label
+              key={key}
+              className="flex cursor-pointer items-center justify-between gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5 text-[var(--ps-text)]"
+            >
+              <span className="truncate font-semibold">{label}</span>
+              <input
+                type="checkbox"
+                checked={gaugeVisibility[key]}
+                onChange={(e) =>
+                  setGaugeVisibility((prev) => ({
+                    ...prev,
+                    [key]: e.target.checked,
+                  }))
+                }
+                className="h-3.5 w-3.5 accent-[var(--ps-accent)]"
+              />
+            </label>
+          ))}
+        </section>
+      )}
 
       {/* Compact Top Alert Strip (only shown when warning/exceeding limit) */}
       {(recceZone === 'over' || recceZone === 'warning') && (
@@ -944,8 +1072,14 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       </section>
 
       {/* Unified Odometer Total & Trip Blocks (Meters + KM, Tap-to-Edit Keyboard Input) */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
+      {(gaugeVisibility.total || gaugeVisibility.trip) && (
+        <section
+          className={`grid grid-cols-1 gap-3 ${
+            gaugeVisibility.total && gaugeVisibility.trip ? 'sm:grid-cols-2' : ''
+          }`}
+        >
+          {gaugeVisibility.total && (
+            <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2">
             <span className="ps-label">Odômetro Total</span>
             <button
@@ -1028,10 +1162,12 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 <Pencil className="h-3 w-3 opacity-60 group-hover:text-[var(--ps-accent)]" />
               </span>
             </button>
+            )}
+          </div>
           )}
-        </div>
 
-        <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
+          {gaugeVisibility.trip && (
+            <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
@@ -1164,56 +1300,114 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             </button>
           )}
         </div>
+          )}
       </section>
+      )}
 
-      {/* Live Speed Metrics + Limite de Velocidade (Levantamento) */}
+      {/* Live Speed & Basic Gauge Metrics Unified in Levantamento */}
       <section className="space-y-3">
-        <div className="grid grid-cols-3 gap-2 sm:gap-2.5 font-mono tabular-nums">
-          <div
-            className={`min-w-0 rounded-2xl border p-2.5 sm:p-3 text-center transition-colors ${
-              recceZone === 'over'
-                ? 'animate-pulse border-red-500 bg-red-950/80'
-                : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
-            }`}
-          >
-            <p className="ps-label truncate">Vel. Atual</p>
-            <p
-              className={`mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black ${
-                recceZone === 'over'
-                  ? 'text-[#FF2A2A]'
-                  : recceZone === 'warning'
-                    ? 'text-[var(--ps-amber)]'
-                    : 'text-[var(--ps-text)]'
-              }`}
-            >
-              {speedKmh}
-            </p>
-            <p className="mt-1 text-[10px] font-bold text-[var(--ps-accent)]">KM/H</p>
+        {(gaugeVisibility.speed || gaugeVisibility.avgSpeed || gaugeVisibility.maxSpeed) && (
+          <div className="grid grid-cols-3 gap-2 sm:gap-2.5 font-mono tabular-nums">
+            {gaugeVisibility.speed && (
+              <div
+                className={`min-w-0 rounded-2xl border p-2.5 sm:p-3 text-center transition-colors ${
+                  recceZone === 'over'
+                    ? 'animate-pulse border-red-500 bg-red-950/80'
+                    : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
+                }`}
+              >
+                <p className="ps-label truncate">Vel. Atual</p>
+                <p
+                  className={`mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black ${
+                    recceZone === 'over'
+                      ? 'text-[#FF2A2A]'
+                      : recceZone === 'warning'
+                        ? 'text-[var(--ps-amber)]'
+                        : 'text-[var(--ps-text)]'
+                  }`}
+                >
+                  {speedKmh}
+                </p>
+                <p className="mt-1 text-[10px] font-bold text-[var(--ps-accent)]">KM/H</p>
+              </div>
+            )}
+
+            {gaugeVisibility.avgSpeed && (
+              <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+                <p className="ps-label truncate">Vel. Média</p>
+                <p className="mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black text-[var(--ps-emerald)]">
+                  {avgSpeedKmh}
+                </p>
+                <p className="mt-1 text-[10px] text-[var(--ps-muted)]">KM/H</p>
+              </div>
+            )}
+
+            {gaugeVisibility.maxSpeed && (
+              <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+                <p className="ps-label truncate">Vel. Máxima</p>
+                <p className="mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black text-[var(--ps-amber)]">
+                  {maxSpeedKmh}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMaxSpeedKmh(0);
+                    setAvgSpeedSamples([]);
+                  }}
+                  className="mt-1 text-[10px] text-[var(--ps-muted)] hover:text-[var(--ps-text)] underline"
+                >
+                  limpar
+                </button>
+              </div>
+            )}
           </div>
-          <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
-            <p className="ps-label truncate">Vel. Média</p>
-            <p className="mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black text-[var(--ps-emerald)]">
-              {avgSpeedKmh}
-            </p>
-            <p className="mt-1 text-[10px] text-[var(--ps-muted)]">KM/H</p>
+        )}
+
+        {(gaugeVisibility.officialClock ||
+          gaugeVisibility.altitude ||
+          gaugeVisibility.gpsAccuracy ||
+          gaugeVisibility.heading) && (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 font-mono tabular-nums">
+            {gaugeVisibility.officialClock && (
+              <SurveyOfficialClockCard clockOffsetMs={settings.clockOffsetMs} />
+            )}
+
+            {gaugeVisibility.altitude && (
+              <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+                <p className="ps-label truncate">Altitude</p>
+                <p className="mt-1 text-[clamp(1.25rem,5.4vw,1.85rem)] leading-none font-black text-[var(--ps-text)]">
+                  {altitudeM !== null ? `${altitudeM}m` : '--'}
+                </p>
+                <p className="mt-1 inline-flex items-center justify-center gap-1 text-[10px] text-[var(--ps-muted)]">
+                  <Mountain className="h-3 w-3" />
+                  <span>Elevação</span>
+                </p>
+              </div>
+            )}
+
+            {gaugeVisibility.gpsAccuracy && (
+              <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+                <p className="ps-label truncate">Sinal GPS</p>
+                <p className="mt-1 text-[clamp(1.25rem,5.4vw,1.85rem)] leading-none font-black text-[var(--ps-emerald)]">
+                  {gpsAccuracy !== null ? `±${gpsAccuracy}m` : '--'}
+                </p>
+                <p className="mt-1 text-[10px] text-[var(--ps-muted)]">
+                  {source === 'simulator' ? 'Simulador' : 'Receptor'}
+                </p>
+              </div>
+            )}
+
+            {gaugeVisibility.heading && (
+              <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
+                <p className="ps-label truncate">Rumo (CAP)</p>
+                <p className="mt-1 text-[clamp(1.25rem,5.4vw,1.85rem)] leading-none font-black text-[var(--ps-text)]">
+                  {headingDeg !== null ? `${headingDeg}°` : '--'}
+                </p>
+                <p className="mt-1 text-[10px] text-[var(--ps-muted)]">Direção</p>
+              </div>
+            )}
           </div>
-          <div className="min-w-0 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 text-center">
-            <p className="ps-label truncate">Vel. Máxima</p>
-            <p className="mt-1 text-[clamp(1.6rem,7.2vw,2.35rem)] leading-none font-black text-[var(--ps-amber)]">
-              {maxSpeedKmh}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setMaxSpeedKmh(0);
-                setAvgSpeedSamples([]);
-              }}
-              className="mt-1 text-[10px] text-[var(--ps-muted)] hover:text-[var(--ps-text)] underline"
-            >
-              limpar
-            </button>
-          </div>
-        </div>
+        )}
 
         {/* Limite de Velocidade (Clean & Simples) */}
         <div
