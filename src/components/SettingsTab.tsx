@@ -60,7 +60,7 @@ import {
 } from '../utils/baseApi';
 import {
   type AlertStyle,
-  type AppThemeId,
+  APP_THEME_OPTIONS,
   calibrationPctFromWValue,
   getDefaultNavSettings,
   getDefaultPilotDisplay,
@@ -146,302 +146,6 @@ interface NavigatorWithBattery extends Navigator {
   };
 }
 
-const APP_THEME_OPTIONS: {
-  id: AppThemeId;
-  name: string;
-  tag: string;
-  description: string;
-  bg: string;
-  surface: string;
-  card: string;
-  accent: string;
-  accent2: string;
-  text: string;
-  muted: string;
-  border: string;
-  fontClass: string;
-  darkAccentText?: boolean;
-}[] = [
-  {
-    id: 'pitstop',
-    name: 'PitStop Original',
-    tag: 'FREE · Original',
-    description: 'Preto carbono (#090A0D), superfícies foscas e Vermelho Racing (#E10600).',
-    bg: '#090A0D',
-    surface: '#111318',
-    card: '#181B22',
-    accent: '#E10600',
-    accent2: '#FF2A2A',
-    text: '#F4F4F5',
-    muted: '#A1A1AA',
-    border: 'rgba(255,255,255,0.12)',
-    fontClass: 'font-mono',
-  },
-  {
-    id: 'solar',
-    name: 'Solar Dia',
-    tag: 'FREE · Alto Contraste',
-    description: 'Fundo claro (#F1F5F9), cards brancos (#FFFFFF) e texto preto para sol forte.',
-    bg: '#F1F5F9',
-    surface: '#FFFFFF',
-    card: '#F8FAFC',
-    accent: '#E10600',
-    accent2: '#B91C1C',
-    text: '#090D16',
-    muted: '#475569',
-    border: 'rgba(15,23,42,0.16)',
-    fontClass: 'font-mono',
-  },
-  {
-    id: 'gt',
-    name: 'GT Neon (Lime)',
-    tag: 'PRO · Lime',
-    description: 'Grafite profundo com Verde Limão ácido (#84CC16) e tipografia geométrica.',
-    bg: '#0F172A',
-    surface: '#172136',
-    card: '#1E293B',
-    accent: '#84CC16',
-    accent2: '#A3E635',
-    text: '#F8FAFC',
-    muted: '#94A3B8',
-    border: 'rgba(132,204,22,0.32)',
-    fontClass: "font-['Outfit']",
-    darkAccentText: true,
-  },
-  {
-    id: 'fueltech',
-    name: 'FuelTech Pro (OLED)',
-    tag: 'PRO · OLED',
-    description: 'Preto puro #000000 OLED com Azul Elétrico (#0EA5E9) e Laranja Âmbar (#F59E0B).',
-    bg: '#000000',
-    surface: '#070B12',
-    card: '#0F1724',
-    accent: '#0EA5E9',
-    accent2: '#F59E0B',
-    text: '#F8FAFC',
-    muted: '#94A3B8',
-    border: 'rgba(14,165,233,0.32)',
-    fontClass: "font-['Barlow_Condensed']",
-  },
-  {
-    id: 'subaru',
-    name: 'Subaru WRX Rally',
-    tag: 'PRO · WRC',
-    description: 'World Rally Blue (#1D4ED8) combinado com Amarelo Ouro (#FACC15) de especial.',
-    bg: '#071430',
-    surface: '#0C214D',
-    card: '#132F68',
-    accent: '#1D4ED8',
-    accent2: '#FACC15',
-    text: '#F8FAFC',
-    muted: '#93C5FD',
-    border: 'rgba(250,204,21,0.32)',
-    fontClass: 'font-mono',
-  },
-  {
-    id: 'gulf',
-    name: 'Gulf Racing',
-    tag: 'PRO · Heritage',
-    description: 'Azul Claro (#38BDF8) combinado com Laranja Gulf (#F97316) clássico de pista.',
-    bg: '#081929',
-    surface: '#0E2942',
-    card: '#163959',
-    accent: '#38BDF8',
-    accent2: '#F97316',
-    text: '#F0F9FF',
-    muted: '#7DD3FC',
-    border: 'rgba(56,189,248,0.3)',
-    fontClass: 'font-mono',
-    darkAccentText: true,
-  },
-  {
-    id: 'martini',
-    name: 'Martini Racing',
-    tag: 'PRO · Group B',
-    description: 'Azul Marinho grafite com listras em Vermelho (#E11D48) e Azul Claro (#38BDF8).',
-    bg: '#0A1324',
-    surface: '#111F38',
-    card: '#192C4D',
-    accent: '#E11D48',
-    accent2: '#38BDF8',
-    text: '#F8FAFC',
-    muted: '#93C5FD',
-    border: 'rgba(56,189,248,0.3)',
-    fontClass: 'font-mono',
-  },
-  {
-    id: 'cyberpunk',
-    name: 'Cyberpunk Magenta',
-    tag: 'PRO · Synth',
-    description: 'Roxo-preto noturno (#0B0514) com Rosa Neon (#EC4899) e Ciano (#06B6D4).',
-    bg: '#0B0514',
-    surface: '#150A24',
-    card: '#211038',
-    accent: '#EC4899',
-    accent2: '#06B6D4',
-    text: '#FDF4FF',
-    muted: '#C4B5FD',
-    border: 'rgba(236,72,153,0.32)',
-    fontClass: "font-['Outfit']",
-  },
-  {
-    id: 'castrol',
-    name: "Castrol Tom's",
-    tag: 'PRO · Endurance',
-    description: 'Verde Esmeralda escuro (#051610) com acentos Verde (#10B981) e Vermelho (#EF4444).',
-    bg: '#051610',
-    surface: '#09241B',
-    card: '#0F3527',
-    accent: '#10B981',
-    accent2: '#EF4444',
-    text: '#ECFDF5',
-    muted: '#6EE7B7',
-    border: 'rgba(16,185,129,0.32)',
-    fontClass: 'font-mono',
-    darkAccentText: true,
-  },
-  {
-    id: 'night',
-    name: 'Rally Noturno (Night Vision)',
-    tag: 'PRO · Noturno',
-    description: 'Preto fosco (#050506) com vermelho rubi e âmbar suaves anti-ofuscamento.',
-    bg: '#050506',
-    surface: '#0B0B0E',
-    card: '#121216',
-    accent: '#DC2626',
-    accent2: '#D97706',
-    text: '#E5D4CE',
-    muted: '#9C7E76',
-    border: 'rgba(220,38,38,0.3)',
-    fontClass: 'font-mono',
-  },
-  {
-    id: 'neon_cyan',
-    name: 'Neon Cyan (Tron)',
-    tag: 'PRO · Neon',
-    description: 'Fundo #06090F, cartões #0D131F e azul ciano elétrico #00F5FF com fonte Orbitron.',
-    bg: '#06090F',
-    surface: '#090E18',
-    card: '#0D131F',
-    accent: '#00F5FF',
-    accent2: '#38BDF8',
-    text: '#ECFEFF',
-    muted: '#67E8F9',
-    border: 'rgba(0,245,255,0.32)',
-    fontClass: "font-['Orbitron']",
-    darkAccentText: true,
-  },
-  {
-    id: 'neon_amber',
-    name: 'Neon Âmbar (Rally Night)',
-    tag: 'PRO · Neon',
-    description: 'Fundo #0A0806, cartões #16120E e laranja âmbar noturno #FF9E00 com fonte Orbitron.',
-    bg: '#0A0806',
-    surface: '#110E0A',
-    card: '#16120E',
-    accent: '#FF9E00',
-    accent2: '#FFB703',
-    text: '#FFFBEB',
-    muted: '#FBBF24',
-    border: 'rgba(255,158,0,0.34)',
-    fontClass: "font-['Orbitron']",
-    darkAccentText: true,
-  },
-  {
-    id: 'neon_lime',
-    name: 'Neon Acid Lime (WRC)',
-    tag: 'PRO · Neon',
-    description: 'Fundo #080A06, cartões #11160D e verde-limão ácido #CCFF00 com fonte Orbitron.',
-    bg: '#080A06',
-    surface: '#0D1109',
-    card: '#11160D',
-    accent: '#CCFF00',
-    accent2: '#D9FF33',
-    text: '#F7FEE7',
-    muted: '#BEF264',
-    border: 'rgba(204,255,0,0.34)',
-    fontClass: "font-['Orbitron']",
-    darkAccentText: true,
-  },
-  {
-    id: 'neon_red',
-    name: 'Neon Laser Red',
-    tag: 'PRO · Neon',
-    description: 'Fundo #0B0607, cartões #160C0E e vermelho laser #FF1744 com fonte Orbitron.',
-    bg: '#0B0607',
-    surface: '#11090B',
-    card: '#160C0E',
-    accent: '#FF1744',
-    accent2: '#FF4569',
-    text: '#FFF1F2',
-    muted: '#FDA4AF',
-    border: 'rgba(255,23,68,0.36)',
-    fontClass: "font-['Orbitron']",
-  },
-  {
-    id: 'old_vdo',
-    name: 'Old VDO Green (80s/90s)',
-    tag: 'PRO · Old School',
-    description: 'Painéis VDO Gol GTI / Kadett GSi: preto fosco #0B0D0B e verde clássico #38E57D.',
-    bg: '#0B0D0B',
-    surface: '#0F120F',
-    card: '#131713',
-    accent: '#38E57D',
-    accent2: '#6EE7B7',
-    text: '#ECFDF5',
-    muted: '#86EFAC',
-    border: 'rgba(56,229,125,0.32)',
-    fontClass: "font-['Share_Tech_Mono']",
-    darkAccentText: true,
-  },
-  {
-    id: 'old_terratrip',
-    name: 'Old Terratrip (Rally)',
-    tag: 'PRO · Old School',
-    description: 'Computadores de rally antigos: grafite quente #161310 e dígitos laranja #FF6A00.',
-    bg: '#161310',
-    surface: '#1B1713',
-    card: '#211C17',
-    accent: '#FF6A00',
-    accent2: '#FF8C33',
-    text: '#FFF7ED',
-    muted: '#FDBA74',
-    border: 'rgba(255,106,0,0.36)',
-    fontClass: "font-['Share_Tech_Mono']",
-  },
-  {
-    id: 'futuristic_hud',
-    name: 'Futuristic HUD (Caça/F1)',
-    tag: 'PRO · Futurista',
-    description: 'Fundo azul-aço #050B14, cartões #0B1626 e azul holográfico #38BDF8.',
-    bg: '#050B14',
-    surface: '#08111D',
-    card: '#0B1626',
-    accent: '#38BDF8',
-    accent2: '#7DD3FC',
-    text: '#F0F9FF',
-    muted: '#7DD3FC',
-    border: 'rgba(56,189,248,0.34)',
-    fontClass: "font-['Orbitron']",
-    darkAccentText: true,
-  },
-  {
-    id: 'cyber_plasma',
-    name: 'Cyber Plasma',
-    tag: 'PRO · Futurista',
-    description: 'Fundo abissal #070510, cartões #120D24 e magenta/plasma #E879F9.',
-    bg: '#070510',
-    surface: '#0C091A',
-    card: '#120D24',
-    accent: '#E879F9',
-    accent2: '#F0ABFC',
-    text: '#FAF5FF',
-    muted: '#F0ABFC',
-    border: 'rgba(232,121,249,0.34)',
-    fontClass: "font-['Orbitron']",
-    darkAccentText: true,
-  },
-];
 
 const IMPORT_FORMAT_OPTIONS: {
   id: ImportFormatHint;
@@ -1496,8 +1200,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             {
               id: 'theme' as const,
               accentColor: '#00E5FF',
-              title: 'TEMAS',
-              subtitle: '18 Visuais',
+              title: 'TEMAS VISUAIS',
+              subtitle: `${APP_THEME_OPTIONS.length} Visuais`,
               swatches: [
                 activeThemeMeta.bg,
                 activeThemeMeta.surface,
@@ -1578,7 +1282,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               key={item.id}
               type="button"
               onClick={() => navigateMenu(item.id)}
-              className="group relative flex h-[76px] items-center justify-end overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-[#181B24] to-[#0E1015] px-3 py-2 text-right transition-all hover:border-white/30 active:scale-[0.98]"
+              className="group relative flex h-[76px] items-center justify-end overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 py-2 text-right transition-all hover:border-[var(--ps-accent)] active:scale-[0.98]"
             >
               <SettingsWireframeArt menuId={item.id} color={item.accentColor} />
 
@@ -1587,22 +1291,22 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <span
                     className={`mb-0.5 rounded px-1.5 py-0.5 font-mono text-[8px] font-black leading-none uppercase ${
                       item.badge === 'ADMIN'
-                        ? 'bg-cyan-500/25 text-cyan-300'
+                        ? 'bg-cyan-500/20 text-[var(--ps-accent)]'
                         : item.badge === 'PRO'
-                          ? 'bg-emerald-500/25 text-emerald-300'
+                          ? 'bg-emerald-500/20 text-[var(--ps-emerald)]'
                           : item.badge.includes('DEV')
-                            ? 'border border-amber-400/35 bg-amber-500/15 text-amber-300'
-                            : 'bg-amber-500/25 text-amber-300'
+                            ? 'border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-amber)]'
+                            : 'bg-amber-500/20 text-[var(--ps-amber)]'
                     }`}
                   >
                     {item.badge}
                   </span>
                 )}
-                <span className="max-w-full truncate text-[11px] font-black tracking-wider text-white uppercase leading-tight sm:text-xs">
+                <span className="max-w-full truncate text-[11px] font-black tracking-wider text-[var(--ps-text)] uppercase leading-tight sm:text-xs">
                   {item.title}
                 </span>
 
-                <div className="mt-0.5 max-w-full truncate text-[10px] font-medium text-slate-400 leading-tight">
+                <div className="mt-0.5 max-w-full truncate text-[10px] font-medium text-[var(--ps-muted)] leading-tight">
                   {item.subtitle}
                 </div>
 
@@ -1611,7 +1315,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     {item.swatches.map((hex, i) => (
                       <span
                         key={i}
-                        className="h-2 w-2 rounded-full border border-white/30"
+                        className="h-2 w-2 rounded-full border border-[var(--ps-border-strong)]"
                         style={{ backgroundColor: hex }}
                       />
                     ))}
@@ -1724,21 +1428,21 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SUBMENU 00: CONTA & ASSINATURA + ADMIN */}
       {activeMenu === 'account' && <AccountSubscriptionPanel />}
 
-      {/* SUBMENU 0: TEMAS & VISUAL DO PAINEL (10 TEMAS) */}
+      {/* SUBMENU 0: TEMAS & VISUAL DO PAINEL */}
       {activeMenu === 'theme' && (
         <div className="space-y-3">
           <section className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
                 <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                  Escolha o Tema do Cockpit (18 Modelos)
+                  Escolha o Tema do Cockpit ({APP_THEME_OPTIONS.length} Modelos)
                 </h2>
                 <p className="text-xs text-[var(--ps-muted)]">
                   {!ENABLE_SUBSCRIPTION_GATE
-                    ? 'Modo Dev ativo: todos os 18 temas visuais estão 100% liberados.'
+                    ? `Modo Dev ativo: todos os ${APP_THEME_OPTIONS.length} temas visuais estão 100% liberados (inclui escala de fonte integrada nos temas XL).`
                     : isPro
-                      ? 'Plano PRO ativo: todos os 18 temas visuais desbloqueados offline e online.'
-                      : 'Plano FREE: PitStop Original e Solar Dia liberados. Os demais 16 temas requerem Plano PRO.'}
+                      ? `Plano PRO ativo: todos os ${APP_THEME_OPTIONS.length} temas visuais desbloqueados offline e online.`
+                      : `Plano FREE: temas iniciais liberados. Ative o Plano PRO para liberar todos os ${APP_THEME_OPTIONS.length} temas visuais.`}
                 </p>
               </div>
               <span className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-1.5 font-mono text-[11px] font-bold text-[var(--ps-accent)]">
@@ -1748,7 +1452,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
             <div className="grid grid-cols-2 gap-2.5">
               {APP_THEME_OPTIONS.map((themeOpt) => {
-                const isActive = settings.appTheme === themeOpt.id;
+                const isActive =
+                  settings.appTheme === themeOpt.id ||
+                  (themeOpt.id === 'neo' && settings.appTheme === 'gt');
                 const unlocked = isThemeUnlockedForPlan(themeOpt.id, isPro);
                 return (
                   <button
@@ -1758,7 +1464,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       if (!unlocked) {
                         openProUpgradeModal(
                           `Tema ${themeOpt.name}`,
-                          'No Plano FREE estão disponíveis os temas PitStop Original e Solar Dia. Ative o Plano PRO para usar todos os 10 temas visuais.'
+                          'Ative o Plano PRO para usar todos os temas visuais disponíveis.'
                         );
                         return;
                       }
@@ -1795,7 +1501,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                           <Check className="h-3 w-3 stroke-[3]" />
                         </span>
                       ) : !unlocked ? (
-                        <span className="inline-flex shrink-0 items-center gap-0.5 rounded border border-amber-500/45 bg-amber-500/15 px-1 py-0.5 font-mono text-[8px] font-black text-amber-400 uppercase">
+                        <span className="inline-flex shrink-0 items-center gap-0.5 rounded border border-amber-500/45 bg-amber-500/15 px-1 py-0.5 font-mono text-[8px] font-black text-[var(--ps-amber)] uppercase">
                           <Crown className="h-2.5 w-2.5" />
                           <span>PRO</span>
                         </span>
@@ -1848,7 +1554,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                           {[themeOpt.bg, themeOpt.surface, themeOpt.card, themeOpt.accent, themeOpt.accent2].map((hex, idx) => (
                             <span
                               key={idx}
-                              className="h-2.5 w-2.5 rounded-full border border-white/25"
+                              className="h-2.5 w-2.5 rounded-full border border-black/25 ring-1 ring-white/20"
                               style={{ backgroundColor: hex }}
                             />
                           ))}
@@ -3177,7 +2883,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   {[1, 2, 3, 4, 5].map((b) => (
                     <span
                       key={b}
-                      className={`w-1.5 rounded-xs ${b <= gpsQuality.bars ? gpsQuality.barClass : 'bg-zinc-800'}`}
+                      className={`w-1.5 rounded-xs ${b <= gpsQuality.bars ? gpsQuality.barClass : 'bg-[var(--ps-border)]'}`}
                       style={{ height: `${b * 4 + 4}px` }}
                     />
                   ))}
@@ -3345,7 +3051,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </p>
               <p>
                 No navegador web do organizador, adicione{' '}
-                <code className="rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-amber-300">?apuracao=1</code>{' '}
+                <code className="rounded border border-[var(--ps-border)] bg-[var(--ps-card)] px-1.5 py-0.5 font-mono text-[var(--ps-accent)]">?apuracao=1</code>{' '}
                 ao final do endereço (ex.:{' '}
                 <code className="font-mono text-[var(--ps-text)]">https://seusite/?apuracao=1</code>) ou clique no botão abaixo.
                 O APK compilado para competidores oculta essa tela automaticamente para segurança da prova.
@@ -3437,8 +3143,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <p
                 className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs ${
                   healthState.ok
-                    ? 'border-emerald-500/30 bg-emerald-950/25 text-emerald-400'
-                    : 'border-amber-500/30 bg-amber-950/25 text-amber-300'
+                    ? 'border-emerald-500/35 bg-emerald-500/12 text-[var(--ps-emerald)]'
+                    : 'border-amber-500/35 bg-amber-500/12 text-[var(--ps-amber)]'
                 }`}
               >
                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
@@ -3473,7 +3179,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </div>
               <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
                 <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Passagens</p>
-                <p className="mt-1 text-2xl font-black text-amber-300">{velocityStats.runsCount}</p>
+                <p className="mt-1 text-2xl font-black text-[var(--ps-amber)]">{velocityStats.runsCount}</p>
               </div>
               <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
                 <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Fila Admin</p>
@@ -3485,8 +3191,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div
                 className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold ${
                   backupFeedback.ok
-                    ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300'
-                    : 'border-red-500/40 bg-red-950/30 text-red-300'
+                    ? 'border-emerald-500/40 bg-emerald-500/12 text-[var(--ps-emerald)]'
+                    : 'border-red-500/40 bg-red-500/12 text-red-500'
                 }`}
               >
                 <CheckCircle2 className="h-4 w-4 shrink-0" />

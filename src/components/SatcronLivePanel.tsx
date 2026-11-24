@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ExternalLink,
+  Filter,
   RefreshCw,
   Trophy,
   Wifi,
@@ -11,6 +12,7 @@ import {
   fetchSatcronStagesClient,
   resolveSafeSatcronUrl,
   type SatcronStagesResponse,
+  type SatcronStandingRow,
 } from '../utils/satcronClient';
 
 const SATCRON_URL_STORAGE_KEY = 'pitstop_satcron_last_url_v1';
@@ -43,8 +45,11 @@ export const SatcronLivePanel: React.FC = () => {
   const [selectedSs, setSelectedSs] = useState<string>(() =>
     readInitialParam(loadSavedSatcronUrl(), 'ss', 'G')
   );
+  const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
+  const [viewMode, setViewMode] = useState<'auto' | 'table' | 'iframe'>('auto');
   const [reloadNonce, setReloadNonce] = useState<number>(0);
   const [iframeLoaded, setIframeLoaded] = useState<boolean>(false);
+  const [loadingData, setLoadingData] = useState<boolean>(false);
   const [invalidUrlError, setInvalidUrlError] = useState<string | null>(null);
 
   const [isOnline, setIsOnline] = useState(() =>
@@ -63,10 +68,10 @@ export const SatcronLivePanel: React.FC = () => {
     };
   }, []);
 
-  // Optional background metadata fetch to enrich modality & stage labels when exposed
   const fetchMetadata = useCallback(
     async (targetUrl: string, modOverride?: string, ssOverride?: string) => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      setLoadingData(true);
       try {
         const payload = await fetchSatcronStagesClient(
           targetUrl.trim() || DEFAULT_SATCRON_URL,
@@ -77,7 +82,9 @@ export const SatcronLivePanel: React.FC = () => {
           setData(payload);
         }
       } catch {
-        // Embedded iframe handles live SPA rendering directly
+        // Embedded iframe handles live SPA rendering fallback directly
+      } finally {
+        setLoadingData(false);
       }
     },
     []
@@ -94,15 +101,19 @@ export const SatcronLivePanel: React.FC = () => {
   }, [urlInput, selectedMod, selectedSs]);
 
   const iframeSrc = useMemo(() => {
-    if (!reloadNonce) return activeSourceHref;
     try {
       const url = new URL(activeSourceHref);
-      url.searchParams.set('_t', String(reloadNonce));
+      if (selectedCategory !== 'ALL') {
+        url.searchParams.set('cat', selectedCategory);
+      }
+      if (reloadNonce) {
+        url.searchParams.set('_t', String(reloadNonce));
+      }
       return url.toString();
     } catch {
       return activeSourceHref;
     }
-  }, [activeSourceHref, reloadNonce]);
+  }, [activeSourceHref, reloadNonce, selectedCategory]);
 
   const modalityOptions = useMemo(() => {
     const base =
@@ -120,12 +131,97 @@ export const SatcronLivePanel: React.FC = () => {
   }, [data?.modalities, selectedMod]);
 
   const stageChoices = useMemo(() => {
-    const detected = data?.stageIds && data.stageIds.length > 0
-      ? data.stageIds
-      : ['1', '2', '3', '4', '5', '6'];
-    const merged = Array.from(new Set(['G', ...detected, selectedSs]));
-    return merged;
+    const detected =
+      data?.stageIds && data.stageIds.length > 0
+        ? data.stageIds
+        : ['1', '2', '3', '4', '5', '6'];
+    return Array.from(new Set(['G', ...detected, selectedSs]));
   }, [data?.stageIds, selectedSs]);
+
+  // Unique categories automatically extracted from standings, parsed HTML tables, and Satcron metadata
+  const categoryOptions = useMemo(() => {
+    const descMap = new Map<string, string>();
+    if (Array.isArray(data?.categories)) {
+      for (const c of data.categories) {
+        const key = (c.cat || '').trim();
+        if (!key) continue;
+        descMap.set(key.toLowerCase(), c.desc && c.desc.trim() !== key ? `${key} — ${c.desc.trim()}` : key);
+      }
+    }
+
+    const seen = new Map<string, { value: string; label: string }>();
+    const addCategory = (rawVal: string | undefined) => {
+      const val = (rawVal || '').trim();
+      if (!val || val === '-' || val === '--') return;
+      const lower = val.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.set(lower, {
+          value: val,
+          label: descMap.get(lower) || val,
+        });
+      }
+    };
+
+    if (Array.isArray(data?.standings)) {
+      for (const row of data.standings) {
+        addCategory(row.category);
+      }
+    }
+
+    if (Array.isArray(data?.tables)) {
+      for (const tbl of data.tables) {
+        const catIdx = tbl.headers.findIndex((h) => /^cat/i.test(h.trim()));
+        if (catIdx >= 0) {
+          for (const row of tbl.rows) {
+            addCategory(row[catIdx]);
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(data?.categories)) {
+      for (const c of data.categories) {
+        addCategory(c.cat);
+      }
+    }
+
+    return Array.from(seen.values());
+  }, [data?.standings, data?.tables, data?.categories]);
+
+  // Reset selected category if the newly loaded race/modality doesn't contain it
+  useEffect(() => {
+    if (
+      selectedCategory !== 'ALL' &&
+      categoryOptions.length > 0 &&
+      !categoryOptions.some((c) => c.value.toLowerCase() === selectedCategory.toLowerCase())
+    ) {
+      setSelectedCategory('ALL');
+    }
+  }, [categoryOptions, selectedCategory]);
+
+  const filteredStandings: SatcronStandingRow[] = useMemo(() => {
+    const all = data?.standings ?? [];
+    if (selectedCategory === 'ALL') return all;
+    const target = selectedCategory.trim().toLowerCase();
+    return all.filter((row) => (row.category || '').trim().toLowerCase() === target);
+  }, [data?.standings, selectedCategory]);
+
+  const primaryParsedTable = useMemo(() => {
+    if (!data?.tables || data.tables.length === 0) return null;
+    const tbl = data.tables[0];
+    const catIdx = tbl.headers.findIndex((h) => /^cat/i.test(h.trim()));
+    if (selectedCategory === 'ALL' || catIdx < 0) return tbl;
+    const target = selectedCategory.trim().toLowerCase();
+    return {
+      headers: tbl.headers,
+      rows: tbl.rows.filter((r) => (r[catIdx] || '').trim().toLowerCase() === target),
+    };
+  }, [data?.tables, selectedCategory]);
+
+  const hasParsedRows =
+    (data?.standings?.length ?? 0) > 0 || (primaryParsedTable?.rows.length ?? 0) > 0;
+  const effectiveViewMode =
+    viewMode === 'auto' ? (hasParsedRows ? 'table' : 'iframe') : viewMode;
 
   const triggerIframeReload = (nextUrl: string, nextMod: string, nextSs: string) => {
     const safe = resolveSafeSatcronUrl(nextUrl, nextMod, nextSs);
@@ -152,7 +248,7 @@ export const SatcronLivePanel: React.FC = () => {
           <div className="flex items-center gap-2 min-w-0">
             <Trophy className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
             <span className="font-['Barlow_Condensed'] text-base font-extrabold tracking-wide uppercase truncate">
-              Cronometragem Satcron Ao Vivo
+              {data?.eventTitle ? data.eventTitle : 'Cronometragem Satcron Ao Vivo'}
             </span>
           </div>
 
@@ -199,7 +295,7 @@ export const SatcronLivePanel: React.FC = () => {
             type="submit"
             className="pitstop-btn-red inline-flex h-[40px] items-center justify-center gap-1.5 rounded-xl px-4 text-xs font-extrabold uppercase sm:shrink-0"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${!iframeLoaded && isOnline ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 ${(loadingData || (!iframeLoaded && effectiveViewMode === 'iframe')) && isOnline ? 'animate-spin' : ''}`} />
             <span>Atualizar</span>
           </button>
         </form>
@@ -213,6 +309,7 @@ export const SatcronLivePanel: React.FC = () => {
               onChange={(e) => {
                 const nextMod = e.target.value;
                 setSelectedMod(nextMod);
+                setSelectedCategory('ALL');
                 triggerIframeReload(urlInput, nextMod, selectedSs);
               }}
               className="min-h-[38px] w-full rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
@@ -252,24 +349,195 @@ export const SatcronLivePanel: React.FC = () => {
         </div>
       )}
 
-      {/* Embedded Official Live Satcron SPA */}
-      {isOnline ? (
-        <div className="relative space-y-1.5">
-          {!iframeLoaded && (
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-[11px] text-[var(--ps-muted)]">
-              <span className="truncate">Carregando tempos ao vivo do Satcron...</span>
-              <span className="truncate max-w-[40%] opacity-75">{activeSourceHref}</span>
+      {/* Category Filter Bar directly above the live standings/times listing */}
+      {isOnline && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 py-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Filter className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
+            <label className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="shrink-0 font-mono text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                Categoria:
+              </span>
+              <select
+                aria-label="Filtrar resultados por categoria"
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="min-h-[38px] min-w-0 flex-1 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-extrabold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none sm:max-w-xs"
+              >
+                <option value="ALL">Todas Categorias</option>
+                {categoryOptions.map((cat) => (
+                  <option key={cat.value} value={cat.value}>
+                    {cat.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {hasParsedRows && (
+              <span className="font-mono text-[11px] font-bold text-[var(--ps-muted)] tabular-nums">
+                {data?.standings?.length
+                  ? `${filteredStandings.length} comp.`
+                  : `${primaryParsedTable?.rows.length ?? 0} reg.`}
+              </span>
+            )}
+            <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-bold ${
+                  effectiveViewMode === 'table'
+                    ? 'pitstop-btn-red'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                }`}
+              >
+                Tabela
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('iframe')}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-bold ${
+                  effectiveViewMode === 'iframe'
+                    ? 'pitstop-btn-red'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                }`}
+              >
+                Site Satcron
+              </button>
             </div>
-          )}
-          <iframe
-            key={iframeSrc}
-            title="Painel Oficial Satcron Ao Vivo"
-            src={iframeSrc}
-            onLoad={() => setIframeLoaded(true)}
-            className="w-full h-[65vh] rounded-2xl border border-[var(--ps-border)] bg-white"
-            referrerPolicy="no-referrer"
-          />
+          </div>
         </div>
+      )}
+
+      {/* Live Standings Table OR Embedded Official Satcron SPA */}
+      {isOnline ? (
+        effectiveViewMode === 'table' && hasParsedRows ? (
+          <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] pb-2">
+              <div className="min-w-0">
+                <p className="font-['Barlow_Condensed'] text-base font-extrabold tracking-wide text-[var(--ps-text)] uppercase truncate">
+                  {data?.stageTitle || (selectedSs === 'G' ? 'Classificação Geral' : `Especial SS${selectedSs}`)}
+                </p>
+                {data?.subtitle && (
+                  <p className="text-[11px] text-[var(--ps-muted)] truncate">{data.subtitle}</p>
+                )}
+              </div>
+              {selectedCategory !== 'ALL' && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory('ALL')}
+                  className="rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 py-1 font-mono text-[10px] font-bold text-[var(--ps-accent)] hover:border-[var(--ps-accent)]"
+                >
+                  Mostrar Todas
+                </button>
+              )}
+            </div>
+
+            {data?.standings && data.standings.length > 0 ? (
+              filteredStandings.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
+                    <thead>
+                      <tr className="border-b border-[var(--ps-border-strong)] text-[10px] text-[var(--ps-muted)] uppercase">
+                        <th className="py-2 pr-2">Pos</th>
+                        <th className="px-2 py-2">#</th>
+                        <th className="px-2 py-2">Dupla / Piloto</th>
+                        <th className="px-2 py-2">Cat</th>
+                        <th className="px-2 py-2 text-right">SS</th>
+                        <th className="px-2 py-2 text-right">Total</th>
+                        <th className="py-2 pl-2 text-right">Dif</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--ps-border)]">
+                      {filteredStandings.map((row, idx) => (
+                        <tr
+                          key={`${row.carNo}_${row.pos}_${idx}`}
+                          className="hover:bg-[var(--ps-card)]"
+                        >
+                          <td className="py-2 pr-2 font-black text-[var(--ps-accent)]">
+                            {selectedCategory === 'ALL' ? row.pos : `${idx + 1}º`}
+                          </td>
+                          <td className="px-2 py-2 font-bold text-[var(--ps-text)]">
+                            {row.carNo}
+                          </td>
+                          <td className="px-2 py-2 font-sans font-bold text-[var(--ps-text)]">
+                            {row.crew}
+                          </td>
+                          <td className="px-2 py-2 font-bold text-[var(--ps-amber)]">
+                            {row.category}
+                          </td>
+                          <td className="px-2 py-2 text-right font-bold text-[var(--ps-text)]">
+                            {row.stageTime}
+                          </td>
+                          <td className="px-2 py-2 text-right font-black text-[var(--ps-emerald)]">
+                            {row.totalTime}
+                          </td>
+                          <td className="py-2 pl-2 text-right text-[var(--ps-muted)]">
+                            {row.diffLeader}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="py-6 text-center font-mono text-xs text-[var(--ps-muted)]">
+                  Nenhum competidor encontrado na categoria selecionada ({selectedCategory}).
+                </p>
+              )
+            ) : primaryParsedTable ? (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-left font-mono text-xs tabular-nums">
+                  {primaryParsedTable.headers.length > 0 && (
+                    <thead>
+                      <tr className="border-b border-[var(--ps-border-strong)] text-[10px] text-[var(--ps-muted)] uppercase">
+                        {primaryParsedTable.headers.map((h, i) => (
+                          <th key={i} className="px-2 py-2 whitespace-nowrap">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                  )}
+                  <tbody className="divide-y divide-[var(--ps-border)]">
+                    {primaryParsedTable.rows.map((cells, rIdx) => (
+                      <tr key={rIdx} className="hover:bg-[var(--ps-card)]">
+                        {cells.map((cell, cIdx) => (
+                          <td key={cIdx} className="px-2 py-2 text-[var(--ps-text)]">
+                            {cell}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="relative space-y-1.5">
+            {data?.liveStatusMessage && (
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-[11px] text-[var(--ps-muted)]">
+                {data.liveStatusMessage}
+              </div>
+            )}
+            {!iframeLoaded && (
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-[11px] text-[var(--ps-muted)]">
+                <span className="truncate">Carregando tempos ao vivo do Satcron...</span>
+                <span className="truncate max-w-[40%] opacity-75">{activeSourceHref}</span>
+              </div>
+            )}
+            <iframe
+              key={iframeSrc}
+              title="Painel Oficial Satcron Ao Vivo"
+              src={iframeSrc}
+              onLoad={() => setIframeLoaded(true)}
+              className="w-full h-[65vh] rounded-2xl border border-[var(--ps-border)] bg-white"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+        )
       ) : (
         <div className="rounded-2xl border border-amber-500/50 bg-[var(--ps-surface)] p-5 text-center space-y-2">
           <WifiOff className="mx-auto h-6 w-6 text-amber-400" />

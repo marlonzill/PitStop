@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Award, Crosshair, RotateCcw, Trash2, ZoomIn } from 'lucide-react';
+import {
+  Activity,
+  ArrowLeft,
+  Award,
+  Crosshair,
+  Maximize2,
+  Pause,
+  Play,
+  RotateCcw,
+  Trash2,
+  ZoomIn,
+} from 'lucide-react';
 import {
   analyzeTrackCornersAndBraking,
   buildTrackSectors,
@@ -160,6 +171,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   const panel1Ref = useRef<SVGSVGElement | null>(null);
   const panel2Ref = useRef<SVGSVGElement | null>(null);
   const panel3Ref = useRef<SVGSVGElement | null>(null);
+  const fsPanelRef = useRef<SVGSVGElement | null>(null);
   const isDraggingRef = useRef(false);
 
   const showLap2 = Boolean(lap2 && lap2Samples.length > 1 && lap2.id !== lap1?.id);
@@ -181,6 +193,8 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
   const [zoomSectorIdx, setZoomSectorIdx] = useState<number | null>(null);
   const [scrubDistM, setScrubDistM] = useState<number>(() => Math.round(maxDistM * 0.35));
+  const [proFullscreen, setProFullscreen] = useState(false);
+  const [proReplayPlaying, setProReplayPlaying] = useState(false);
 
   const activeSectorLaps = useMemo(() => {
     const list: Array<{ slot: 1 | 2 | 3; run: VelocityRun }> = [];
@@ -218,13 +232,37 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   }, [lap1?.id, lap2?.id, lap3?.id]);
 
   useEffect(() => {
+    if (proFullscreen) return;
     setScrubDistM((prev) => {
       if (prev < viewStartM || prev > viewEndM) {
         return Math.round((viewStartM + viewEndM) / 2);
       }
       return prev;
     });
-  }, [viewStartM, viewEndM]);
+  }, [viewStartM, viewEndM, proFullscreen]);
+
+  useEffect(() => {
+    if (!proFullscreen) {
+      setProReplayPlaying(false);
+    }
+  }, [proFullscreen]);
+
+  useEffect(() => {
+    if (!proFullscreen || !proReplayPlaying) return;
+    const totalM = Math.round(maxDistM);
+    const stepM = Math.max(5, Math.round(totalM / 220));
+    const timer = window.setInterval(() => {
+      setScrubDistM((prev) => {
+        const next = prev + stepM;
+        if (next >= totalM) {
+          setProReplayPlaying(false);
+          return totalM;
+        }
+        return next;
+      });
+    }, 80);
+    return () => window.clearInterval(timer);
+  }, [proFullscreen, proReplayPlaying, maxDistM]);
 
   const deltaSeries2 = useMemo(
     () => (showLap2 ? computeLapDeltaSeries(lap1Samples, lap2Samples, 140) : []),
@@ -732,8 +770,128 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     [sectorComparison.sectors, viewStartM, viewEndM]
   );
 
+  // Fullscreen full-lap series (0m .. maxDistM) so scrubber and graph span the entire lap smoothly
+  const fsSamples1 = useMemo(
+    () => sampleSeriesInWindow(lap1Samples, 0, maxDistM, 150),
+    [lap1Samples, maxDistM]
+  );
+  const fsSamples2 = useMemo(
+    () => (showLap2 ? sampleSeriesInWindow(lap2Samples, 0, maxDistM, 150) : []),
+    [showLap2, lap2Samples, maxDistM]
+  );
+  const fsSamples3 = useMemo(
+    () => (showLap3 ? sampleSeriesInWindow(lap3Samples, 0, maxDistM, 150) : []),
+    [showLap3, lap3Samples, maxDistM]
+  );
+  const fsMaxSpd = useMemo(() => {
+    const peak = Math.max(
+      90,
+      ...fsSamples1.map((s) => s.speedKmh || 0),
+      ...fsSamples2.map((s) => s.speedKmh || 0),
+      ...fsSamples3.map((s) => s.speedKmh || 0)
+    );
+    return Math.ceil(peak / 20) * 20;
+  }, [fsSamples1, fsSamples2, fsSamples3]);
+
+  const fsXAtM = (distM: number) =>
+    padL + Math.max(0, Math.min(1, distM / Math.max(20, maxDistM))) * plotW;
+  const fsYAtKmh = (kmh: number) =>
+    p1Top + p1PlotH - Math.max(0, Math.min(1, kmh / fsMaxSpd)) * p1PlotH;
+
+  const { fsSpeedLine1, fsSpeedArea1 } = useMemo(() => {
+    if (fsSamples1.length < 2) return { fsSpeedLine1: '', fsSpeedArea1: '' };
+    const pts = fsSamples1.map(
+      (s) => `${fsXAtM(s.distKm * 1000).toFixed(1)},${fsYAtKmh(s.speedKmh).toFixed(1)}`
+    );
+    const firstX = fsXAtM(fsSamples1[0].distKm * 1000).toFixed(1);
+    const lastX = fsXAtM(fsSamples1[fsSamples1.length - 1].distKm * 1000).toFixed(1);
+    const baseStr = p1Bottom.toFixed(1);
+    return {
+      fsSpeedLine1: pts.join(' '),
+      fsSpeedArea1: `${firstX},${baseStr} ${pts.join(' ')} ${lastX},${baseStr}`,
+    };
+  }, [fsSamples1, maxDistM, fsMaxSpd]);
+
+  const fsSpeedLine2 = useMemo(
+    () =>
+      fsSamples2
+        .map((s) => `${fsXAtM(s.distKm * 1000).toFixed(1)},${fsYAtKmh(s.speedKmh).toFixed(1)}`)
+        .join(' '),
+    [fsSamples2, maxDistM, fsMaxSpd]
+  );
+  const fsSpeedLine3 = useMemo(
+    () =>
+      fsSamples3
+        .map((s) => `${fsXAtM(s.distKm * 1000).toFixed(1)},${fsYAtKmh(s.speedKmh).toFixed(1)}`)
+        .join(' '),
+    [fsSamples3, maxDistM, fsMaxSpd]
+  );
+  const fsZoneSegments = useMemo(() => {
+    if (fsSamples1.length < 2) return [];
+    const segs: Array<{ x1: number; x2: number; kind: 'accel' | 'brake' }> = [];
+    for (let i = 0; i < fsSamples1.length - 1; i += 1) {
+      const s = fsSamples1[i];
+      const next = fsSamples1[i + 1];
+      const g = s.accelLongG ?? 0;
+      if (g > 0.08 || g < -0.15) {
+        segs.push({
+          x1: fsXAtM(s.distKm * 1000),
+          x2: fsXAtM(next.distKm * 1000),
+          kind: g > 0.08 ? 'accel' : 'brake',
+        });
+      }
+    }
+    return segs;
+  }, [fsSamples1, maxDistM]);
+
+  const fsCriticalMarkers = useMemo(
+    () =>
+      detectTelemetryCriticalPoints(lap1Samples)
+        .filter((p) => p.type === 'TOP' || p.type === 'APEX')
+        .map((p) => ({
+          ...p,
+          badge: p.type === 'TOP' ? ('TOP' as const) : ('MIN' as const),
+        })),
+    [lap1Samples]
+  );
+
+  const fsYTicksKmh = [fsMaxSpd, Math.round(fsMaxSpd * 0.5), 0];
+  const fsXTicksM = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxDistM * f));
+  const fsScrubX = fsXAtM(scrubDistM);
+
+  const updateFsScrubFromSvg = (svg: SVGSVGElement | null, clientX: number) => {
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const svgX = ((clientX - rect.left) / rect.width) * chartW;
+    const ratio = Math.max(0, Math.min(1, (svgX - padL) / plotW));
+    setScrubDistM(Math.round(ratio * maxDistM));
+  };
+
   return (
     <div className="space-y-3">
+      {/* CTA: ABRIR ANÁLISE PRO (TELA CHEIA) */}
+      {lap1Samples.length > 1 && (
+        <button
+          type="button"
+          onClick={() => setProFullscreen(true)}
+          className="pitstop-btn-red flex min-h-[48px] w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left shadow-lg transition-transform active:scale-[0.99]"
+        >
+          <span className="flex items-center gap-2.5">
+            <Activity className="h-5 w-5 shrink-0" />
+            <span>
+              <span className="block font-['Barlow_Condensed'] text-base font-black tracking-wide uppercase sm:text-lg">
+                ABRIR ANÁLISE PRO (TELA CHEIA)
+              </span>
+              <span className="block font-mono text-[10px] opacity-90">
+                Mapa Satélite + Gráfico Sincronizado + Controle de Distância e Replay
+              </span>
+            </span>
+          </span>
+          <Maximize2 className="h-4 w-4 shrink-0" />
+        </button>
+      )}
+
       {/* 0. DESTAQUE MELHOR VOLTA & MATRIZ GERAL DE VOLTAS/PARCIAIS */}
       <div className="space-y-2.5">
         {/* Card Único de Destaque: Melhor Volta (Best Lap) */}
@@ -1482,6 +1640,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               }
               heatmapMode="speed"
               showSpeedBadges={true}
+              onFullscreenToggle={() => setProFullscreen(true)}
               containerClassName="relative h-56 w-full overflow-hidden bg-[#000000] sm:h-72"
             />
           </div>
@@ -2330,6 +2489,516 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 </p>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* MODO ANÁLISE PRO EM TELA CHEIA (MAPA ~45% + TELEMETRIA/GRÁFICO + CONTROLES ~55%) */}
+      {proFullscreen && lap1Samples.length > 1 && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--ps-bg)] text-[var(--ps-text)]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Análise Pro em Tela Cheia"
+        >
+          {/* Barra Superior Compacta */}
+          <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2 font-mono text-[11px] tabular-nums">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setProFullscreen(false);
+                  setProReplayPlaying(false);
+                }}
+                className="inline-flex min-h-[34px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+              >
+                <ArrowLeft className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+                <span>Voltar</span>
+              </button>
+              <span className="font-bold text-[var(--ps-text)]">
+                Dist: <strong className="text-[var(--ps-amber)]">{scrubPoint.distKmStr} km</strong>
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-extrabold">
+              <span>
+                <span className="text-[var(--ps-emerald)]">V1: {scrubPoint.speed1 ?? '--'}</span>
+                {showLap2 && (
+                  <>
+                    <span className="text-[var(--ps-muted)]"> vs </span>
+                    <span className="text-[#FF2A2A]">V2: {scrubPoint.speed2 ?? '--'}</span>
+                  </>
+                )}
+                {showLap3 && (
+                  <>
+                    <span className="text-[var(--ps-muted)]"> vs </span>
+                    <span className="text-[#38BDF8]">V3: {scrubPoint.speed3 ?? '--'}</span>
+                  </>
+                )}
+                <span className="text-[var(--ps-muted)]"> km/h</span>
+              </span>
+
+              {showLap2 && scrubPoint.timeDelta2vs1Sec !== null && (
+                <span
+                  className={
+                    scrubPoint.timeDelta2vs1Sec <= 0
+                      ? 'text-[var(--ps-emerald)]'
+                      : 'text-[#FF2A2A]'
+                  }
+                >
+                  Δ Tempo V2: {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
+                </span>
+              )}
+            </div>
+          </header>
+
+          {/* Metade Superior (~44%): Mapa Satélite Interativo Fixo */}
+          <div className="relative h-[44dvh] shrink-0 border-b border-[var(--ps-border)] bg-[#000000]">
+            <VelocityMapboxView
+              trackId={`${sessionTrack?.id || 'session'}_pro_fs`}
+              editableTrace={lap1Samples}
+              ghostTrace={showLap2 ? lap2Samples : undefined}
+              thirdTrace={showLap3 ? lap3Samples : undefined}
+              offsetGhostTrace={showLap2 || showLap3}
+              orderedTraps={sessionTrack ? getOrderedTrackTraps(sessionTrack) : []}
+              postEditIdx={0}
+              vehicleStyle="lap1"
+              currentPos={
+                scrubPoint.s1
+                  ? { lat: scrubPoint.s1.lat, lon: scrubPoint.s1.lon }
+                  : null
+              }
+              navHeadingDeg={scrubPoint.s1?.headingDeg ?? null}
+              ghostCar={
+                showLap2 && scrubPoint.s2
+                  ? {
+                      lat: scrubPoint.s2.lat,
+                      lon: scrubPoint.s2.lon,
+                      headingDeg: scrubPoint.s2.headingDeg,
+                    }
+                  : null
+              }
+              thirdCar={
+                showLap3 && scrubPoint.s3
+                  ? {
+                      lat: scrubPoint.s3.lat,
+                      lon: scrubPoint.s3.lon,
+                      headingDeg: scrubPoint.s3.headingDeg,
+                    }
+                  : null
+              }
+              heatmapMode="speed"
+              showSpeedBadges={true}
+              isExternalFullscreen={true}
+              onFullscreenToggle={() => {
+                setProFullscreen(false);
+                setProReplayPlaying(false);
+              }}
+              topLeftOverlay={
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/90 px-2 py-1 font-mono text-[9px] font-bold backdrop-blur-xs">
+                  <span className="text-[#10B981]">■ Picos Máx</span>
+                  <span className="text-[#FF2A2A]">■ Ápices Curva</span>
+                </div>
+              }
+              containerClassName="relative h-full w-full overflow-hidden bg-[#000000]"
+            />
+          </div>
+
+          {/* Metade Inferior (~56%): Leituras instantâneas + Gráfico + Controles ergonômicos */}
+          <div className="flex min-h-0 flex-1 flex-col bg-[var(--ps-bg)]">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
+              {/* Card de Leitura Instantânea */}
+              <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 font-mono text-[10px] tabular-nums sm:grid-cols-3 sm:text-[11px]">
+                <div>
+                  <span className="text-[var(--ps-muted)] uppercase">
+                    Velocidade @ {scrubPoint.distKmStr} km
+                  </span>
+                  <p className="mt-0.5 font-extrabold">
+                    <span className="text-[var(--ps-emerald)]">V1 {scrubPoint.speed1 ?? '--'}</span>
+                    {showLap2 && (
+                      <>
+                        <span className="text-[var(--ps-muted)]"> vs </span>
+                        <span className="text-[#FF2A2A]">V2 {scrubPoint.speed2 ?? '--'}</span>
+                        <span
+                          className={`ml-1 ${
+                            (scrubPoint.speedDelta2vs1 ?? 0) >= 0
+                              ? 'text-[var(--ps-emerald)]'
+                              : 'text-[#FF2A2A]'
+                          }`}
+                        >
+                          ({formatSignedKmh(scrubPoint.speedDelta2vs1)} km/h)
+                        </span>
+                      </>
+                    )}
+                    {showLap3 && (
+                      <span className="ml-1.5 text-[#38BDF8]">
+                        · V3 {scrubPoint.speed3 ?? '--'} ({formatSignedKmh(scrubPoint.speedDelta3vs1)})
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                <div>
+                  <span className="text-[var(--ps-muted)] uppercase">
+                    Frenagem / Aceleração &amp; Lat G
+                  </span>
+                  <p className="mt-0.5 font-extrabold">
+                    <span className="text-[var(--ps-emerald)]">
+                      {scrubPoint.longG1 >= 0 ? '+' : ''}
+                      {scrubPoint.longG1.toFixed(2)}G
+                    </span>
+                    {showLap2 && (
+                      <span className="text-[var(--ps-amber)]">
+                        {' '}
+                        / V2 {scrubPoint.longG2 >= 0 ? '+' : ''}
+                        {scrubPoint.longG2.toFixed(2)}G
+                      </span>
+                    )}
+                    <span className="text-[var(--ps-muted)]">
+                      {' '}
+                      · Lat {Math.abs(scrubPoint.latG1).toFixed(2)}G
+                      {showLap2 ? `/${Math.abs(scrubPoint.latG2).toFixed(2)}G` : ''}
+                    </span>
+                  </p>
+                </div>
+
+                <div>
+                  <span className="text-[var(--ps-muted)] uppercase">
+                    Ponto de Frenagem (V2 vs V1)
+                  </span>
+                  <p className="mt-0.5 font-extrabold">
+                    {!showLap2 ? (
+                      <span className="text-[var(--ps-muted)]">Selecione V2 para comparar</span>
+                    ) : scrubPoint.brakeOffset2 ? (
+                      scrubPoint.brakeOffset2.offsetM > 0 ? (
+                        <span className="text-[var(--ps-emerald)]">
+                          V2 freou +{scrubPoint.brakeOffset2.offsetM}m mais tarde
+                        </span>
+                      ) : scrubPoint.brakeOffset2.offsetM < 0 ? (
+                        <span className="text-[#FF2A2A]">
+                          V2 freou {Math.abs(scrubPoint.brakeOffset2.offsetM)}m antes
+                        </span>
+                      ) : (
+                        <span className="text-[var(--ps-amber)]">Mesmo ponto de freada (0m)</span>
+                      )
+                    ) : (
+                      <span className="text-[var(--ps-muted)]">Sem freada próxima</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Gráfico de Velocidade & Zonas Acel/Frenagem sincronizado */}
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
+                  <span className="font-bold uppercase">
+                    Velocidade (km/h) &amp; Zonas Acel/Frenagem (Toque/Arraste)
+                  </span>
+                  <span className="flex items-center gap-2 font-bold">
+                    <span className="text-[var(--ps-emerald)]">V1 #{lap1?.runNumber ?? '-'}</span>
+                    {showLap2 && <span className="text-[#FF2A2A]">V2 #{lap2?.runNumber ?? '-'}</span>}
+                    {showLap3 && <span className="text-[#38BDF8]">V3 #{lap3?.runNumber ?? '-'}</span>}
+                  </span>
+                </div>
+                <svg
+                  ref={fsPanelRef}
+                  viewBox={`0 0 ${chartW} ${p1H}`}
+                  className="h-44 w-full touch-none select-none cursor-crosshair sm:h-52"
+                  onPointerDown={(e) => {
+                    isDraggingRef.current = true;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    updateFsScrubFromSvg(fsPanelRef.current, e.clientX);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!isDraggingRef.current && e.pointerType === 'touch') return;
+                    if (isDraggingRef.current || e.buttons === 1) {
+                      updateFsScrubFromSvg(fsPanelRef.current, e.clientX);
+                    }
+                  }}
+                  onPointerUp={(e) => {
+                    isDraggingRef.current = false;
+                    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    }
+                  }}
+                  onPointerCancel={() => {
+                    isDraggingRef.current = false;
+                  }}
+                >
+                  {fsYTicksKmh.map((val) => {
+                    const y = fsYAtKmh(val);
+                    return (
+                      <g key={`fs_p1_y_${val}`}>
+                        <line
+                          x1={padL}
+                          y1={y}
+                          x2={chartW - padR}
+                          y2={y}
+                          stroke="var(--ps-border-strong)"
+                          strokeOpacity="0.65"
+                          strokeDasharray={val === 0 ? undefined : '3 3'}
+                        />
+                        <text
+                          x={padL - 5}
+                          y={y + 3}
+                          textAnchor="end"
+                          fill="var(--ps-muted)"
+                          fontSize="9"
+                          fontFamily="monospace"
+                        >
+                          {val}
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {/* Faixa de Aceleração / Frenagem */}
+                  <rect
+                    x={padL}
+                    y={zoneStripY}
+                    width={plotW}
+                    height={zoneStripH}
+                    rx="2"
+                    fill="var(--ps-card-deep)"
+                  />
+                  {fsZoneSegments.map((seg, idx) => (
+                    <rect
+                      key={`fs_zone_${idx}`}
+                      x={seg.x1}
+                      y={zoneStripY}
+                      width={Math.max(1.5, seg.x2 - seg.x1)}
+                      height={zoneStripH}
+                      fill={seg.kind === 'accel' ? '#10B981' : '#FF2A2A'}
+                      fillOpacity="0.82"
+                    />
+                  ))}
+
+                  {fsSpeedArea1 && (
+                    <polygon fill="rgba(16, 185, 129, 0.14)" points={fsSpeedArea1} />
+                  )}
+                  {fsSpeedLine1 && (
+                    <polyline
+                      fill="none"
+                      stroke="#10B981"
+                      strokeWidth="2.5"
+                      points={fsSpeedLine1}
+                    />
+                  )}
+                  {showLap2 && fsSpeedLine2 && (
+                    <polyline
+                      fill="none"
+                      stroke="#FF2A2A"
+                      strokeWidth="2"
+                      points={fsSpeedLine2}
+                    />
+                  )}
+                  {showLap3 && fsSpeedLine3 && (
+                    <polyline
+                      fill="none"
+                      stroke="#38BDF8"
+                      strokeWidth="1.8"
+                      strokeDasharray="5 3"
+                      points={fsSpeedLine3}
+                    />
+                  )}
+
+                  {fsCriticalMarkers.map((pt, idx) => {
+                    const cx = fsXAtM(pt.distM);
+                    const cy = fsYAtKmh(pt.speedKmh);
+                    const isMin = pt.badge === 'MIN';
+                    const badgeW = 26;
+                    const badgeH = 12;
+                    const bx = Math.max(
+                      padL + 2,
+                      Math.min(chartW - padR - badgeW - 2, cx - badgeW / 2)
+                    );
+                    const by = Math.max(
+                      p1Top + 1,
+                      Math.min(p1Bottom - badgeH - 1, isMin ? cy + 7 : cy - badgeH - 7)
+                    );
+                    const bg = isMin ? '#10B981' : '#F59E0B';
+                    const fg = isMin ? '#FFFFFF' : '#050608';
+                    return (
+                      <g
+                        key={`fs_crit_${pt.badge}_${pt.distM}_${idx}`}
+                        className="pointer-events-none"
+                      >
+                        <line
+                          x1={cx}
+                          y1={cy}
+                          x2={cx}
+                          y2={isMin ? by : by + badgeH}
+                          stroke={bg}
+                          strokeWidth="1"
+                        />
+                        <circle
+                          cx={cx}
+                          cy={cy}
+                          r="2.8"
+                          fill={bg}
+                          stroke="#FFFFFF"
+                          strokeWidth="0.9"
+                        />
+                        <rect x={bx} y={by} width={badgeW} height={badgeH} rx="3" fill={bg} />
+                        <text
+                          x={bx + badgeW / 2}
+                          y={by + 8.8}
+                          textAnchor="middle"
+                          fill={fg}
+                          fontSize="7.5"
+                          fontWeight="bold"
+                          fontFamily="monospace"
+                        >
+                          {pt.badge}
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {fsXTicksM.map((mVal, i) => (
+                    <text
+                      key={`fs_x_${mVal}_${i}`}
+                      x={fsXAtM(mVal)}
+                      y={p1H - 4}
+                      textAnchor={
+                        i === 0 ? 'start' : i === fsXTicksM.length - 1 ? 'end' : 'middle'
+                      }
+                      fill="var(--ps-muted)"
+                      fontSize="8.5"
+                      fontFamily="monospace"
+                    >
+                      {mVal >= 1000 ? `${(mVal / 1000).toFixed(2)}km` : `${mVal}m`}
+                    </text>
+                  ))}
+
+                  <line
+                    x1={fsScrubX}
+                    y1={p1Top}
+                    x2={fsScrubX}
+                    y2={p1Bottom}
+                    stroke="#FF2A2A"
+                    strokeWidth="2"
+                  />
+                  {scrubPoint.speed1 !== null && (
+                    <circle
+                      cx={fsScrubX}
+                      cy={fsYAtKmh(scrubPoint.speed1)}
+                      r="4.2"
+                      fill="#10B981"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.4"
+                    />
+                  )}
+                  {showLap2 && scrubPoint.speed2 !== null && (
+                    <circle
+                      cx={fsScrubX}
+                      cy={fsYAtKmh(scrubPoint.speed2)}
+                      r="3.8"
+                      fill="#FF2A2A"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.2"
+                    />
+                  )}
+                  {showLap3 && scrubPoint.speed3 !== null && (
+                    <circle
+                      cx={fsScrubX}
+                      cy={fsYAtKmh(scrubPoint.speed3)}
+                      r="3.8"
+                      fill="#38BDF8"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.2"
+                    />
+                  )}
+                </svg>
+              </div>
+            </div>
+
+            {/* Controles Ergonômicos de Replay e Distância na Base */}
+            <div className="shrink-0 space-y-2 border-t border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+              <div className="flex items-center gap-2 font-mono text-[11px] tabular-nums">
+                <span className="shrink-0 font-bold text-[var(--ps-muted)]">0m</span>
+                <input
+                  type="range"
+                  aria-label="Posição da distância na volta completa"
+                  min={0}
+                  max={Math.round(maxDistM)}
+                  value={Math.max(0, Math.min(Math.round(maxDistM), scrubDistM))}
+                  onChange={(e) => {
+                    setProReplayPlaying(false);
+                    setScrubDistM(Number(e.target.value));
+                  }}
+                  className="h-2 w-full accent-[var(--ps-accent)]"
+                />
+                <span className="shrink-0 font-bold text-[var(--ps-text)]">
+                  {scrubPoint.distM}m / {Math.round(maxDistM)}m
+                </span>
+              </div>
+
+              <div className="grid grid-cols-5 gap-1.5 font-mono text-xs font-extrabold">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProReplayPlaying(false);
+                    setScrubDistM((prev) => Math.max(0, prev - 50));
+                  }}
+                  className="flex min-h-[42px] items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] active:scale-95"
+                >
+                  -50m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProReplayPlaying(false);
+                    setScrubDistM((prev) => Math.max(0, prev - 10));
+                  }}
+                  className="flex min-h-[42px] items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] active:scale-95"
+                >
+                  -10m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!proReplayPlaying && scrubDistM >= Math.round(maxDistM) - 5) {
+                      setScrubDistM(0);
+                    }
+                    setProReplayPlaying((v) => !v);
+                  }}
+                  className="pitstop-btn-red flex min-h-[42px] items-center justify-center gap-1 rounded-xl px-2 font-black active:scale-95"
+                >
+                  {proReplayPlaying ? (
+                    <>
+                      <Pause className="h-4 w-4 shrink-0" />
+                      <span>Pausar</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-4 w-4 shrink-0 fill-current" />
+                      <span>Replay</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProReplayPlaying(false);
+                    setScrubDistM((prev) => Math.min(Math.round(maxDistM), prev + 10));
+                  }}
+                  className="flex min-h-[42px] items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] active:scale-95"
+                >
+                  +10m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProReplayPlaying(false);
+                    setScrubDistM((prev) => Math.min(Math.round(maxDistM), prev + 50));
+                  }}
+                  className="flex min-h-[42px] items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] active:scale-95"
+                >
+                  +50m
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

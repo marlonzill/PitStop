@@ -379,7 +379,11 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const cockpitLayout = useVelocityCockpitLayout();
   const activeReadyLayoutId =
     cockpitLayout.config.layoutId === 'custom' ? 'classic' : cockpitLayout.config.layoutId;
+  const activeReadyPreset =
+    VELOCITY_COCKPIT_READY_PRESETS.find((item) => item.id === activeReadyLayoutId) ??
+    VELOCITY_COCKPIT_READY_PRESETS[0];
   const [showGpsSettingsModal, setShowGpsSettingsModal] = useState(false);
+  const [showLayoutSelectorModal, setShowLayoutSelectorModal] = useState(false);
   const [goproDrawerOpen, setGoproDrawerOpen] = useState(false);
   const [editingGoProId, setEditingGoProId] = useState<string | null>(null);
   const [editingGoProName, setEditingGoProName] = useState('');
@@ -2587,7 +2591,10 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           <button
             key={item.id}
             type="button"
-            onClick={() => cockpitLayout.setLayoutId(item.id)}
+            onClick={() => {
+              cockpitLayout.setLayoutId(item.id);
+              setShowLayoutSelectorModal(false);
+            }}
             aria-pressed={selected}
             className={`group flex flex-col justify-between gap-2 rounded-xl border p-2.5 text-left transition-all ${
               selected
@@ -2600,7 +2607,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               <span
                 className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors ${
                   selected
-                    ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)] text-white'
+                    ? 'border-[var(--ps-accent)] bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
                     : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-transparent'
                 }`}
               >
@@ -2621,6 +2628,36 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         );
       })}
     </div>
+  );
+
+  const compactLayoutSelectorCard = (
+    <button
+      type="button"
+      onClick={() => setShowLayoutSelectorModal(true)}
+      className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3.5 py-3 text-left transition-colors hover:border-[var(--ps-accent)] active:scale-[0.99]"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="shrink-0">
+          <LayoutMiniSchematic
+            id={activeReadyPreset.id}
+            accent={activeReadyPreset.accentColor}
+          />
+        </div>
+        <div className="min-w-0">
+          <p className="font-['Barlow_Condensed'] text-base font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+            Layout do Cockpit Ao Vivo
+          </p>
+          <p className="truncate font-mono text-[11px] font-bold text-[var(--ps-muted)]">
+            {activeReadyPreset.code} · {activeReadyPreset.shortName.toUpperCase()}
+          </p>
+        </div>
+      </div>
+
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[var(--ps-accent)]/40 bg-[var(--ps-accent)]/15 px-2.5 py-1.5 font-mono text-[11px] font-extrabold text-[var(--ps-accent)] uppercase">
+        <span>Alterar</span>
+        <ChevronRight className="h-3.5 w-3.5" />
+      </span>
+    </button>
   );
 
   return (
@@ -4577,16 +4614,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             {gpsEngineSettingsBlock}
           </div>
 
-          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)] space-y-3">
-            <div>
-              <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide uppercase">
-                Layout do Cockpit Ao Vivo
-              </h3>
-              <p className="text-xs text-[var(--ps-muted)]">
-                Selecione com 1 toque o modelo estrutural do painel ao vivo (13 modelos prontos).
-              </p>
-            </div>
-            {readyLayoutPickerBlock}
+          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 text-[var(--ps-text)]">
+            {compactLayoutSelectorCard}
           </div>
         </section>
       )}
@@ -4687,17 +4716,42 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </div>
             <div className="flex-1 space-y-4 overflow-y-auto p-3 sm:p-4">
               {gpsEngineSettingsBlock}
-              <div className="space-y-2.5 border-t border-[var(--ps-border)] pt-3">
-                <div>
-                  <h4 className="font-['Barlow_Condensed'] text-base font-bold tracking-wide uppercase">
-                    Layout do Cockpit Ao Vivo
-                  </h4>
-                  <p className="text-[11px] text-[var(--ps-muted)]">
-                    Toque para aplicar imediatamente na tela ao vivo.
-                  </p>
-                </div>
-                {readyLayoutPickerBlock}
+              <div className="border-t border-[var(--ps-border)] pt-3">
+                {compactLayoutSelectorCard}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLayoutSelectorModal && (
+        <div
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/80 p-2 backdrop-blur-sm sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Selecionar Layout do Cockpit Ao Vivo"
+        >
+          <div className="flex max-h-[88dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--ps-border)] px-4 py-3">
+              <div className="min-w-0">
+                <h3 className="font-['Barlow_Condensed'] text-lg font-black tracking-wide uppercase sm:text-xl">
+                  Layout do Cockpit Ao Vivo
+                </h3>
+                <p className="truncate text-[11px] text-[var(--ps-muted)]">
+                  Toque em qualquer modelo para aplicar imediatamente ({VELOCITY_COCKPIT_READY_PRESETS.length} layouts)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowLayoutSelectorModal(false)}
+                aria-label="Fechar seletor de layouts"
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4">
+              {readyLayoutPickerBlock}
             </div>
           </div>
         </div>

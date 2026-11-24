@@ -73,6 +73,8 @@ interface VelocityMapboxViewProps {
   onCenterChange?: (lat: number, lon: number) => void;
   topLeftOverlay?: React.ReactNode;
   fullscreenOverlay?: React.ReactNode;
+  onFullscreenToggle?: () => void;
+  isExternalFullscreen?: boolean;
 }
 
 function trapColorByKind(kind: TrapKind): string {
@@ -342,6 +344,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   onCenterChange,
   topLeftOverlay,
   fullscreenOverlay,
+  onFullscreenToggle,
+  isExternalFullscreen,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -1126,11 +1130,23 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
 
         <button
           type="button"
-          onClick={() => setIsFullscreen((v) => !v)}
+          onClick={() => {
+            if (onFullscreenToggle) {
+              onFullscreenToggle();
+            } else {
+              setIsFullscreen((v) => !v);
+            }
+          }}
           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-          aria-label={isFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
+          aria-label={
+            (isExternalFullscreen ?? isFullscreen) ? 'Sair da tela cheia' : 'Mapa em tela cheia'
+          }
         >
-          {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          {(isExternalFullscreen ?? isFullscreen) ? (
+            <Minimize2 className="h-4 w-4" />
+          ) : (
+            <Maximize2 className="h-4 w-4" />
+          )}
         </button>
       </div>
 

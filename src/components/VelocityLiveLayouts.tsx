@@ -398,7 +398,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
     if (stageState === 'running') {
       return {
         label: 'Encerrar',
-        cls: 'pitstop-btn-red text-white',
+        cls: 'pitstop-btn-red',
         icon: <Flag className="h-4 w-4 shrink-0" />,
       };
     }
@@ -412,7 +412,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
     if (stageState === 'finished') {
       return {
         label: 'Armar Nova',
-        cls: 'pitstop-btn-red text-white',
+        cls: 'pitstop-btn-red',
         icon: <RotateCcw className="h-4 w-4 shrink-0" />,
       };
     }

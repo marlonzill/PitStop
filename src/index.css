@@ -29,26 +29,234 @@
   --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
 }
 
-[data-theme="gt"] {
-  --ps-bg: #0F172A;
-  --ps-surface: #172136;
-  --ps-card: #1E293B;
-  --ps-card-deep: #090F1D;
-  --ps-header: rgba(15, 23, 42, 0.96);
-  --ps-border: rgba(132, 204, 22, 0.22);
-  --ps-border-strong: rgba(132, 204, 22, 0.44);
+[data-theme="gt"],
+[data-theme="neo"] {
+  font-size: 100%;
+  --ps-bg: #090A0D;
+  --ps-surface: #0E1015;
+  --ps-card: #12141A;
+  --ps-card-deep: #050608;
+  --ps-header: rgba(9, 10, 13, 0.96);
+  --ps-border: rgba(132, 204, 22, 0.24);
+  --ps-border-strong: rgba(132, 204, 22, 0.48);
   --ps-text: #F8FAFC;
   --ps-muted: #94A3B8;
   --ps-accent: #84CC16;
   --ps-accent-2: #A3E635;
   --ps-accent-soft: rgba(132, 204, 22, 0.16);
-  --ps-accent-text: #090D16;
+  --ps-accent-text: #090A0D;
   --ps-amber: #FACC15;
   --ps-emerald: #84CC16;
   --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
   --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
   --ps-font-mono: "Outfit", "JetBrains Mono", sans-serif;
   --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="neo_xl"] {
+  font-size: 120%;
+  --ps-bg: #090A0D;
+  --ps-surface: #0E1015;
+  --ps-card: #12141A;
+  --ps-card-deep: #050608;
+  --ps-header: rgba(9, 10, 13, 0.96);
+  --ps-border: rgba(132, 204, 22, 0.32);
+  --ps-border-strong: rgba(132, 204, 22, 0.58);
+  --ps-text: #F8FAFC;
+  --ps-muted: #CBD5E1;
+  --ps-accent: #84CC16;
+  --ps-accent-2: #A3E635;
+  --ps-accent-soft: rgba(132, 204, 22, 0.18);
+  --ps-accent-text: #090A0D;
+  --ps-amber: #FACC15;
+  --ps-emerald: #84CC16;
+  --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
+  --ps-font-mono: "Outfit", "JetBrains Mono", sans-serif;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="daylight_pro"] {
+  font-size: 100%;
+  --ps-bg: #F4F6F8;
+  --ps-surface: #FFFFFF;
+  --ps-card: #FFFFFF;
+  --ps-card-deep: #EDF1F5;
+  --ps-header: rgba(255, 255, 255, 0.97);
+  --ps-border: rgba(15, 23, 42, 0.14);
+  --ps-border-strong: rgba(15, 23, 42, 0.28);
+  --ps-text: #0F172A;
+  --ps-muted: #475569;
+  --ps-accent: #E10600;
+  --ps-accent-2: #B91C1C;
+  --ps-accent-soft: rgba(225, 6, 0, 0.1);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #B45309;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
+}
+
+[data-theme="daylight_xl"] {
+  font-size: 120%;
+  --ps-bg: #F4F6F8;
+  --ps-surface: #FFFFFF;
+  --ps-card: #FFFFFF;
+  --ps-card-deep: #EDF1F5;
+  --ps-header: rgba(255, 255, 255, 0.97);
+  --ps-border: rgba(15, 23, 42, 0.18);
+  --ps-border-strong: rgba(15, 23, 42, 0.34);
+  --ps-text: #0F172A;
+  --ps-muted: #334155;
+  --ps-accent: #E10600;
+  --ps-accent-2: #B91C1C;
+  --ps-accent-soft: rgba(225, 6, 0, 0.12);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #B45309;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
+}
+
+[data-theme="rally_paper"] {
+  font-size: 112%;
+  --ps-bg: #F7F4EC;
+  --ps-surface: #FFFFFF;
+  --ps-card: #FFFFFF;
+  --ps-card-deep: #EFEAE0;
+  --ps-header: rgba(255, 255, 255, 0.97);
+  --ps-border: rgba(24, 24, 27, 0.16);
+  --ps-border-strong: rgba(24, 24, 27, 0.3);
+  --ps-text: #18181B;
+  --ps-muted: #52525B;
+  --ps-accent: #1D4ED8;
+  --ps-accent-2: #2563EB;
+  --ps-accent-soft: rgba(29, 78, 216, 0.12);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #B45309;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
+}
+
+[data-theme="solar_yellow_xl"] {
+  font-size: 122%;
+  --ps-bg: #FEF08A;
+  --ps-surface: #FFFFFF;
+  --ps-card: #FFFFFF;
+  --ps-card-deep: #FEF9C3;
+  --ps-header: rgba(254, 240, 138, 0.97);
+  --ps-border: rgba(9, 9, 11, 0.55);
+  --ps-border-strong: #09090B;
+  --ps-text: #09090B;
+  --ps-muted: #27272A;
+  --ps-accent: #09090B;
+  --ps-accent-2: #27272A;
+  --ps-accent-soft: rgba(9, 9, 11, 0.14);
+  --ps-accent-text: #FEF08A;
+  --ps-amber: #92400E;
+  --ps-emerald: #065F46;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
+}
+
+[data-theme="toxic_volt_xl"] {
+  font-size: 125%;
+  --ps-bg: #050705;
+  --ps-surface: #0B0F0B;
+  --ps-card: #111711;
+  --ps-card-deep: #030403;
+  --ps-header: rgba(5, 7, 5, 0.98);
+  --ps-border: rgba(184, 255, 0, 0.34);
+  --ps-border-strong: rgba(184, 255, 0, 0.66);
+  --ps-text: #F7FEE7;
+  --ps-muted: #BEF264;
+  --ps-accent: #B8FF00;
+  --ps-accent-2: #D4FF4D;
+  --ps-accent-soft: rgba(184, 255, 0, 0.18);
+  --ps-accent-text: #050705;
+  --ps-amber: #FACC15;
+  --ps-emerald: #B8FF00;
+  --ps-font-sans: "Chakra Petch", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Orbitron", "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="hyper_orange_xl"] {
+  font-size: 122%;
+  --ps-bg: #0C0A09;
+  --ps-surface: #141210;
+  --ps-card: #1C1917;
+  --ps-card-deep: #070605;
+  --ps-header: rgba(12, 10, 9, 0.98);
+  --ps-border: rgba(255, 85, 0, 0.34);
+  --ps-border-strong: rgba(255, 85, 0, 0.64);
+  --ps-text: #FFF7ED;
+  --ps-muted: #FDBA74;
+  --ps-accent: #FF5500;
+  --ps-accent-2: #FF7A33;
+  --ps-accent-soft: rgba(255, 85, 0, 0.2);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #FBBF24;
+  --ps-emerald: #22C55E;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="electric_magenta_xl"] {
+  font-size: 120%;
+  --ps-bg: #09050F;
+  --ps-surface: #10091A;
+  --ps-card: #160D24;
+  --ps-card-deep: #050309;
+  --ps-header: rgba(9, 5, 15, 0.98);
+  --ps-border: rgba(255, 0, 127, 0.34);
+  --ps-border-strong: rgba(255, 0, 127, 0.64);
+  --ps-text: #FDF2F8;
+  --ps-muted: #F9A8D4;
+  --ps-accent: #FF007F;
+  --ps-accent-2: #FF4DA6;
+  --ps-accent-soft: rgba(255, 0, 127, 0.2);
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #38BDF8;
+  --ps-emerald: #34D399;
+  --ps-font-sans: "Outfit", "Plus Jakarta Sans", system-ui, sans-serif;
+  --ps-font-display: "Outfit", "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: invert(1) hue-rotate(180deg) contrast(1.25);
+}
+
+[data-theme="gulf_racing_xl"] {
+  font-size: 118%;
+  --ps-bg: #E0F2FE;
+  --ps-surface: #FFFFFF;
+  --ps-card: #FFFFFF;
+  --ps-card-deep: #BAE6FD;
+  --ps-header: rgba(224, 242, 254, 0.97);
+  --ps-border: rgba(12, 74, 110, 0.22);
+  --ps-border-strong: rgba(249, 115, 22, 0.58);
+  --ps-text: #0C4A6E;
+  --ps-muted: #0369A1;
+  --ps-accent: #F97316;
+  --ps-accent-2: #EA580C;
+  --ps-accent-text: #FFFFFF;
+  --ps-amber: #C2410C;
+  --ps-emerald: #047857;
+  --ps-font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --ps-font-display: "Barlow Condensed", sans-serif;
+  --ps-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ps-drawing-filter: none;
 }
 
 [data-theme="fueltech"] {
@@ -423,6 +631,25 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Regra de legibilidade numérica para temas XL (extra-negrito e destaque nos mostradores) */
+[data-theme$="_xl"] .tabular-nums,
+[data-theme$="_xl"] .font-mono,
+[data-theme$="_xl"] .font-display {
+  font-weight: 800;
+}
+
+[data-theme$="_xl"] .text-4xl.tabular-nums,
+[data-theme$="_xl"] .text-5xl.tabular-nums,
+[data-theme$="_xl"] .text-6xl.tabular-nums,
+[data-theme$="_xl"] .text-7xl.tabular-nums,
+[data-theme$="_xl"] .tabular-nums .text-4xl,
+[data-theme$="_xl"] .tabular-nums .text-5xl,
+[data-theme$="_xl"] .tabular-nums .text-6xl,
+[data-theme$="_xl"] .tabular-nums .text-7xl {
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
 .pt-safe {
   padding-top: env(safe-area-inset-top, 0px);
 }
@@ -465,6 +692,11 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ps-muted);
+}
+
+[data-theme$="_xl"] .ps-label {
+  font-size: 12px;
+  font-weight: 700;
 }
 
 /* Theme-Aware Motorsport Canvas + Subtle Carbon Texture */
@@ -693,12 +925,17 @@
     pitstopSloganPulse 3.2s ease-in-out infinite;
 }
 
-[data-theme="solar"] .pitstop-slogan-text {
+[data-theme="solar"] .pitstop-slogan-text,
+[data-theme="daylight_pro"] .pitstop-slogan-text,
+[data-theme="daylight_xl"] .pitstop-slogan-text,
+[data-theme="rally_paper"] .pitstop-slogan-text,
+[data-theme="solar_yellow_xl"] .pitstop-slogan-text,
+[data-theme="gulf_racing_xl"] .pitstop-slogan-text {
   background: linear-gradient(
     110deg,
     #334155 0%,
     #0f172a 34%,
-    #e10600 50%,
+    var(--ps-accent) 50%,
     #0f172a 66%,
     #334155 100%
   );

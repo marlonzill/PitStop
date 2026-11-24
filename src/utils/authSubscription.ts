@@ -33,7 +33,7 @@ const AUTH_STORAGE_KEY = 'pitstop_auth_session_v1';
 const AUTH_EVENT = 'pitstop:auth-session-updated';
 const UPGRADE_MODAL_EVENT = 'pitstop:open-pro-upgrade-modal';
 
-export const FREE_THEME_IDS = new Set<AppThemeId>(['pitstop', 'solar']);
+export const FREE_THEME_IDS = new Set<AppThemeId>(['neo', 'pitstop', 'solar', 'daylight_pro']);
 
 export function getEffectiveUserPlan(user: AuthUser | null | undefined): UserPlan {
   if (!user) return 'free';
