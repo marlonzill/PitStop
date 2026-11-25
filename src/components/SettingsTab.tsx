@@ -32,6 +32,7 @@ import {
   Keyboard,
   Link2,
   Lock,
+  MapPin,
   Navigation,
   Radio,
   RefreshCw,
@@ -122,7 +123,12 @@ import {
   persistVelocityRuns,
   persistVelocityTracks,
 } from '../utils/velocityStorage';
-import type { VelocityTrack } from '../utils/velocityEngine';
+import {
+  DEFAULT_TRACK_PALETTE,
+  formatImportedTrackNamesList,
+  type VelocitySample,
+  type VelocityTrack,
+} from '../utils/velocityEngine';
 import {
   ENABLE_SUBSCRIPTION_GATE,
   isThemeUnlockedForPlan,
@@ -133,6 +139,13 @@ import { AccountSubscriptionPanel } from './AccountSubscriptionPanel';
 import { CompetitorCollector } from './CompetitorCollector';
 import { GoProBlePanel } from './GoProBlePanel';
 import { SettingsWireframeArt } from './SettingsWireframeArt';
+import { VelocityMapboxView, type MapPolylineLayer } from './VelocityMapboxView';
+import {
+  type DeviceLicenseStatus,
+  getCachedLicenseStatusSync,
+  useAdminLicenseSession,
+  verifyDeviceLicense,
+} from '../services/deviceLicenseService';
 
 interface SettingsTabProps {
   initialMenu?: SettingsSubMenu;
@@ -141,6 +154,9 @@ interface SettingsTabProps {
   onSelectRallyMode?: (mode: RallyMode) => void;
   onOpenNavigation?: () => void;
   onOpenApuracao?: () => void;
+  deviceLicense?: DeviceLicenseStatus;
+  checkingDeviceLicense?: boolean;
+  onRecheckDeviceLicense?: () => void;
 }
 
 interface BatteryManagerLike extends EventTarget {
@@ -270,10 +286,13 @@ function testAlertSound(style: AlertStyle) {
 export const SettingsTab: React.FC<SettingsTabProps> = ({
   initialMenu = 'hub',
   onMenuChange,
-  rallyMode = 'regularidade',
+  rallyMode = 'velocidade',
   onSelectRallyMode,
   onOpenNavigation,
   onOpenApuracao,
+  deviceLicense: externalDeviceLicense,
+  checkingDeviceLicense: externalCheckingDeviceLicense,
+  onRecheckDeviceLicense,
 }) => {
   const [settings, updateSettings] = useNavSettings();
   const [velEngine, updateVelEngine] = useVelocityEngineConfig();
@@ -281,7 +300,53 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const cockpitLayout = useVelocityCockpitLayout();
   const [showVelLayoutPicker, setShowVelLayoutPicker] = useState(false);
   const { user, isPro, isAdmin } = useAuthSession();
+  const adminLicenseSession = useAdminLicenseSession();
+  const hasAdminAccess = Boolean(adminLicenseSession) || (ENABLE_SUBSCRIPTION_GATE && isAdmin);
   const [activeMenu, setActiveMenu] = useState<SettingsSubMenu>(initialMenu);
+  const [localDeviceLicense, setLocalDeviceLicense] = useState<DeviceLicenseStatus>(() =>
+    getCachedLicenseStatusSync()
+  );
+  const [localCheckingLicense, setLocalCheckingLicense] = useState(false);
+  const [copiedDeviceId, setCopiedDeviceId] = useState(false);
+
+  const effectiveDeviceLicense = externalDeviceLicense ?? localDeviceLicense;
+  const effectiveCheckingLicense = externalCheckingDeviceLicense ?? localCheckingLicense;
+
+  const handleCopyDeviceId = async () => {
+    const id = effectiveDeviceLicense.identity.deviceId;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(id);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = id;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopiedDeviceId(true);
+      window.setTimeout(() => setCopiedDeviceId(false), 2000);
+    } catch {
+      // Ignore clipboard failure
+    }
+  };
+
+  const handleRecheckDeviceLicense = async () => {
+    if (onRecheckDeviceLicense) {
+      onRecheckDeviceLicense();
+      return;
+    }
+    setLocalCheckingLicense(true);
+    try {
+      const next = await verifyDeviceLicense();
+      setLocalDeviceLicense(next);
+    } finally {
+      setLocalCheckingLicense(false);
+    }
+  };
 
   useEffect(() => {
     setActiveMenu(initialMenu);
@@ -308,6 +373,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   } | null>(null);
   const [showStructureReport, setShowStructureReport] = useState(false);
   const [copiedReport, setCopiedReport] = useState(false);
+  const [previewMapRoadbookId, setPreviewMapRoadbookId] = useState<string | null>(null);
 
   // Backup & Offline storage summary state
   const [velocityStats, setVelocityStats] = useState<{ tracksCount: number; runsCount: number }>({
@@ -365,10 +431,20 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       const stored = await saveConvertedRoadbook(parsed);
       await refreshSavedRoadbooks();
       window.dispatchEvent(new CustomEvent('pitstop:roadbook-activated', { detail: stored.id }));
-      setRbSuccess(
-        `"${stored.eventName}" importada (${stored.tulipas.length} refs · ${stored.totalKm.toFixed(2)} km) e definida como ativa.`
-      );
-      if ((stored.raceParameters?.notesCount ?? 0) === 0 || stored.totalKm < 0.5) {
+      if (stored.geoTracks && stored.geoTracks.length >= 2) {
+        const names = formatImportedTrackNamesList(stored.geoTracks.map((t) => t.name));
+        setRbSuccess(
+          `${stored.geoTracks.length} especiais importadas: ${names} (${stored.tulipas.length} refs · ${stored.totalKm.toFixed(2)} km).`
+        );
+      } else {
+        setRbSuccess(
+          `"${stored.eventName}" importada (${stored.tulipas.length} refs · ${stored.totalKm.toFixed(2)} km) e definida como ativa.`
+        );
+      }
+      if ((stored.geoTracks && stored.geoTracks.length > 0) || (stored.geoWaypoints && stored.geoWaypoints.length > 0)) {
+        setPreviewMapRoadbookId(stored.id ?? stored.fileName);
+      }
+      if (!stored.geoTracks?.length && ((stored.raceParameters?.notesCount ?? 0) === 0 || stored.totalKm < 0.5)) {
         setShowStructureReport(true);
       }
     } catch (err) {
@@ -1145,9 +1221,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     APP_THEME_OPTIONS.find((t) => t.id === settings.appTheme) ?? APP_THEME_OPTIONS[0];
 
   const menuTitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
-    modality: 'Modalidade do Rally',
+    modality: 'Modalidade',
     velocity: 'Velocidade & GPS',
-    account: 'Conta & Assinatura',
+    account: 'Conta & Licença',
     theme: 'Temas Visuais',
     collector: 'Coletor GPS',
     roadbooks: 'Planilhas & Livros de Bordo',
@@ -1219,36 +1295,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             {
               id: 'modality' as const,
               accentColor: '#FF2A2A',
-              title: 'MODALIDADE DO RALLY',
+              title: 'MODALIDADE',
               subtitle:
                 rallyMode === 'velocidade' ? 'Rally Velocidade' : 'Rally Regularidade',
-            },
-            {
-              id: 'velocity' as const,
-              accentColor: '#E10600',
-              title: 'VELOCIDADE & GPS',
-              subtitle: `${activeVelPreset.shortName} · GPS & IMU`,
-            },
-            {
-              id: 'account' as const,
-              accentColor: '#38BDF8',
-              title: !ENABLE_SUBSCRIPTION_GATE ? 'CONTA & ASSINATURA' : 'CONTA & PRO',
-              subtitle: !ENABLE_SUBSCRIPTION_GATE
-                ? 'Recursos PRO liberados'
-                : isAdmin
-                  ? 'Admin / PRO'
-                  : isPro
-                    ? 'PRO Ativo'
-                    : user
-                      ? 'Plano FREE'
-                      : 'Entrar / Plano',
-              badge: !ENABLE_SUBSCRIPTION_GATE
-                ? 'DESATIVADO / MODO DEV'
-                : isAdmin
-                  ? 'ADMIN'
-                  : isPro
-                    ? 'PRO'
-                    : 'FREE',
             },
             {
               id: 'theme' as const,
@@ -1263,6 +1312,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               ],
             },
             {
+              id: 'velocity' as const,
+              accentColor: '#E10600',
+              title: 'VELOCIDADE & GPS',
+              subtitle: 'Cockpit · GPS & IMU',
+            },
+            {
               id: 'roadbooks' as const,
               accentColor: '#10B981',
               title: 'PLANILHAS',
@@ -1270,6 +1325,44 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 savedRoadbooks.length > 0
                   ? `${savedRoadbooks.length} Livros de Bordo`
                   : 'Livros de Bordo',
+            },
+            {
+              id: 'clock' as const,
+              accentColor: '#FBBF24',
+              title: 'HORA & GPS',
+              subtitle: 'Sinc. Oficial',
+            },
+            {
+              id: 'calibration' as const,
+              accentColor: '#E10600',
+              title: 'CALIBRAÇÃO',
+              subtitle: 'Odômetro / Sensores',
+            },
+            {
+              id: 'pilot' as const,
+              accentColor: '#A3E635',
+              title: 'TELA PILOTO',
+              subtitle: 'HUD & Layout',
+            },
+            {
+              id: 'alerts' as const,
+              accentColor: '#F59E0B',
+              title: 'ALERTAS',
+              subtitle: 'Bips & Limites',
+            },
+            {
+              id: 'pairing' as const,
+              accentColor: '#0EA5E9',
+              title: 'PAREAMENTO',
+              subtitle: settings.pairing.enabled
+                ? `Sala ${settings.pairing.roomCode}`
+                : 'Sala PS-XXXX',
+            },
+            {
+              id: 'gopro' as const,
+              accentColor: '#FF2A2A',
+              title: 'GOPRO BLE',
+              subtitle: 'Câmeras',
             },
             {
               id: 'collector' as const,
@@ -1281,42 +1374,17 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   : 'Envio Admin',
             },
             {
-              id: 'clock' as const,
-              accentColor: '#FBBF24',
-              title: 'HORA & GPS',
-              subtitle: 'Sinc. Oficial',
-            },
-            {
-              id: 'pairing' as const,
-              accentColor: '#0EA5E9',
-              title: 'PAREAMENTO',
-              subtitle: settings.pairing.enabled
-                ? `Sala ${settings.pairing.roomCode}`
-                : 'Piloto / Nav',
-            },
-            {
-              id: 'pilot' as const,
-              accentColor: '#A3E635',
-              title: 'TELA PILOTO',
-              subtitle: 'HUD & Layout',
-            },
-            {
-              id: 'calibration' as const,
-              accentColor: '#E10600',
-              title: 'CALIBRAÇÃO',
-              subtitle: 'Odômetro / Sensores',
-            },
-            {
-              id: 'alerts' as const,
-              accentColor: '#F59E0B',
-              title: 'ALERTAS',
-              subtitle: 'Bips & Limites',
-            },
-            {
-              id: 'gopro' as const,
-              accentColor: '#FF2A2A',
-              title: 'GOPRO BLE',
-              subtitle: 'Câmeras',
+              id: 'account' as const,
+              accentColor: '#38BDF8',
+              title: 'CONTA & LICENÇA',
+              subtitle: hasAdminAccess
+                ? 'Admin · Dispositivos'
+                : 'Login & Acesso',
+              badge: hasAdminAccess
+                ? 'ADMIN'
+                : effectiveDeviceLicense.status === 'allowed'
+                  ? 'ATIVO'
+                  : 'BLOQ.',
             },
             {
               id: 'backup' as const,
@@ -1335,27 +1403,25 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               key={item.id}
               type="button"
               onClick={() => navigateMenu(item.id)}
-              className="group relative flex h-[76px] items-center justify-end overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 py-2 text-right transition-all hover:border-[var(--ps-accent)] active:scale-[0.98]"
+              className="group relative flex h-[76px] items-center justify-end overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 py-2 text-right transition-all hover:border-[var(--ps-accent)] active:scale-[0.98] sm:px-3"
             >
               <SettingsWireframeArt menuId={item.id} color={item.accentColor} />
 
-              <div className="relative z-10 flex min-w-0 max-w-[82%] flex-col items-end justify-center text-right">
+              <div className="relative z-10 flex min-w-0 w-full flex-col items-end justify-center pl-6 text-right sm:pl-10">
                 {'badge' in item && item.badge && (
                   <span
                     className={`mb-0.5 rounded px-1.5 py-0.5 font-mono text-[8px] font-black leading-none uppercase ${
                       item.badge === 'ADMIN'
                         ? 'bg-cyan-500/20 text-[var(--ps-accent)]'
-                        : item.badge === 'PRO'
+                        : item.badge === 'ATIVO' || item.badge === 'PRO'
                           ? 'bg-emerald-500/20 text-[var(--ps-emerald)]'
-                          : item.badge.includes('DEV')
-                            ? 'border border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-amber)]'
-                            : 'bg-amber-500/20 text-[var(--ps-amber)]'
+                          : 'bg-amber-500/20 text-[var(--ps-amber)]'
                     }`}
                   >
                     {item.badge}
                   </span>
                 )}
-                <span className="max-w-full truncate text-[11px] font-black tracking-wider text-[var(--ps-text)] uppercase leading-tight sm:text-xs">
+                <span className="whitespace-nowrap text-[11px] font-black tracking-tight text-[var(--ps-text)] uppercase leading-tight sm:text-xs sm:tracking-wide">
                   {item.title}
                 </span>
 
@@ -1387,6 +1453,42 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               />
             </button>
           ))}
+        </div>
+      )}
+
+      {activeMenu === 'hub' && (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[11px] text-[var(--ps-muted)]">
+          <div className="flex min-w-0 items-center gap-2">
+            <Smartphone className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
+            <span className="truncate">
+              ID do Aparelho:{' '}
+              <strong className="font-mono font-extrabold tracking-wider text-[var(--ps-text)] tabular-nums select-all">
+                {effectiveDeviceLicense.identity.deviceId}
+              </strong>
+            </span>
+            <span className="hidden font-mono text-[10px] opacity-75 sm:inline">
+              · {effectiveDeviceLicense.identity.appVersion}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void handleCopyDeviceId();
+            }}
+            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2 font-mono text-[10px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+          >
+            {copiedDeviceId ? (
+              <>
+                <Check className="h-3 w-3 text-[var(--ps-emerald)]" />
+                <span className="text-[var(--ps-emerald)]">Copiado</span>
+              </>
+            ) : (
+              <>
+                <Copy className="h-3 w-3" />
+                <span>Copiar</span>
+              </>
+            )}
+          </button>
         </div>
       )}
 
@@ -1862,7 +1964,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       )}
 
       {/* SUBMENU 00: CONTA & ASSINATURA + ADMIN */}
-      {activeMenu === 'account' && <AccountSubscriptionPanel />}
+      {activeMenu === 'account' && (
+        <AccountSubscriptionPanel
+          deviceLicense={effectiveDeviceLicense}
+          onRecheckDeviceLicense={() => {
+            void handleRecheckDeviceLicense();
+          }}
+        />
+      )}
 
       {/* SUBMENU 0: TEMAS & VISUAL DO PAINEL */}
       {activeMenu === 'theme' && (
@@ -2072,15 +2181,15 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <Upload className="h-7 w-7 text-[var(--ps-accent)]" />
               <span className="mt-2 text-sm font-bold text-[var(--ps-text)]">
                 {importFormat === 'nbp'
-                  ? 'Selecionar Planilha Digital .NBP / .NBP.ZIP (T15)'
-                  : 'Selecionar Planilha (.NBP, .ZIP, .TXT, .CSV, .XML)'}
+                  ? 'Selecionar Planilha Digital .NBP / .NBP.ZIP (T15) ou .KML / .KMZ'
+                  : 'Selecionar Planilha (.NBP, .ZIP, .KML, .KMZ, .GPX, .TXT, .CSV, .XML)'}
               </span>
               <span className="mt-1 text-xs text-[var(--ps-muted)]">
-                Converte tulipas (desde 0,00), distâncias, médias, tempos ideais e observações.
+                Converte tulipas (desde 0,00), trilhas KML/KMZ/GPX por pastas, distâncias, médias, tempos e observações.
               </span>
               <input
                 type="file"
-                accept=".nbp,.zip,.txt,.csv,.xml,.gpx,.json,.db,.sqlite,.sqlite3,application/zip"
+                accept=".nbp,.zip,.kml,.kmz,.gpx,.geojson,.txt,.csv,.xml,.json,.db,.sqlite,.sqlite3,application/zip,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -2128,7 +2237,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <span>Inspecionar .NBP</span>
                   <input
                     type="file"
-                    accept=".nbp,.zip,.txt,.csv,.xml,.gpx,.json,.db,.sqlite,.sqlite3,application/zip"
+                    accept=".nbp,.zip,.kml,.kmz,.gpx,.geojson,.txt,.csv,.xml,.json,.db,.sqlite,.sqlite3,application/zip"
                     className="hidden"
                     onChange={(e) => {
                       const f = e.target.files?.[0];
@@ -2199,57 +2308,158 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             ) : (
               <div className="divide-y divide-[var(--ps-border)]">
                 {savedRoadbooks.map((item) => {
+                  const itemKey = item.id ?? item.fileName;
                   const isActive = item.id === activeRoadbookId;
+                  const hasGeoCoords =
+                    (item.geoTracks && item.geoTracks.length > 0) ||
+                    (item.geoWaypoints && item.geoWaypoints.length > 0) ||
+                    item.tulipas.some((t) => t.lat !== 0 || t.lon !== 0);
+                  const isMapOpen = previewMapRoadbookId === itemKey;
+
+                  const mapLayers: MapPolylineLayer[] =
+                    isMapOpen && item.geoTracks && item.geoTracks.length > 0
+                      ? item.geoTracks.map((gt, gIdx) => ({
+                          id: gt.id,
+                          name: gt.name,
+                          description: gt.description,
+                          color: gt.color || DEFAULT_TRACK_PALETTE[gIdx % DEFAULT_TRACK_PALETTE.length],
+                          trace: gt.coords.map((c, cIdx) => ({
+                            lat: c.lat,
+                            lon: c.lon,
+                            speedKmh: 0,
+                            accuracyM: 5,
+                            headingDeg: null,
+                            altitudeM: null,
+                            timestampMs: cIdx * 1000,
+                            distKm: 0,
+                            stageElapsedMs: cIdx * 1000,
+                          })),
+                        }))
+                      : [];
+
+                  const fallbackTrace: VelocitySample[] =
+                    isMapOpen && mapLayers.length === 0
+                      ? item.tulipas
+                          .filter((t) => t.lat !== 0 || t.lon !== 0)
+                          .map((t, idx) => ({
+                            lat: t.lat,
+                            lon: t.lon,
+                            speedKmh: t.avgSpeedKmh ?? 0,
+                            accuracyM: 5,
+                            headingDeg: t.cap,
+                            altitudeM: null,
+                            timestampMs: idx * 1000,
+                            distKm: t.totalKm,
+                            stageElapsedMs: idx * 1000,
+                          }))
+                      : [];
+
                   return (
                     <div
-                      key={item.id ?? item.fileName}
-                      className={`flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between ${
-                        isActive ? 'bg-[var(--ps-accent-soft)]' : ''
-                      }`}
+                      key={itemKey}
+                      className={`px-4 py-3.5 ${isActive ? 'bg-[var(--ps-accent-soft)]' : ''}`}
                     >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-['Barlow_Condensed'] text-lg font-bold text-[var(--ps-text)] truncate">
-                            {item.eventName}
-                          </span>
-                          <span className="font-mono text-[10px] font-bold uppercase text-[var(--ps-accent)]">
-                            {item.sourceFormat || 'TXT'}
-                          </span>
-                          {isActive && (
-                            <span className="font-mono text-[10px] font-extrabold text-[var(--ps-emerald)] uppercase">
-                              · Ativa
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-['Barlow_Condensed'] text-lg font-bold text-[var(--ps-text)] truncate">
+                              {item.eventName}
                             </span>
-                          )}
+                            <span className="font-mono text-[10px] font-bold uppercase text-[var(--ps-accent)]">
+                              {item.sourceFormat || 'TXT'}
+                            </span>
+                            {item.geoTracks && item.geoTracks.length > 1 && (
+                              <span className="font-mono text-[10px] font-bold text-sky-400">
+                                · {item.geoTracks.length} especiais
+                              </span>
+                            )}
+                            {isActive && (
+                              <span className="font-mono text-[10px] font-extrabold text-[var(--ps-emerald)] uppercase">
+                                · Ativa
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
+                            <span>{item.tulipas.length} refs</span>
+                            <span>{item.totalKm.toFixed(2)} km</span>
+                            <span>
+                              V:{item.countV} · D:{item.countD} · N:{item.countN}
+                            </span>
+                          </div>
                         </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
-                          <span>{item.tulipas.length} refs</span>
-                          <span>{item.totalKm.toFixed(2)} km</span>
-                          <span>
-                            V:{item.countV} · D:{item.countD} · N:{item.countN}
-                          </span>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {hasGeoCoords && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewMapRoadbookId((prev) => (prev === itemKey ? null : itemKey))
+                              }
+                              className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border px-3 text-xs font-bold ${
+                                isMapOpen
+                                  ? 'border-sky-400 bg-sky-500/15 text-sky-300'
+                                  : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]'
+                              }`}
+                            >
+                              <MapPin className="h-3.5 w-3.5 text-sky-400" />
+                              <span>{isMapOpen ? 'Ocultar Mapa' : 'Ver Mapa'}</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleActivateRoadbook(item, true)}
+                            className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold tracking-wide uppercase"
+                          >
+                            <Navigation className="h-3.5 w-3.5" />
+                            <span>{isActive ? 'Navegar' : 'Trocar e Navegar'}</span>
+                          </button>
+                          {item.id && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSaved(item.id!)}
+                              title="Remover da base interna"
+                              className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[#FF2A2A]"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleActivateRoadbook(item, true)}
-                          className="pitstop-btn-red inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold tracking-wide uppercase"
-                        >
-                          <Navigation className="h-3.5 w-3.5" />
-                          <span>{isActive ? 'Navegar' : 'Trocar e Navegar'}</span>
-                        </button>
-                        {item.id && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSaved(item.id!)}
-                            title="Remover da base interna"
-                            className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[#FF2A2A]"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
+                      {isMapOpen && hasGeoCoords && (
+                        <div className="mt-3 space-y-2">
+                          {item.geoTracks && item.geoTracks.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                              {item.geoTracks.map((gt, gIdx) => (
+                                <span
+                                  key={gt.id}
+                                  className="inline-flex items-center gap-1.5 rounded-md border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-0.5 text-[var(--ps-text)]"
+                                >
+                                  <span
+                                    className="h-2.5 w-2.5 rounded-full"
+                                    style={{
+                                      backgroundColor:
+                                        gt.color ||
+                                        DEFAULT_TRACK_PALETTE[gIdx % DEFAULT_TRACK_PALETTE.length],
+                                    }}
+                                  />
+                                  <span className="font-semibold">{gt.name}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          <VelocityMapboxView
+                            trackId={`rb-map-${itemKey}`}
+                            editableTrace={fallbackTrace}
+                            multiTraces={mapLayers.length > 0 ? mapLayers : undefined}
+                            waypoints={item.geoWaypoints}
+                            orderedTraps={[]}
+                            postEditIdx={0}
+                            currentPos={null}
+                            containerClassName="relative h-64 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-72"
+                          />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -3368,6 +3578,85 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   }`}
                   style={{ width: `${battery.levelPct ?? 0}%` }}
                 />
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Smartphone className="h-4 w-4 text-[var(--ps-accent)]" />
+                <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                  Identificação &amp; Licença do Aparelho
+                </h2>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleCopyDeviceId();
+                  }}
+                  className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-[11px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+                >
+                  {copiedDeviceId ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
+                      <span className="text-[var(--ps-emerald)]">Copiado</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" />
+                      <span>Copiar ID</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleRecheckDeviceLicense();
+                  }}
+                  disabled={effectiveCheckingLicense}
+                  className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-[11px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-emerald)]"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${effectiveCheckingLicense ? 'animate-spin' : ''}`}
+                  />
+                  <span>Verificar</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 font-mono text-[11px] sm:grid-cols-3">
+              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
+                <p className="text-[10px] text-[var(--ps-muted)] uppercase">Device ID</p>
+                <p className="mt-0.5 text-sm font-black tracking-wider text-[var(--ps-amber)] tabular-nums select-all">
+                  {effectiveDeviceLicense.identity.deviceId}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
+                <p className="text-[10px] text-[var(--ps-muted)] uppercase">Modelo / Versão</p>
+                <p className="mt-0.5 truncate font-bold text-[var(--ps-text)]">
+                  {effectiveDeviceLicense.identity.deviceModel} · {effectiveDeviceLicense.identity.appVersion}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
+                <p className="text-[10px] text-[var(--ps-muted)] uppercase">Status</p>
+                <p
+                  className={`mt-0.5 font-extrabold ${
+                    effectiveDeviceLicense.status === 'allowed'
+                      ? 'text-[var(--ps-emerald)]'
+                      : 'text-[#FF2A2A]'
+                  }`}
+                >
+                  {effectiveDeviceLicense.status === 'allowed'
+                    ? effectiveDeviceLicense.offlineGrace
+                      ? 'Liberado (Cache Offline)'
+                      : 'Liberado (Online)'
+                    : 'Bloqueado'}
+                  {effectiveDeviceLicense.expiresAt
+                    ? ` · até ${new Date(effectiveDeviceLicense.expiresAt).toLocaleDateString('pt-BR')}`
+                    : ''}
+                </p>
               </div>
             </div>
           </section>

@@ -29,15 +29,17 @@ import { useNavSettings } from '../utils/navSettings';
 import {
   bearingBetweenDeg,
   createGpsKalmanProcessor,
+  formatImportedTrackNamesList,
   getCapacitorGpsWatchOptions,
   haversineMetersVel,
-  parseTrackFileToTrack,
+  parseTrackFileToGeoResult,
   WEB_GPS_WATCH_OPTIONS,
+  type ParsedGeoImportResult,
   type VelocitySample,
   type VelocityTrack,
   type VelocityTrap,
 } from '../utils/velocityEngine';
-import { VelocityMapboxView } from './VelocityMapboxView';
+import { VelocityMapboxView, type MapPolylineLayer } from './VelocityMapboxView';
 
 type DriveMode = 'gps' | 'simulator';
 
@@ -259,6 +261,25 @@ const SurveyOfficialClockCard: React.FC<{ clockOffsetMs: number }> = ({ clockOff
   );
 };
 
+const SurveyFullscreenClockPill: React.FC<{ clockOffsetMs: number }> = ({ clockOffsetMs }) => {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <div className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/45 px-2.5 py-1 text-white shadow-lg backdrop-blur-sm">
+      <Clock className="h-3 w-3 shrink-0 text-[#6EE7B7]" />
+      <span className="text-[9px] font-bold tracking-wider text-white/80 uppercase">
+        Horário Oficial (CH)
+      </span>
+      <span className="font-mono text-xs font-black text-[#6EE7B7] tabular-nums">
+        {formatClockTime(nowMs + clockOffsetMs)}
+      </span>
+    </div>
+  );
+};
+
 interface SurveyCockpitProps {
   isActive?: boolean;
 }
@@ -295,7 +316,9 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
 
   // KML / KMZ & Waze Navigation State
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [loadedTrack, setLoadedTrack] = useState<VelocityTrack | null>(null);
+  const [importedGeo, setImportedGeo] = useState<ParsedGeoImportResult | null>(null);
+  const [selectedTrackIdx, setSelectedTrackIdx] = useState(0);
+  const [importSummary, setImportSummary] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [wazeNavActive, setWazeNavActive] = useState(false);
   const [wazeVoiceEnabled, setWazeVoiceEnabled] = useState(true);
@@ -330,6 +353,26 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       // ignore storage errors
     }
   }, [gaugeVisibility]);
+
+  const loadedTrack: VelocityTrack | null = useMemo(() => {
+    if (!importedGeo || importedGeo.tracks.length === 0) return null;
+    const clampedIdx = Math.min(selectedTrackIdx, importedGeo.tracks.length - 1);
+    return importedGeo.tracks[clampedIdx] ?? null;
+  }, [importedGeo, selectedTrackIdx]);
+
+  const multiTraces: MapPolylineLayer[] = useMemo(() => {
+    if (!importedGeo || importedGeo.tracks.length === 0) return [];
+    return importedGeo.tracks
+      .filter((tr) => tr.baseTrace && tr.baseTrace.length >= 2)
+      .map((tr, idx) => ({
+        id: tr.id,
+        name: tr.name,
+        description: tr.description,
+        color: tr.color || '#0288D1',
+        trace: tr.baseTrace ?? [],
+        active: idx === selectedTrackIdx,
+      }));
+  }, [importedGeo, selectedTrackIdx]);
 
   // Build ordered navigable points from KML/KMZ (either polyline trace or traps fallback)
   const routeSamples: VelocitySample[] = useMemo(() => {
@@ -675,20 +718,43 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     const file = e.target.files?.[0];
     if (!file) return;
     setImportError(null);
+    setImportSummary(null);
     try {
-      const track = await parseTrackFileToTrack(file);
-      setLoadedTrack(track);
+      const result = await parseTrackFileToGeoResult(file);
+      setImportedGeo(result);
+      setSelectedTrackIdx(0);
       simProgressKmRef.current = 0;
-      const firstPt = track.baseTrace?.[0] ?? track.traps[0];
+
+      if (result.tracks.length >= 2) {
+        const names = formatImportedTrackNamesList(result.tracks.map((t) => t.name));
+        const wpSuffix =
+          result.waypoints.length > 0
+            ? ` + ${result.waypoints.length} ponto${result.waypoints.length > 1 ? 's' : ''} de apoio`
+            : '';
+        setImportSummary(`${result.tracks.length} especiais importadas: ${names}${wpSuffix}.`);
+      } else if (result.tracks.length === 1) {
+        const t = result.tracks[0];
+        const wpSuffix =
+          result.waypoints.length > 0
+            ? ` + ${result.waypoints.length} ponto${result.waypoints.length > 1 ? 's' : ''} no mapa`
+            : '';
+        setImportSummary(`Especial "${t.name}" importada${wpSuffix}.`);
+      } else if (result.waypoints.length > 0) {
+        setImportSummary(`${result.waypoints.length} pontos de interesse carregados no mapa.`);
+      }
+
+      const firstTrack = result.tracks[0];
+      const firstPt =
+        firstTrack?.baseTrace?.[0] ?? firstTrack?.traps[0] ?? result.waypoints[0];
       if (firstPt && source === 'simulator') {
         setCurrentPos({ lat: firstPt.lat, lon: firstPt.lon });
-        if (track.baseTrace && track.baseTrace.length >= 2) {
+        if (firstTrack?.baseTrace && firstTrack.baseTrace.length >= 2) {
           setHeadingDeg(
             bearingBetweenDeg(
-              track.baseTrace[0].lat,
-              track.baseTrace[0].lon,
-              track.baseTrace[1].lat,
-              track.baseTrace[1].lon
+              firstTrack.baseTrace[0].lat,
+              firstTrack.baseTrace[0].lon,
+              firstTrack.baseTrace[1].lat,
+              firstTrack.baseTrace[1].lon
             )
           );
         }
@@ -900,6 +966,12 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
         </div>
       )}
 
+      {importSummary && !importError && (
+        <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-300">
+          {importSummary}
+        </div>
+      )}
+
       {source === 'simulator' && (
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-4 py-3">
           <div className="flex items-center gap-2">
@@ -944,8 +1016,16 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             <MapPin className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
             <p className="truncate text-xs font-bold text-[var(--ps-text)]">
               {loadedTrack
-                ? `${loadedTrack.name} · ${loadedTrack.referenceDistanceKm.toFixed(1).replace('.', ',')} km`
-                : 'Mapa (Erechim / GPS)'}
+                ? `${loadedTrack.name} · ${loadedTrack.referenceDistanceKm.toFixed(1).replace('.', ',')} km${
+                    loadedTrack.description &&
+                    loadedTrack.description.replace(/\s+/g, '') !==
+                      `${loadedTrack.referenceDistanceKm.toFixed(1).replace('.', ',')}km`
+                      ? ` · ${loadedTrack.description}`
+                      : ''
+                  }`
+                : importedGeo && importedGeo.waypoints.length > 0
+                  ? `${importedGeo.documentName} · ${importedGeo.waypoints.length} pontos`
+                  : 'Mapa (Erechim / GPS)'}
             </p>
           </div>
 
@@ -1019,15 +1099,123 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           </div>
         )}
 
+        {importedGeo && importedGeo.tracks.length >= 2 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {importedGeo.tracks.map((tr, idx) => {
+              const isSelected = idx === selectedTrackIdx;
+              return (
+                <button
+                  key={tr.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTrackIdx(idx);
+                    simProgressKmRef.current = 0;
+                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                    isSelected
+                      ? 'border-[var(--ps-accent)] bg-[var(--ps-card)] text-[var(--ps-text)]'
+                      : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                  }`}
+                >
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: tr.color || '#0288D1' }}
+                  />
+                  <span className="truncate max-w-[160px]">{tr.name}</span>
+                  <span className="font-mono text-[10px] opacity-75">
+                    {tr.referenceDistanceKm.toFixed(1).replace('.', ',')}km
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <VelocityMapboxView
-          trackId={loadedTrack?.id ?? 'levantamento-erechim'}
+          trackId={
+            loadedTrack?.id ??
+            (importedGeo ? `geo-${importedGeo.documentName}` : 'levantamento-erechim')
+          }
           editableTrace={routeSamples}
+          traceColor={loadedTrack?.color}
+          multiTraces={multiTraces.length > 0 ? multiTraces : undefined}
+          waypoints={importedGeo?.waypoints}
           orderedTraps={orderedTraps}
           postEditIdx={guidance ? guidance.closestIdx : 0}
           currentPos={currentPos}
           navigationMode={wazeNavActive}
           navHeadingDeg={headingDeg}
-          containerClassName="relative mt-2 h-52 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-72"
+          fullscreenTopOverlay={
+            <SurveyFullscreenClockPill clockOffsetMs={settings.clockOffsetMs} />
+          }
+          fullscreenZoomBottomClass="bottom-[88px] sm:bottom-[92px]"
+          fullscreenOverlayFullWidth
+          fullscreenOverlay={
+            <div className="rounded-2xl border border-white/15 bg-black/45 px-2.5 py-2 text-white shadow-xl backdrop-blur-sm">
+              <div className="grid grid-cols-3 items-center gap-1.5 font-mono tabular-nums">
+                {/* Bloco 1: TRIP (Laranja #F59E0B) + Zerar */}
+                <div className="flex min-w-0 items-center justify-between gap-1.5 pr-1 border-r border-white/10">
+                  <div className="min-w-0 leading-tight">
+                    <p className="text-[9px] font-extrabold tracking-wider text-[#F59E0B] uppercase">
+                      TRIP {regressive ? 'REG' : ''}
+                    </p>
+                    <p className="truncate text-sm font-black text-[#F59E0B] sm:text-base">
+                      {displayedTripKm.toFixed(2).replace('.', ',')}
+                      <span className="ml-0.5 text-[10px] font-bold opacity-80">km</span>
+                    </p>
+                    <p className="truncate text-[10px] font-semibold text-amber-200/80">
+                      {tripMeters.toLocaleString('pt-BR')} m
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTripKm(0)}
+                    className="inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 text-[10px] font-extrabold tracking-wide text-[#F59E0B] uppercase active:scale-95"
+                  >
+                    Zerar
+                  </button>
+                </div>
+
+                {/* Bloco 2: VELOCIDADE (Branco) + Média */}
+                <div className="min-w-0 text-center leading-tight px-1 border-r border-white/10">
+                  <p className="text-[9px] font-extrabold tracking-wider text-white/70 uppercase">
+                    Velocidade
+                  </p>
+                  <p
+                    className={`text-lg font-black leading-none sm:text-xl ${
+                      recceZone === 'over'
+                        ? 'text-red-400'
+                        : recceZone === 'warning'
+                          ? 'text-amber-300'
+                          : 'text-white'
+                    }`}
+                  >
+                    {speedKmh}{' '}
+                    <span className="text-[10px] font-bold text-white/75">KM/H</span>
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] font-semibold text-[#6EE7B7]">
+                    Méd: {avgSpeedKmh} km/h
+                  </p>
+                </div>
+
+                {/* Bloco 3: ODÔMETRO TOTAL & GPS */}
+                <div className="min-w-0 pl-1 text-right leading-tight">
+                  <p className="truncate text-[9px] font-extrabold tracking-wider text-white/70 uppercase">
+                    Odôm. Total
+                  </p>
+                  <p className="truncate text-sm font-black text-white sm:text-base">
+                    {totalKm.toFixed(2).replace('.', ',')}
+                    <span className="ml-0.5 text-[10px] font-bold text-white/75">km</span>
+                  </p>
+                  <p className="truncate text-[10px] font-semibold text-emerald-300/90">
+                    {gpsAccuracy !== null ? `±${gpsAccuracy}m` : 'GPS --'}
+                    {altitudeM !== null ? ` · ${altitudeM}m` : ''}
+                  </p>
+                </div>
+              </div>
+            </div>
+          }
+          containerClassName="relative mt-2 h-56 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-72"
         />
       </section>
 

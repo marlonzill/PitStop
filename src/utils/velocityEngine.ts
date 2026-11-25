@@ -1,5 +1,27 @@
-import JSZip from 'jszip';
 import * as turf from '@turf/turf';
+import {
+  DEFAULT_TRACK_PALETTE,
+  extractTrackKmOnlyDescription,
+  formatImportedTrackNamesList,
+  parseGpxOrGeoJsonToGeoResult,
+  parseKmlColorToHex,
+  parseKmlToGeoResult,
+  parseTrackFileToGeoResult,
+  type GeoWaypoint,
+  type ParsedGeoImportResult,
+} from './geoKmlParser';
+
+export {
+  DEFAULT_TRACK_PALETTE,
+  extractTrackKmOnlyDescription,
+  formatImportedTrackNamesList,
+  parseGpxOrGeoJsonToGeoResult,
+  parseKmlColorToHex,
+  parseKmlToGeoResult,
+  parseTrackFileToGeoResult,
+  type GeoWaypoint,
+  type ParsedGeoImportResult,
+};
 
 export type TrapKind = 'start' | 'split' | 'finish' | 'start_finish';
 export type TrackMode = 'point-to-point' | 'circuit';
@@ -46,6 +68,9 @@ export interface VelocityRun {
 export interface VelocityTrack {
   id: string;
   name: string;
+  description?: string;
+  color?: string;
+  waypoints?: GeoWaypoint[];
   mode: TrackMode;
   traps: VelocityTrap[];
   createdAtMs: number;
@@ -721,8 +746,14 @@ export function verificarCruzamento(
       ? normalizeAngle360(marco.rumoVeiculoDeg)
       : geomBearing;
   const diferencaAngularDeg = angleDiffDeg(rumoVeiculo, anguloMarco);
-  if (marco.unidirecional !== false && diferencaAngularDeg > 65) {
-    return null;
+  if (marco.unidirecional !== false) {
+    if (diferencaAngularDeg > 65) {
+      return null;
+    }
+    // Garante cruzamento real no sentido da pista (de antes da linha para depois da linha)
+    if (alongA > 0.25 || alongB < -0.25) {
+      return null;
+    }
   }
 
   const dtMs = pontoAtual.timestamp - pontoAnterior.timestamp;
@@ -758,10 +789,10 @@ export function detectTrapCrossing(
 ): TrapCrossingResult | null {
   const acc = options?.hdopAccuracyM;
   const hdopBonus =
-    options?.autoSnap !== false && typeof acc === 'number' && Number.isFinite(acc) && acc > 6
-      ? Math.min(24, (acc - 6) * 0.65)
+    options?.autoSnap !== false && typeof acc === 'number' && Number.isFinite(acc) && acc > 8
+      ? Math.min(10, (acc - 8) * 0.45)
       : 0;
-  // Garante mínimo absoluto de 20m para cada lado (40m total), expandindo se portal for maior ou HDOP alto
+  // Garante mínimo absoluto de 20m para cada lado (40m total) sem alargamento excessivo por HDOP
   const baseTotalWidthM = Math.max(
     MIN_TRAP_HALF_WIDTH_M * 2,
     Number(trap.widthM) || DEFAULT_TRAP_WIDTH_M
@@ -955,12 +986,42 @@ export function recalculateRunsForTrack(
     }
 
     if (startMs !== null && finishMs !== null && finishMs > startMs) {
+      let updatedSamples = run.samples;
+      // Garante ponto final interpolado exatamente sobre a linha de chegada C quando o último ponto passar do portal
+      const lastRaw = run.samples[run.samples.length - 1];
+      if (lastRaw && lastRaw.timestampMs > finishMs) {
+        const preFinIdx = run.samples.findIndex((s) => s.timestampMs >= finishMs!);
+        if (preFinIdx > 0) {
+          const prevS = run.samples[preFinIdx - 1];
+          const currS = run.samples[preFinIdx];
+          const finCross = detectTrapCrossing(prevS, currS, finishTrap, {
+            hdopAccuracyM: 12,
+            autoSnap: true,
+          });
+          if (finCross) {
+            const segFinKm =
+              haversineMetersVel(prevS.lat, prevS.lon, finCross.crossLat, finCross.crossLon) /
+              1000;
+            const finSample: VelocitySample = {
+              ...prevS,
+              lat: finCross.crossLat,
+              lon: finCross.crossLon,
+              speedKmh: prevS.speedKmh + finCross.t * (currS.speedKmh - prevS.speedKmh),
+              timestampMs: finCross.crossTimestampMs,
+              distKm: Math.max(prevS.distKm, prevS.distKm + segFinKm),
+              stageElapsedMs: finishMs - startMs,
+            };
+            updatedSamples = [...run.samples.slice(0, preFinIdx), finSample];
+          }
+        }
+      }
       return {
         ...run,
         startedAtMs: startMs,
         finishedAtMs: finishMs,
         totalMs: finishMs - startMs,
         splitTimesMs: splits,
+        samples: updatedSamples,
       };
     }
 
@@ -1219,428 +1280,76 @@ ${trkpts}
 </gpx>`;
 }
 
+function geoImportToSingleTrack(
+  res: ParsedGeoImportResult,
+  fallbackName: string
+): VelocityTrack {
+  if (res.tracks.length > 0) {
+    return res.tracks[0];
+  }
+  if (res.waypoints.length >= 2) {
+    const traps: VelocityTrap[] = res.waypoints.map((wp, idx) => ({
+      id: wp.id,
+      name: wp.name,
+      kind:
+        idx === 0
+          ? 'start'
+          : idx === res.waypoints.length - 1
+            ? 'finish'
+            : 'split',
+      lat: wp.lat,
+      lon: wp.lon,
+      bearingDeg:
+        idx < res.waypoints.length - 1
+          ? bearingBetweenDeg(
+              wp.lat,
+              wp.lon,
+              res.waypoints[idx + 1].lat,
+              res.waypoints[idx + 1].lon
+            )
+          : bearingBetweenDeg(
+              res.waypoints[idx - 1].lat,
+              res.waypoints[idx - 1].lon,
+              wp.lat,
+              wp.lon
+            ),
+      widthM: 40,
+      unidirectional: true,
+    }));
+    return {
+      id: `trk_${Date.now()}`,
+      name: res.documentName || fallbackName,
+      mode: 'point-to-point',
+      traps,
+      createdAtMs: Date.now(),
+      referenceDistanceKm: 0,
+    };
+  }
+  throw new Error('Arquivo sem trilha (<LineString> / <trk>) válida para criação de pista.');
+}
+
 export function parseGpxOrGeoJsonToTrack(
   content: string,
   fileName: string
 ): VelocityTrack {
-  const cleanName = fileName.replace(/\.(geojson|json|gpx)$/i, '');
-  const traps: VelocityTrap[] = [];
-  const baseTrace: VelocitySample[] = [];
-  const now = Date.now();
-
-  if (content.trim().startsWith('{')) {
-    const parsed = JSON.parse(content) as {
-      name?: string;
-      features?: Array<{
-        properties?: Record<string, unknown>;
-        geometry?: { type?: string; coordinates?: unknown };
-      }>;
-    };
-    const features = Array.isArray(parsed.features) ? parsed.features : [];
-    for (const f of features) {
-      const g = f.geometry;
-      const props = f.properties || {};
-      if (g?.type === 'LineString' && Array.isArray(g.coordinates)) {
-        let accKm = 0;
-        g.coordinates.forEach((coord: unknown, idx: number) => {
-          if (!Array.isArray(coord) || coord.length < 2) return;
-          const lon = Number(coord[0]);
-          const lat = Number(coord[1]);
-          const alt = coord.length > 2 ? Number(coord[2]) : null;
-          if (idx > 0 && baseTrace.length > 0) {
-            const prev = baseTrace[baseTrace.length - 1];
-            accKm += haversineMetersVel(prev.lat, prev.lon, lat, lon) / 1000;
-          }
-          baseTrace.push({
-            lat,
-            lon,
-            speedKmh: 0,
-            accuracyM: 5,
-            headingDeg: null,
-            altitudeM: alt,
-            timestampMs: now + idx * 1000,
-            distKm: accKm,
-            stageElapsedMs: idx * 1000,
-          });
-        });
-      } else if (g?.type === 'Point' && Array.isArray(g.coordinates) && g.coordinates.length >= 2) {
-        const lon = Number(g.coordinates[0]);
-        const lat = Number(g.coordinates[1]);
-        const rawKind = String(props.trapKind || props.kind || 'split');
-        const kind: TrapKind =
-          rawKind === 'start' || rawKind === 'finish' || rawKind === 'start_finish'
-            ? rawKind
-            : 'split';
-        traps.push({
-          id: String(props.id || `trap_${traps.length + 1}_${now}`),
-          name: String(props.name || `${kind.toUpperCase()} ${traps.length + 1}`),
-          kind,
-          lat,
-          lon,
-          bearingDeg: Number(props.bearingDeg) || 0,
-          widthM: Number(props.widthM) || 25,
-          unidirectional: props.unidirectional !== false,
-        });
-      }
-    }
-
-    return {
-      id: `trk_${now}`,
-      name: String(parsed.name || cleanName),
-      mode: traps.some((t) => t.kind === 'start_finish') ? 'circuit' : 'point-to-point',
-      traps,
-      createdAtMs: now,
-      referenceDistanceKm:
-        baseTrace.length > 0 ? baseTrace[baseTrace.length - 1].distKm : 0,
-      baseTrace: baseTrace.length > 0 ? baseTrace : undefined,
-    };
-  }
-
-  // GPX XML parse via DOMParser
-  const doc = new DOMParser().parseFromString(content, 'application/xml');
-  const trkpts = Array.from(doc.querySelectorAll('trkpt'));
-  let accKm = 0;
-  trkpts.forEach((pt, idx) => {
-    const lat = Number(pt.getAttribute('lat'));
-    const lon = Number(pt.getAttribute('lon'));
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-    const ele = Number(pt.querySelector('ele')?.textContent);
-    if (idx > 0 && baseTrace.length > 0) {
-      const prev = baseTrace[baseTrace.length - 1];
-      accKm += haversineMetersVel(prev.lat, prev.lon, lat, lon) / 1000;
-    }
-    baseTrace.push({
-      lat,
-      lon,
-      speedKmh: 0,
-      accuracyM: 5,
-      headingDeg: null,
-      altitudeM: Number.isFinite(ele) ? ele : null,
-      timestampMs: now + idx * 1000,
-      distKm: accKm,
-      stageElapsedMs: idx * 1000,
-    });
-  });
-
-  const wpts = Array.from(doc.querySelectorAll('wpt'));
-  wpts.forEach((wpt, idx) => {
-    const lat = Number(wpt.getAttribute('lat'));
-    const lon = Number(wpt.getAttribute('lon'));
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-    const name = wpt.querySelector('name')?.textContent?.trim() || `Trap ${idx + 1}`;
-    const typeParts = (wpt.querySelector('type')?.textContent || '').split('|');
-    const rawKind = typeParts[0];
-    const kind: TrapKind =
-      rawKind === 'start' || rawKind === 'finish' || rawKind === 'start_finish'
-        ? rawKind
-        : 'split';
-    traps.push({
-      id: `trap_${idx + 1}_${now}`,
-      name,
-      kind,
-      lat,
-      lon,
-      bearingDeg: Number(typeParts[1]) || 0,
-      widthM: Number(typeParts[2]) || 25,
-      unidirectional: typeParts[3] !== '0',
-    });
-  });
-
-  if (traps.length === 0 && baseTrace.length >= 2) {
-    const first = baseTrace[0];
-    const second = baseTrace[1];
-    const lastPrev = baseTrace[baseTrace.length - 2];
-    const last = baseTrace[baseTrace.length - 1];
-    traps.push(
-      {
-        id: `trap_start_${now}`,
-        name: 'Largada (Start)',
-        kind: 'start',
-        lat: first.lat,
-        lon: first.lon,
-        bearingDeg: bearingBetweenDeg(first.lat, first.lon, second.lat, second.lon),
-        widthM: 25,
-        unidirectional: true,
-      },
-      {
-        id: `trap_finish_${now}`,
-        name: 'Chegada (Finish)',
-        kind: 'finish',
-        lat: last.lat,
-        lon: last.lon,
-        bearingDeg: bearingBetweenDeg(lastPrev.lat, lastPrev.lon, last.lat, last.lon),
-        widthM: 25,
-        unidirectional: true,
-      }
-    );
-  }
-
-  return {
-    id: `trk_${now}`,
-    name: cleanName,
-    mode: 'point-to-point',
-    traps,
-    createdAtMs: now,
-    referenceDistanceKm:
-      baseTrace.length > 0 ? baseTrace[baseTrace.length - 1].distKm : 0,
-    baseTrace: baseTrace.length > 0 ? baseTrace : undefined,
-  };
-}
-
-function parseCoordTuples(raw: string): Array<{ lat: number; lon: number; alt: number | null }> {
-  const out: Array<{ lat: number; lon: number; alt: number | null }> = [];
-  const tokens = raw.trim().split(/\s+/);
-  for (const token of tokens) {
-    const parts = token.split(',');
-    if (parts.length < 2) continue;
-    const lon = Number(parts[0]);
-    const lat = Number(parts[1]);
-    const alt = parts.length >= 3 && Number.isFinite(Number(parts[2])) ? Number(parts[2]) : null;
-    if (
-      !Number.isFinite(lat) ||
-      !Number.isFinite(lon) ||
-      Math.abs(lat) > 90 ||
-      Math.abs(lon) > 180 ||
-      (lat === 0 && lon === 0)
-    ) {
-      continue;
-    }
-    const prev = out[out.length - 1];
-    if (prev && Math.abs(prev.lat - lat) < 1e-7 && Math.abs(prev.lon - lon) < 1e-7) {
-      continue;
-    }
-    out.push({ lat, lon, alt });
-  }
-  return out;
-}
-
-function inferBearingNearTrace(
-  lat: number,
-  lon: number,
-  trace: VelocitySample[],
-  fallbackDeg = 0
-): number {
-  if (trace.length < 2) return fallbackDeg;
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < trace.length; i += 1) {
-    const d = haversineMetersVel(lat, lon, trace[i].lat, trace[i].lon);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = i;
-    }
-  }
-  const i0 = Math.max(0, bestIdx === trace.length - 1 ? bestIdx - 1 : bestIdx);
-  const i1 = Math.min(trace.length - 1, i0 + 1);
-  if (i0 === i1) return fallbackDeg;
-  return bearingBetweenDeg(trace[i0].lat, trace[i0].lon, trace[i1].lat, trace[i1].lon);
+  const res = parseGpxOrGeoJsonToGeoResult(content, fileName);
+  return geoImportToSingleTrack(res, fileName.replace(/\.(geojson|json|gpx)$/i, ''));
 }
 
 /**
  * Parses Google Earth / QGIS / GPS .KML XML into a PitStop-Sports VelocityTrack
- * extracting LineString / gx:Track route coordinates and Point placemarks as Traps.
  */
 export function parseKmlToTrack(kmlXml: string, fileName: string): VelocityTrack {
-  const cleanName = fileName.replace(/\.(kml|kmz)$/i, '');
-  const now = Date.now();
-  const doc = new DOMParser().parseFromString(kmlXml, 'application/xml');
-
-  const docName =
-    doc.querySelector('Document > name')?.textContent?.trim() ||
-    doc.querySelector('Folder > name')?.textContent?.trim() ||
-    cleanName;
-
-  // 1. Extract route coordinates from LineString elements (and gx:Track if present)
-  const rawRouteCoords: Array<{ lat: number; lon: number; alt: number | null }> = [];
-  const lineStrings = Array.from(doc.getElementsByTagName('LineString'));
-  for (const ls of lineStrings) {
-    const coordEl = ls.getElementsByTagName('coordinates')[0];
-    if (coordEl?.textContent) {
-      rawRouteCoords.push(...parseCoordTuples(coordEl.textContent));
-    }
-  }
-
-  // Google Earth gx:coord entries ("lon lat alt")
-  if (rawRouteCoords.length === 0) {
-    const gxCoords = Array.from(doc.getElementsByTagNameNS('*', 'coord'));
-    for (const el of gxCoords) {
-      const parts = (el.textContent || '').trim().split(/\s+/);
-      if (parts.length < 2) continue;
-      const lon = Number(parts[0]);
-      const lat = Number(parts[1]);
-      const alt = parts.length >= 3 && Number.isFinite(Number(parts[2])) ? Number(parts[2]) : null;
-      if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-        rawRouteCoords.push({ lat, lon, alt });
-      }
-    }
-  }
-
-  const baseTrace: VelocitySample[] = [];
-  let accKm = 0;
-  rawRouteCoords.forEach((pt, idx) => {
-    if (idx > 0) {
-      const prev = rawRouteCoords[idx - 1];
-      accKm += haversineMetersVel(prev.lat, prev.lon, pt.lat, pt.lon) / 1000;
-    }
-    const next = rawRouteCoords[Math.min(rawRouteCoords.length - 1, idx + 1)];
-    const prev = rawRouteCoords[Math.max(0, idx - 1)];
-    baseTrace.push({
-      lat: pt.lat,
-      lon: pt.lon,
-      speedKmh: 0,
-      accuracyM: 5,
-      headingDeg:
-        rawRouteCoords.length > 1
-          ? bearingBetweenDeg(prev.lat, prev.lon, next.lat, next.lon)
-          : null,
-      altitudeM: pt.alt,
-      timestampMs: now + idx * 1000,
-      distKm: accKm,
-      stageElapsedMs: idx * 1000,
-    });
-  });
-
-  // 2. Extract Point Placemarks as Traps
-  const traps: VelocityTrap[] = [];
-  const placemarks = Array.from(doc.getElementsByTagName('Placemark'));
-  const rawPoints: Array<{ name: string; lat: number; lon: number }> = [];
-
-  for (const pm of placemarks) {
-    const ptEl = pm.getElementsByTagName('Point')[0];
-    if (!ptEl) continue;
-    const coordEl = ptEl.getElementsByTagName('coordinates')[0];
-    if (!coordEl?.textContent) continue;
-    const tuples = parseCoordTuples(coordEl.textContent);
-    if (tuples.length === 0) continue;
-    const name =
-      pm.getElementsByTagName('name')[0]?.textContent?.trim() ||
-      `Ponto ${rawPoints.length + 1}`;
-    rawPoints.push({ name, lat: tuples[0].lat, lon: tuples[0].lon });
-  }
-
-  rawPoints.forEach((pt, idx) => {
-    const lower = pt.name.toLowerCase();
-    let kind: TrapKind = 'split';
-    if (/\b(largada|start|ini|inicio|início|partida)\b/i.test(lower)) {
-      kind = 'start';
-    } else if (/\b(chegada|finish|fim|meta)\b/i.test(lower)) {
-      kind = 'finish';
-    } else if (baseTrace.length === 0 && rawPoints.length >= 2) {
-      if (idx === 0) kind = 'start';
-      else if (idx === rawPoints.length - 1) kind = 'finish';
-    }
-
-    const fallbackBearing =
-      idx < rawPoints.length - 1
-        ? bearingBetweenDeg(pt.lat, pt.lon, rawPoints[idx + 1].lat, rawPoints[idx + 1].lon)
-        : idx > 0
-          ? bearingBetweenDeg(rawPoints[idx - 1].lat, rawPoints[idx - 1].lon, pt.lat, pt.lon)
-          : 0;
-
-    traps.push({
-      id: `trap_kml_${idx + 1}_${now}`,
-      name: pt.name,
-      kind,
-      lat: pt.lat,
-      lon: pt.lon,
-      bearingDeg: inferBearingNearTrace(pt.lat, pt.lon, baseTrace, fallbackBearing),
-      widthM: 35,
-    });
-  });
-
-  // Auto-add Start and/or Finish from trace endpoints when missing
-  if (baseTrace.length >= 2) {
-    const hasStart = traps.some((t) => t.kind === 'start');
-    const hasFinish = traps.some((t) => t.kind === 'finish');
-    if (!hasStart) {
-      const first = baseTrace[0];
-      const second = baseTrace[1];
-      traps.unshift({
-        id: `trap_kml_start_${now}`,
-        name: 'Largada (Start)',
-        kind: 'start',
-        lat: first.lat,
-        lon: first.lon,
-        bearingDeg: bearingBetweenDeg(first.lat, first.lon, second.lat, second.lon),
-        widthM: 35,
-      });
-    }
-    if (!hasFinish) {
-      const lastPrev = baseTrace[baseTrace.length - 2];
-      const last = baseTrace[baseTrace.length - 1];
-      traps.push({
-        id: `trap_kml_finish_${now}`,
-        name: 'Chegada (Finish)',
-        kind: 'finish',
-        lat: last.lat,
-        lon: last.lon,
-        bearingDeg: bearingBetweenDeg(lastPrev.lat, lastPrev.lon, last.lat, last.lon),
-        widthM: 35,
-      });
-    }
-  }
-
-  if (baseTrace.length === 0 && traps.length === 0) {
-    throw new Error('KML sem coordenadas válidas de rota ou pontos.');
-  }
-
-  return {
-    id: `trk_${now}`,
-    name: docName,
-    mode: 'point-to-point',
-    traps,
-    createdAtMs: now,
-    referenceDistanceKm:
-      baseTrace.length > 0 ? baseTrace[baseTrace.length - 1].distKm : 0,
-    baseTrace: baseTrace.length > 0 ? baseTrace : undefined,
-  };
+  const res = parseKmlToGeoResult(kmlXml, fileName);
+  return geoImportToSingleTrack(res, fileName.replace(/\.(kml|kmz)$/i, ''));
 }
 
 /**
  * Unified Especial Track Importer supporting .KML, .KMZ, .GPX and .GeoJSON/.JSON
  */
 export async function parseTrackFileToTrack(file: File): Promise<VelocityTrack> {
-  const MAX_TRACK_FILE_BYTES = 50 * 1024 * 1024;
-  const MAX_KMZ_ENTRIES = 500;
-  const MAX_KML_XML_BYTES = 25 * 1024 * 1024;
-
-  if (file.size > MAX_TRACK_FILE_BYTES) {
-    throw new Error('Arquivo de pista excede o limite máximo de 50 MB.');
-  }
-
-  const lowerName = file.name.toLowerCase();
-  const buf = await file.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  const looksLikeZip = bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
-
-  if (lowerName.endsWith('.kmz') || looksLikeZip) {
-    const zip = await JSZip.loadAsync(buf);
-    const allNames = Object.keys(zip.files);
-    if (allNames.length > MAX_KMZ_ENTRIES) {
-      throw new Error('Arquivo .KMZ excede o limite de entradas internas permitidas.');
-    }
-    const kmlEntries = allNames.filter(
-      (k) => !zip.files[k].dir && k.toLowerCase().endsWith('.kml')
-    );
-    if (kmlEntries.length === 0) {
-      throw new Error('Arquivo .KMZ não contém arquivo .KML interno.');
-    }
-    const preferred =
-      kmlEntries.find((k) => k.toLowerCase().endsWith('doc.kml')) ?? kmlEntries[0];
-    const rawKmlBytes = await zip.files[preferred].async('uint8array');
-    if (rawKmlBytes.byteLength > MAX_KML_XML_BYTES) {
-      throw new Error('Conteúdo KML descompactado excede o limite seguro (25 MB).');
-    }
-    const kmlText = new TextDecoder('utf-8').decode(rawKmlBytes);
-    return parseKmlToTrack(kmlText, file.name);
-  }
-
-  const text = new TextDecoder('utf-8').decode(bytes);
-  if (lowerName.endsWith('.kml') || /<kml[\s>]/i.test(text)) {
-    return parseKmlToTrack(text, file.name);
-  }
-
-  return parseGpxOrGeoJsonToTrack(text, file.name);
+  const res = await parseTrackFileToGeoResult(file);
+  return geoImportToSingleTrack(res, file.name.replace(/\.(kml|kmz|gpx|geojson|json)$/i, ''));
 }
 
 /**

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import {
@@ -6,6 +7,7 @@ import {
   Bluetooth,
   Camera,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -16,7 +18,9 @@ import {
   Flag,
   FolderOpen,
   History,
+  Layers,
   Map as MapIcon,
+  Navigation,
   Pencil,
   Play,
   Plus,
@@ -39,6 +43,7 @@ import { GoProBlePanel } from './GoProBlePanel';
 import { SatcronLivePanel } from './SatcronLivePanel';
 import { SurveyCockpit } from './SurveyCockpit';
 import { LayoutMiniSchematic } from './VelocityCockpitLayoutEditor';
+import { VelocityStartTachButton } from './VelocityStartTachButton';
 import { VelocityLivePresetScreen } from './VelocityLiveLayouts';
 import { VelocityMapboxView } from './VelocityMapboxView';
 import { VideoHudOverlayPanel } from './VideoHudOverlayPanel';
@@ -89,14 +94,16 @@ import {
   ensureTraceGForces,
   exportTrackGeoJson,
   exportTrackGpx,
+  extractTrackKmOnlyDescription,
   formatCleanTrackName,
   formatDeltaSeconds,
+  formatImportedTrackNamesList,
   formatStageDuration,
   getCapacitorGpsWatchOptions,
   getOrderedTrackTraps,
   haversineMetersVel,
   inferNearestBaseTraceBearing,
-  parseTrackFileToTrack,
+  parseTrackFileToGeoResult,
   recalculateRunsForTrack,
   WEB_GPS_WATCH_OPTIONS,
   type OptimalStageSummary,
@@ -130,6 +137,37 @@ type VelocityScreen =
 type LivePanelMode = 'timer' | 'gauges';
 
 const GAUGE_PREFS_KEY = 'pitstop_velocity_gauges_v1';
+const LAST_GPS_POS_KEY = 'pitstop_last_gps_pos_v1';
+
+function loadLastGpsPos(): { lat: number; lon: number } | null {
+  try {
+    const raw = localStorage.getItem(LAST_GPS_POS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { lat?: unknown; lon?: unknown };
+    if (
+      typeof parsed?.lat === 'number' &&
+      typeof parsed?.lon === 'number' &&
+      Number.isFinite(parsed.lat) &&
+      Number.isFinite(parsed.lon)
+    ) {
+      return { lat: parsed.lat, lon: parsed.lon };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastGpsPos(lat: number, lon: number): void {
+  try {
+    localStorage.setItem(
+      LAST_GPS_POS_KEY,
+      JSON.stringify({ lat, lon, updatedAtMs: Date.now() })
+    );
+  } catch {
+    // Ignore storage error
+  }
+}
 
 interface GaugeVisibility {
   speed: boolean;
@@ -288,6 +326,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const { isPro } = useAuthSession();
   const [screen, setScreen] = useState<VelocityScreen>('home');
   const [liveMode, setLiveMode] = useState<LivePanelMode>('timer');
+  const [tachSweepTrigger, setTachSweepTrigger] = useState<number>(1);
+  const prevTachVisibleRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    const visible = Boolean(isActive && screen === 'home');
+    if (visible && !prevTachVisibleRef.current) {
+      setTachSweepTrigger((n) => n + 1);
+    }
+    prevTachVisibleRef.current = visible;
+  }, [isActive, screen]);
   const [velPrefs, updateVelEngine] = useVelocityEngineConfig();
   const source = velPrefs.source;
   const simMultiplier = velPrefs.simMultiplier;
@@ -334,7 +382,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [editingGaugeTrip, setEditingGaugeTrip] = useState(false);
   const [gaugeTripInput, setGaugeTripInput] = useState('');
   const [gaugeTripUnit, setGaugeTripUnit] = useState<'m' | 'km'>('m');
-  const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(null);
+  const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(() =>
+    loadLastGpsPos()
+  );
   const [liveLongG, setLiveLongG] = useState(0);
 
   // Simulator & Track Map Editor state
@@ -355,8 +405,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [editingTrackName, setEditingTrackName] = useState('');
+  const [pendingDeleteTrack, setPendingDeleteTrack] = useState<VelocityTrack | null>(null);
   const [mapTrackNameDraft, setMapTrackNameDraft] = useState('');
   const [justSavedTrack, setJustSavedTrack] = useState(false);
+  const [gpsMappingOpen, setGpsMappingOpen] = useState(false);
+  const [gpsMappingPhase, setGpsMappingPhase] = useState<'ready' | 'recording' | 'finished'>('ready');
+  const [gpsMappingTrace, setGpsMappingTrace] = useState<VelocitySample[]>([]);
+  const [gpsMappingHeadingUp, setGpsMappingHeadingUp] = useState(true);
+  const [gpsMappingPulse, setGpsMappingPulse] = useState<string | null>(null);
+  const [gpsMappingStyleIdx, setGpsMappingStyleIdx] = useState(0);
 
   // Session Analysis Detail (Pure 3-Lap Telemetry & Video HUD)
   const [selectedSessionTrackId, setSelectedSessionTrackId] = useState<string>('');
@@ -414,6 +471,18 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const webWatchRef = useRef<number | null>(null);
   const capWatchRef = useRef<string | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const currentPosRef = useRef(currentPos);
+  currentPosRef.current = currentPos;
+  const lastValidHeadingRef = useRef<number | null>(null);
+  const lastSavedGpsAtRef = useRef<number>(0);
+  const gpsMappingOpenRef = useRef(gpsMappingOpen);
+  gpsMappingOpenRef.current = gpsMappingOpen;
+  const gpsMappingPhaseRef = useRef(gpsMappingPhase);
+  gpsMappingPhaseRef.current = gpsMappingPhase;
+  const gpsMappingTraceRef = useRef(gpsMappingTrace);
+  gpsMappingTraceRef.current = gpsMappingTrace;
+  const gpsMappingStartNeedsBearingRef = useRef(false);
+  const gpsMappingTrackIdRef = useRef<string>('');
 
   useEffect(() => {
     let alive = true;
@@ -488,7 +557,19 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   }, [isActive, velPrefs.useDeviceImu, screen]);
 
   useEffect(() => {
-    if (!isActive || (!isRecording && stageState !== 'running' && stageState !== 'armed')) {
+    if (!gpsMappingOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [gpsMappingOpen]);
+
+  useEffect(() => {
+    if (
+      !isActive ||
+      (!isRecording && stageState !== 'running' && stageState !== 'armed' && !gpsMappingOpen)
+    ) {
       if (wakeLockRef.current) {
         wakeLockRef.current.release().catch(() => {});
         wakeLockRef.current = null;
@@ -511,7 +592,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         wakeLockRef.current = null;
       }
     };
-  }, [isActive, isRecording, stageState]);
+  }, [isActive, isRecording, stageState, gpsMappingOpen]);
 
   const activeTrack = useMemo(
     () => tracks.find((t) => t.id === activeTrackId) ?? null,
@@ -789,7 +870,18 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       setGpsError(null);
       setSpeedKmh(resolvedSpeedKmh);
       if (resolvedHeading !== null) {
-        setHeadingDeg(Math.round(resolvedHeading));
+        const roundedH = Math.round(resolvedHeading);
+        setHeadingDeg(roundedH);
+        if (resolvedSpeedKmh >= 2) {
+          lastValidHeadingRef.current = roundedH;
+        }
+      }
+      if (source === 'gps' || source === 'ble_gps') {
+        const nowSave = Date.now();
+        if (nowSave - lastSavedGpsAtRef.current >= 2500) {
+          lastSavedGpsAtRef.current = nowSave;
+          saveLastGpsPos(resolvedLat, resolvedLon);
+        }
       }
 
       // Auto-detecção exclusiva pela Largada (raio 35m) + Auto-armar (WAITING FOR START)
@@ -918,13 +1010,19 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               currentSplitTimesRef.current = {};
               liveSamplesRef.current = [];
 
+              const startSpeedKmh = prev.speedKmh + hit.t * (resolvedSpeedKmh - prev.speedKmh);
+              const startAltM =
+                prev.altitudeM !== null && fix.altitudeM !== null
+                  ? prev.altitudeM + hit.t * (fix.altitudeM - prev.altitudeM)
+                  : fix.altitudeM;
+
               seededStartSample = {
                 lat: hit.crossLat,
                 lon: hit.crossLon,
-                speedKmh: resolvedSpeedKmh,
+                speedKmh: startSpeedKmh,
                 accuracyM: fix.accuracyM,
                 headingDeg: resolvedHeading,
-                altitudeM: fix.altitudeM,
+                altitudeM: startAltM,
                 timestampMs: hit.crossTimestampMs,
                 distKm: 0,
                 stageElapsedMs: 0,
@@ -986,23 +1084,37 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 currentSplitTimesRef.current = { ...updatedSplits };
                 setCurrentSplitTimesMs({ ...updatedSplits });
 
-                const preCrossDistKm =
-                  totalDistRef.current -
-                  (haversineMetersVel(hit.crossLat, hit.crossLon, resolvedLat, resolvedLon) / 1000) *
-                    calFactorRef.current;
-                const finishDistKm = Math.max(0, preCrossDistKm);
+                const prevLast =
+                  liveSamplesRef.current[liveSamplesRef.current.length - 1] ?? prev;
+                const segToCrossKm =
+                  (haversineMetersVel(prevLast.lat, prevLast.lon, hit.crossLat, hit.crossLon) /
+                    1000) *
+                  calFactorRef.current;
+                const finishDistKm = Math.max(prevLast.distKm, prevLast.distKm + segToCrossKm);
+                const crossSpeedKmh =
+                  prev.speedKmh + hit.t * (resolvedSpeedKmh - prev.speedKmh);
+                const crossAltM =
+                  prev.altitudeM !== null && fix.altitudeM !== null
+                    ? prev.altitudeM + hit.t * (fix.altitudeM - prev.altitudeM)
+                    : fix.altitudeM;
                 const finishBoundarySample: VelocitySample = {
                   lat: hit.crossLat,
                   lon: hit.crossLon,
-                  speedKmh: resolvedSpeedKmh,
+                  speedKmh: crossSpeedKmh,
                   accuracyM: fix.accuracyM,
                   headingDeg: resolvedHeading,
-                  altitudeM: fix.altitudeM,
+                  altitudeM: crossAltM,
                   timestampMs: hit.crossTimestampMs,
                   distKm: finishDistKm,
                   stageElapsedMs: lapMs,
-                  accelLongG,
-                  accelLatG,
+                  accelLongG:
+                    typeof prev.accelLongG === 'number'
+                      ? Number((prev.accelLongG + hit.t * (accelLongG - prev.accelLongG)).toFixed(2))
+                      : accelLongG,
+                  accelLatG:
+                    typeof prev.accelLatG === 'number'
+                      ? Number((prev.accelLatG + hit.t * (accelLatG - prev.accelLatG)).toFixed(2))
+                      : accelLatG,
                 };
                 const lapSamples = [...liveSamplesRef.current, finishBoundarySample];
 
@@ -1035,23 +1147,37 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 currentSplitTimesRef.current = { ...updatedSplits };
                 setCurrentSplitTimesMs({ ...updatedSplits });
 
-                const preCrossDistKm =
-                  totalDistRef.current -
-                  (haversineMetersVel(hit.crossLat, hit.crossLon, resolvedLat, resolvedLon) / 1000) *
-                    calFactorRef.current;
-                const finishDistKm = Math.max(0, preCrossDistKm);
+                const prevLast =
+                  liveSamplesRef.current[liveSamplesRef.current.length - 1] ?? prev;
+                const segToCrossKm =
+                  (haversineMetersVel(prevLast.lat, prevLast.lon, hit.crossLat, hit.crossLon) /
+                    1000) *
+                  calFactorRef.current;
+                const finishDistKm = Math.max(prevLast.distKm, prevLast.distKm + segToCrossKm);
+                const crossSpeedKmh =
+                  prev.speedKmh + hit.t * (resolvedSpeedKmh - prev.speedKmh);
+                const crossAltM =
+                  prev.altitudeM !== null && fix.altitudeM !== null
+                    ? prev.altitudeM + hit.t * (fix.altitudeM - prev.altitudeM)
+                    : fix.altitudeM;
                 const finishBoundarySample: VelocitySample = {
                   lat: hit.crossLat,
                   lon: hit.crossLon,
-                  speedKmh: resolvedSpeedKmh,
+                  speedKmh: crossSpeedKmh,
                   accuracyM: fix.accuracyM,
                   headingDeg: resolvedHeading,
-                  altitudeM: fix.altitudeM,
+                  altitudeM: crossAltM,
                   timestampMs: hit.crossTimestampMs,
                   distKm: finishDistKm,
                   stageElapsedMs: finMs,
-                  accelLongG,
-                  accelLatG,
+                  accelLongG:
+                    typeof prev.accelLongG === 'number'
+                      ? Number((prev.accelLongG + hit.t * (accelLongG - prev.accelLongG)).toFixed(2))
+                      : accelLongG,
+                  accelLatG:
+                    typeof prev.accelLatG === 'number'
+                      ? Number((prev.accelLatG + hit.t * (accelLatG - prev.accelLatG)).toFixed(2))
+                      : accelLatG,
                 };
                 const finSamples = [...liveSamplesRef.current, finishBoundarySample];
 
@@ -1105,6 +1231,74 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             liveSamplesRef.current = nextArr;
             return nextArr;
           });
+        }
+      }
+
+      if (gpsMappingOpenRef.current && gpsMappingPhaseRef.current === 'recording') {
+        const currMapTrace = gpsMappingTraceRef.current;
+        const lastMapPt = currMapTrace[currMapTrace.length - 1];
+        const stepM = lastMapPt
+          ? haversineMetersVel(lastMapPt.lat, lastMapPt.lon, resolvedLat, resolvedLon)
+          : 0;
+        if (!lastMapPt || (stepM >= 2 && stepM < 500)) {
+          const nextMapDistKm = lastMapPt ? lastMapPt.distKm + stepM / 1000 : 0;
+          const mapElapsedMs = lastMapPt
+            ? Math.max(0, fix.timestampMs - currMapTrace[0].timestampMs)
+            : 0;
+          const ptHeading =
+            resolvedHeading !== null
+              ? resolvedHeading
+              : lastMapPt && stepM >= 2
+                ? Math.round(bearingBetweenDeg(lastMapPt.lat, lastMapPt.lon, resolvedLat, resolvedLon))
+                : null;
+          const mapSample: VelocitySample = {
+            lat: resolvedLat,
+            lon: resolvedLon,
+            speedKmh: resolvedSpeedKmh,
+            accuracyM: fix.accuracyM,
+            headingDeg: ptHeading,
+            altitudeM: fix.altitudeM,
+            timestampMs: fix.timestampMs,
+            distKm: nextMapDistKm,
+            stageElapsedMs: mapElapsedMs,
+            accelLongG,
+            accelLatG,
+          };
+          const updatedTrace = [...currMapTrace, mapSample];
+          gpsMappingTraceRef.current = updatedTrace;
+          setGpsMappingTrace(updatedTrace);
+
+          if (
+            gpsMappingStartNeedsBearingRef.current &&
+            nextMapDistKm >= 0.012 &&
+            updatedTrace.length >= 2 &&
+            gpsMappingTrackIdRef.current
+          ) {
+            gpsMappingStartNeedsBearingRef.current = false;
+            const autoBearing = Math.round(
+              bearingBetweenDeg(
+                updatedTrace[0].lat,
+                updatedTrace[0].lon,
+                resolvedLat,
+                resolvedLon
+              )
+            );
+            const targetId = gpsMappingTrackIdRef.current;
+            setTracks((prev) =>
+              prev.map((t) =>
+                t.id === targetId
+                  ? {
+                      ...t,
+                      traps: t.traps.map((tr) =>
+                        tr.kind === 'start'
+                          ? { ...tr, bearingDeg: autoBearing, unidirectional: true }
+                          : tr
+                      ),
+                    }
+                  : t
+              )
+            );
+          }
         }
       }
     },
@@ -1449,11 +1643,91 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       const target = tracksRef.current.find((t) => t.id === trackId);
       if (!target) return;
       const updatedTrack = updater(target);
+      tracksRef.current = tracksRef.current.map((t) =>
+        t.id === trackId ? updatedTrack : t
+      );
       setTracks((prev) => prev.map((t) => (t.id === trackId ? updatedTrack : t)));
       setRuns((prevRuns) => recalculateRunsForTrack(updatedTrack, prevRuns));
     },
     []
   );
+
+  const requestImmediateGpsPosition = useCallback(async (): Promise<{
+    lat: number;
+    lon: number;
+  } | null> => {
+    if (source === 'simulator' || source === 'ble_gps') {
+      return currentPosRef.current;
+    }
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const perm = await Geolocation.requestPermissions().catch(() => null);
+        if (perm && perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+          return currentPosRef.current;
+        }
+        const pos = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 6000,
+          maximumAge: 3000,
+        });
+        const coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        setCurrentPos(coords);
+        setGpsActive(true);
+        setGpsError(null);
+        if (pos.coords.accuracy !== null && Number.isFinite(pos.coords.accuracy)) {
+          setGpsAccuracyM(Math.round(pos.coords.accuracy));
+        }
+        if (pos.coords.heading !== null && Number.isFinite(pos.coords.heading)) {
+          const h = Math.round(pos.coords.heading);
+          setHeadingDeg(h);
+          lastValidHeadingRef.current = h;
+        }
+        if (pos.coords.altitude !== null && Number.isFinite(pos.coords.altitude)) {
+          setAltitudeM(Math.round(pos.coords.altitude));
+        }
+        saveLastGpsPos(coords.lat, coords.lon);
+        return coords;
+      }
+
+      if ('geolocation' in navigator) {
+        return await new Promise<{ lat: number; lon: number } | null>((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              const coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+              setCurrentPos(coords);
+              setGpsActive(true);
+              setGpsError(null);
+              if (pos.coords.accuracy !== null && Number.isFinite(pos.coords.accuracy)) {
+                setGpsAccuracyM(Math.round(pos.coords.accuracy));
+              }
+              if (pos.coords.heading !== null && Number.isFinite(pos.coords.heading)) {
+                const h = Math.round(pos.coords.heading);
+                setHeadingDeg(h);
+                lastValidHeadingRef.current = h;
+              }
+              if (pos.coords.altitude !== null && Number.isFinite(pos.coords.altitude)) {
+                setAltitudeM(Math.round(pos.coords.altitude));
+              }
+              saveLastGpsPos(coords.lat, coords.lon);
+              resolve(coords);
+            },
+            () => resolve(currentPosRef.current),
+            { enableHighAccuracy: true, timeout: 6000, maximumAge: 3000 }
+          );
+        });
+      }
+    } catch {
+      // Ignore geolocation lookup failure
+    }
+    return currentPosRef.current;
+  }, [source]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    if ((screen === 'track-editor' || gpsMappingOpen) && source === 'gps') {
+      void requestImmediateGpsPosition();
+    }
+  }, [isActive, screen, gpsMappingOpen, source, requestImmediateGpsPosition]);
 
   const handleCreateNewTrack = () => {
     const name = newTrackName.trim() || `Pista ${tracks.length + 1}`;
@@ -1481,6 +1755,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     setPlacementKind(newTrackMode === 'circuit' ? 'start_finish' : 'start');
     setSelectedTrapId(null);
     setScreen('track-editor');
+    void requestImmediateGpsPosition();
     showToast(`Pista "${name}" aberta no mapa.`);
   };
 
@@ -1607,7 +1882,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     if (!pos) {
       setPlacementKind(kind);
       setScreen('track-editor');
-      showToast('Sem GPS: toque no mapa satélite para posicionar o Marco.');
+      showToast('Sem GPS: segure 0,4s no mapa satélite para posicionar o Marco.');
       return;
     }
 
@@ -1806,6 +2081,292 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     showToast(`Pista "${savedTrack.name}" salva (${savedTrack.traps.length} marcos)!`);
   };
 
+  const triggerMappingFeedback = useCallback((msg: string) => {
+    try {
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate([45, 25, 45]);
+      }
+    } catch {
+      // Ignore vibration errors
+    }
+    setGpsMappingPulse(msg);
+    window.setTimeout(() => {
+      setGpsMappingPulse((curr) => (curr === msg ? null : curr));
+    }, 2600);
+  }, []);
+
+  const ensureMappingTrack = useCallback((): VelocityTrack => {
+    const existing =
+      tracksRef.current.find((t) => t.id === gpsMappingTrackIdRef.current) ?? activeTrack;
+    if (existing) {
+      gpsMappingTrackIdRef.current = existing.id;
+      return existing;
+    }
+    const cleanName = mapTrackNameDraft.trim() || `Especial ${tracksRef.current.length + 1}`;
+    const created: VelocityTrack = {
+      id: `trk_${Date.now()}`,
+      name: cleanName,
+      mode: 'point-to-point',
+      traps: [],
+      createdAtMs: Date.now(),
+      referenceDistanceKm: 0,
+    };
+    const nextTracks = [created, ...tracksRef.current];
+    tracksRef.current = nextTracks;
+    setTracks(nextTracks);
+    setActiveTrackId(created.id);
+    setUserPickedTrackManually(true);
+    gpsMappingTrackIdRef.current = created.id;
+    return created;
+  }, [activeTrack, mapTrackNameDraft]);
+
+  const resolveMappingBearing = useCallback(
+    (lat: number, lon: number): { bearing: number; stationaryFallback: boolean } => {
+      if (headingDeg !== null && speedKmh >= 2) {
+        return { bearing: headingDeg, stationaryFallback: false };
+      }
+      const trace = gpsMappingTraceRef.current;
+      for (let i = trace.length - 1; i >= 0; i -= 1) {
+        const pt = trace[i];
+        const d = haversineMetersVel(pt.lat, pt.lon, lat, lon);
+        if (d >= 5) {
+          return {
+            bearing: Math.round(bearingBetweenDeg(pt.lat, pt.lon, lat, lon)),
+            stationaryFallback: false,
+          };
+        }
+      }
+      if (lastValidHeadingRef.current !== null) {
+        return { bearing: lastValidHeadingRef.current, stationaryFallback: false };
+      }
+      return { bearing: 0, stationaryFallback: true };
+    },
+    [headingDeg, speedKmh]
+  );
+
+  const handleOpenGpsMapping = () => {
+    const track = ensureMappingTrack();
+    gpsMappingTrackIdRef.current = track.id;
+    gpsMappingStartNeedsBearingRef.current = false;
+    gpsMappingTraceRef.current = [];
+    setGpsMappingTrace([]);
+    setGpsMappingPhase('ready');
+    setGpsMappingPulse(null);
+    setPlacementKind(null);
+    setGpsMappingOpen(true);
+    void requestImmediateGpsPosition();
+  };
+
+  const handleMappingMarkStart = async () => {
+    const pos = currentPosRef.current ?? (await requestImmediateGpsPosition());
+    if (!pos) {
+      triggerMappingFeedback('Aguardando sinal GPS...');
+      showToast('Aguardando sinal GPS para marcar a Largada.');
+      return;
+    }
+    const track = ensureMappingTrack();
+    const { bearing, stationaryFallback } = resolveMappingBearing(pos.lat, pos.lon);
+    gpsMappingStartNeedsBearingRef.current = stationaryFallback;
+
+    const nowMs = Date.now();
+    const startSample: VelocitySample = {
+      lat: pos.lat,
+      lon: pos.lon,
+      speedKmh,
+      accuracyM: gpsAccuracyM,
+      headingDeg: stationaryFallback ? null : bearing,
+      altitudeM,
+      timestampMs: nowMs,
+      distKm: 0,
+      stageElapsedMs: 0,
+    };
+
+    const startTrap: VelocityTrap = {
+      id: `trap_start_${nowMs}`,
+      name: 'Largada (Start)',
+      kind: 'start',
+      lat: pos.lat,
+      lon: pos.lon,
+      bearingDeg: bearing,
+      widthM: newTrapWidthM,
+      unidirectional: true,
+    };
+
+    applyTrackUpdateAndRecalc(track.id, (t) => ({
+      ...t,
+      mode: 'point-to-point',
+      traps: [startTrap],
+      baseTrace: undefined,
+      referenceDistanceKm: 0,
+    }));
+    setSelectedTrapId(startTrap.id);
+    gpsMappingTraceRef.current = [startSample];
+    setGpsMappingTrace([startSample]);
+    setGpsMappingPhase('recording');
+    triggerMappingFeedback(`Largada (L) marcada · ${bearing.toFixed(0)}°`);
+  };
+
+  const handleMappingMarkSplit = async () => {
+    const pos = currentPosRef.current ?? (await requestImmediateGpsPosition());
+    if (!pos) {
+      triggerMappingFeedback('Aguardando sinal GPS...');
+      return;
+    }
+    const track = ensureMappingTrack();
+    const { bearing } = resolveMappingBearing(pos.lat, pos.lon);
+    const nowMs = Date.now();
+
+    const currTrace = gpsMappingTraceRef.current;
+    const lastPt = currTrace[currTrace.length - 1];
+    const stepM = lastPt ? haversineMetersVel(lastPt.lat, lastPt.lon, pos.lat, pos.lon) : 0;
+    if (!lastPt || stepM >= 1) {
+      const nextDist = lastPt ? lastPt.distKm + stepM / 1000 : 0;
+      const elapsed = lastPt ? Math.max(0, nowMs - currTrace[0].timestampMs) : 0;
+      const splitSample: VelocitySample = {
+        lat: pos.lat,
+        lon: pos.lon,
+        speedKmh,
+        accuracyM: gpsAccuracyM,
+        headingDeg: bearing,
+        altitudeM,
+        timestampMs: nowMs,
+        distKm: nextDist,
+        stageElapsedMs: elapsed,
+      };
+      const updated = [...currTrace, splitSample];
+      gpsMappingTraceRef.current = updated;
+      setGpsMappingTrace(updated);
+    }
+
+    const splitCount = track.traps.filter((t) => t.kind === 'split').length;
+    const nextNum = splitCount + 1;
+    const splitTrap: VelocityTrap = {
+      id: `trap_split_${nowMs}_${nextNum}`,
+      name: `Parcial ${nextNum}`,
+      kind: 'split',
+      lat: pos.lat,
+      lon: pos.lon,
+      bearingDeg: bearing,
+      widthM: newTrapWidthM,
+      unidirectional: true,
+    };
+
+    applyTrackUpdateAndRecalc(track.id, (t) => ({
+      ...t,
+      traps: [...t.traps, splitTrap],
+    }));
+    setSelectedTrapId(splitTrap.id);
+    triggerMappingFeedback(`Parcial P${nextNum} marcada!`);
+  };
+
+  const handleMappingMarkFinish = async () => {
+    const pos = currentPosRef.current ?? (await requestImmediateGpsPosition());
+    if (!pos) {
+      triggerMappingFeedback('Aguardando sinal GPS...');
+      return;
+    }
+    const track = ensureMappingTrack();
+    const { bearing } = resolveMappingBearing(pos.lat, pos.lon);
+    const nowMs = Date.now();
+
+    const currTrace = gpsMappingTraceRef.current;
+    const lastPt = currTrace[currTrace.length - 1];
+    const stepM = lastPt ? haversineMetersVel(lastPt.lat, lastPt.lon, pos.lat, pos.lon) : 0;
+    let finalTrace = currTrace;
+    if (!lastPt || stepM >= 0.5) {
+      const nextDist = lastPt ? lastPt.distKm + stepM / 1000 : 0;
+      const elapsed = lastPt ? Math.max(0, nowMs - currTrace[0].timestampMs) : 0;
+      const finishSample: VelocitySample = {
+        lat: pos.lat,
+        lon: pos.lon,
+        speedKmh,
+        accuracyM: gpsAccuracyM,
+        headingDeg: bearing,
+        altitudeM,
+        timestampMs: nowMs,
+        distKm: nextDist,
+        stageElapsedMs: elapsed,
+      };
+      finalTrace = [...currTrace, finishSample];
+      gpsMappingTraceRef.current = finalTrace;
+      setGpsMappingTrace(finalTrace);
+    }
+
+    const traceDistKm =
+      finalTrace.length > 1
+        ? Number(finalTrace[finalTrace.length - 1].distKm.toFixed(3))
+        : 0;
+
+    const finishTrap: VelocityTrap = {
+      id: `trap_finish_${nowMs}`,
+      name: 'Chegada (Finish)',
+      kind: 'finish',
+      lat: pos.lat,
+      lon: pos.lon,
+      bearingDeg: bearing,
+      widthM: newTrapWidthM,
+      unidirectional: true,
+    };
+
+    applyTrackUpdateAndRecalc(track.id, (t) => ({
+      ...t,
+      mode: 'point-to-point',
+      traps: [...t.traps.filter((tr) => tr.kind !== 'finish'), finishTrap],
+      baseTrace: finalTrace.length > 1 ? finalTrace : t.baseTrace,
+      referenceDistanceKm: traceDistKm > 0 ? traceDistKm : t.referenceDistanceKm,
+    }));
+    setSelectedTrapId(finishTrap.id);
+    setGpsMappingPhase('finished');
+    triggerMappingFeedback(
+      `Chegada (C) marcada! ${traceDistKm > 0 ? `${traceDistKm.toFixed(2)} km` : ''}`
+    );
+  };
+
+  const handleMappingSaveTrack = async (closeAfterSave = false) => {
+    const track = ensureMappingTrack();
+    const cleanName = mapTrackNameDraft.trim() || track.name || `Especial ${tracks.length}`;
+    const mappedTrace = gpsMappingTraceRef.current;
+    let computedDistKm = track.referenceDistanceKm;
+    if (mappedTrace.length > 1) {
+      computedDistKm = Number(mappedTrace[mappedTrace.length - 1].distKm.toFixed(3));
+    } else if (track.traps.length >= 2) {
+      const ordered = getOrderedTrackTraps(track);
+      let sumM = 0;
+      for (let i = 1; i < ordered.length; i += 1) {
+        sumM += haversineMetersVel(
+          ordered[i - 1].lat,
+          ordered[i - 1].lon,
+          ordered[i].lat,
+          ordered[i].lon
+        );
+      }
+      computedDistKm = Number((sumM / 1000).toFixed(3));
+    }
+
+    const savedTrack: VelocityTrack = {
+      ...track,
+      name: cleanName,
+      referenceDistanceKm: computedDistKm,
+      baseTrace: mappedTrace.length > 1 ? mappedTrace : track.baseTrace,
+    };
+
+    const nextTracks = tracksRef.current.map((t) =>
+      t.id === savedTrack.id ? savedTrack : t
+    );
+    tracksRef.current = nextTracks;
+    setTracks(nextTracks);
+    await persistVelocityTracks(nextTracks);
+    saveActiveVelocityTrackId(savedTrack.id);
+
+    setJustSavedTrack(true);
+    window.setTimeout(() => setJustSavedTrack(false), 2200);
+    triggerMappingFeedback(`Pista "${cleanName}" salva!`);
+    showToast(`Pista "${cleanName}" salva (${savedTrack.traps.length} marcos)!`);
+    if (closeAfterSave) {
+      setGpsMappingOpen(false);
+    }
+  };
+
   const handleDuplicateTrack = (track: VelocityTrack) => {
     const copyId = `trk_${Date.now()}`;
     const copyName = `${track.name} (Cópia)`;
@@ -1852,10 +2413,29 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
   const handleImportGeoFile = async (file: File) => {
     try {
-      const parsedRaw = await parseTrackFileToTrack(file);
-      const parsed = ensureAutoTrapsFromBaseTrace(parsedRaw);
-      setTracks((prev) => [parsed, ...prev]);
-      setActiveTrackId(parsed.id);
+      const geoResult = await parseTrackFileToGeoResult(file);
+      if (geoResult.tracks.length === 0) {
+        if (geoResult.waypoints.length > 0) {
+          const wpNames = formatImportedTrackNamesList(
+            geoResult.waypoints.map((w) => w.name)
+          );
+          showToast(
+            `Arquivo contém apenas ponto(s) de interesse (${wpNames}) sem traçado de especial.`
+          );
+          return;
+        }
+        throw new Error('Nenhuma especial válida encontrada no arquivo.');
+      }
+
+      const importedTracks: VelocityTrack[] = geoResult.tracks.map((trk) => {
+        const withTraps = ensureAutoTrapsFromBaseTrace(trk);
+        return geoResult.waypoints.length > 0 && !withTraps.waypoints
+          ? { ...withTraps, waypoints: geoResult.waypoints }
+          : withTraps;
+      });
+
+      setTracks((prev) => [...importedTracks, ...prev]);
+      setActiveTrackId(importedTracks[0].id);
       setUserPickedTrackManually(true);
       finishGateArmedRef.current = false;
       stageStateRef.current = 'idle';
@@ -1864,10 +2444,24 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       setStageStartMs(null);
       setLastFinishedMs(null);
       setCurrentSplitTimesMs({});
-      setScreen('track-editor');
-      showToast(
-        `Pista "${parsed.name}" importada (${parsed.referenceDistanceKm.toFixed(2)} km · ${parsed.traps.length} traps)!`
-      );
+
+      if (importedTracks.length >= 2) {
+        const namesList = formatImportedTrackNamesList(
+          importedTracks.map((t) => formatCleanTrackName(t.name))
+        );
+        const wpSuffix =
+          geoResult.waypoints.length > 0
+            ? ` · ${geoResult.waypoints.length} ponto${geoResult.waypoints.length > 1 ? 's' : ''} no mapa`
+            : '';
+        setScreen('tracks');
+        showToast(`${importedTracks.length} especiais importadas: ${namesList}${wpSuffix}`);
+      } else {
+        const single = importedTracks[0];
+        setScreen('track-editor');
+        showToast(
+          `Especial "${formatCleanTrackName(single.name)}" importada (${single.referenceDistanceKm.toFixed(2)} km · ${single.traps.length} marcos)!`
+        );
+      }
     } catch (err) {
       const detail = err instanceof Error ? err.message : '';
       showToast(
@@ -2982,66 +3576,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
 
   return (
     <div className="space-y-3">
-      {/* Compact Top Bar inside Velocidade (hidden in full-viewport fixed Live Cockpit) */}
-      {screen !== 'live' && (
-        screen === 'home' ? (
-          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[var(--ps-text)] shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="inline-flex items-center gap-1.5 font-mono text-[11px] font-bold tabular-nums">
-                {source === 'ble_gps' ? (
-                  <Bluetooth
-                    className={`h-3.5 w-3.5 ${
-                      gpsActive || extGps.connected
-                        ? 'text-[var(--ps-emerald)]'
-                        : 'text-[var(--ps-muted)]'
-                    }`}
-                  />
-                ) : (
-                  <Satellite
-                    className={`h-3.5 w-3.5 ${
-                      source === 'simulator'
-                        ? 'text-[var(--ps-amber)]'
-                        : gpsActive
-                          ? 'text-[var(--ps-emerald)]'
-                          : 'text-[var(--ps-muted)]'
-                    }`}
-                  />
-                )}
-                <span className="text-[var(--ps-text)]">{gpsStatusLabel}</span>
-                {zeroSpeedLocked && gpsActive && (
-                  <span
-                    title="Zero-Speed Anti-Drift Lock (< 2,0 km/h)"
-                    className="rounded border border-amber-500/40 bg-amber-500/15 px-1 py-0.2 text-[9px] font-black text-amber-400 uppercase"
-                  >
-                    LOCK 0.0
-                  </span>
-                )}
-              </div>
-
-              {(statusFeedback || gpsError || wakeLockActive) && (
-                <div className="flex items-center gap-2 font-mono text-[10px]">
-                  {(statusFeedback || gpsError) && (
-                    <span
-                      className={
-                        gpsError && !statusFeedback
-                          ? 'text-[var(--ps-amber)]'
-                          : 'text-[var(--ps-emerald)] font-semibold'
-                      }
-                    >
-                      {statusFeedback || gpsError}
-                    </span>
-                  )}
-                  {wakeLockActive && (
-                    <span className="text-[var(--ps-muted)] whitespace-nowrap">
-                      Tela Ativa
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
-        ) : (
-          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[var(--ps-text)] shadow-lg">
+      {/* Compact Top Bar inside Velocidade (hidden in home & full-viewport fixed Live Cockpit) */}
+      {screen !== 'live' && screen !== 'home' && (
+        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[var(--ps-text)] shadow-lg">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <button
@@ -3083,7 +3620,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               </div>
             </div>
 
-            {(statusFeedback || gpsError) && (
+            {(statusFeedback || (gpsError && screen !== 'track-editor')) && (
               <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-1.5 text-xs">
                 <span
                   className={
@@ -3102,7 +3639,6 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
               </div>
             )}
           </section>
-        )
       )}
 
       {/* SCREEN: HOME (Clean RaceChrono + Rally Hub — No Map clutter) */}
@@ -3275,26 +3811,17 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             )}
           </div>
 
-          {/* Centerpiece Circular RaceChrono START Button */}
-          <div className="flex flex-col items-center justify-center py-3 sm:py-5 gap-3">
-            <button
-              type="button"
-              onClick={handleStartOrArmStage}
-              className="pitstop-btn-red group relative flex h-36 w-36 flex-col items-center justify-center rounded-full border-4 border-[var(--ps-border-strong)] shadow-xl transition-transform active:scale-95 hover:scale-[1.03] sm:h-40 sm:w-40"
-            >
-              {!isPro && (
-                <span className="absolute -top-2 rounded-md border border-amber-500/60 bg-[var(--ps-card-deep)] px-2 py-0.5 font-mono text-[10px] font-black text-[var(--ps-amber)] shadow">
-                  PRO
-                </span>
-              )}
-              <span className="font-['Barlow_Condensed'] text-4xl font-black tracking-wider uppercase drop-shadow">
-                START
-              </span>
-              <span className="mt-0.5 font-mono text-[10px] font-bold tracking-widest opacity-85 uppercase">
-                {activeTrack ? 'Armar Especial' : 'Especial Livre'}
-              </span>
-            </button>
-          </div>
+          {/* Centerpiece Circular Tachometer Launch Button */}
+          <VelocityStartTachButton
+            onConfirm={handleStartOrArmStage}
+            sweepTrigger={tachSweepTrigger}
+            isPro={isPro}
+            subtitle={activeTrack ? 'ARMAR ESPECIAL' : 'ESPECIAL LIVRE'}
+            gpsSignalOk={
+              source === 'simulator' ||
+              (gpsActive && (gpsAccuracyM === null || gpsAccuracyM <= 25))
+            }
+          />
 
           {/* Primary 2 Buttons matching RaceChrono: Sessões & Pistas */}
           <div className="grid grid-cols-2 gap-3">
@@ -3751,6 +4278,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             lapNumber={trackRuns.length + 1}
             liveSamples={liveSamples}
             liveMapTrace={liveMapTrace}
+            guideTrace={activeTrack?.baseTrace}
             currentPos={currentPos}
             headingDeg={headingDeg}
             liveHeadingUp={liveHeadingUp}
@@ -4179,8 +4707,15 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       ) : (
                         <div>
                           <div className="flex items-start justify-between gap-2">
-                            <p className="font-bold text-sm text-[var(--ps-text)] leading-tight">
-                              {formatCleanTrackName(tr.name)}
+                            <p className="flex items-center gap-1.5 font-bold text-sm text-[var(--ps-text)] leading-tight">
+                              {tr.color && (
+                                <span
+                                  aria-hidden="true"
+                                  className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-white/40"
+                                  style={{ backgroundColor: tr.color }}
+                                />
+                              )}
+                              <span>{formatCleanTrackName(tr.name)}</span>
                             </p>
                             {isAct && (
                               <span className="font-mono text-[10px] font-extrabold text-[var(--ps-accent)] uppercase shrink-0">
@@ -4188,9 +4723,17 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                               </span>
                             )}
                           </div>
+                          {(() => {
+                            const cleanKmDesc = extractTrackKmOnlyDescription(tr.description);
+                            return cleanKmDesc ? (
+                              <p className="mt-0.5 text-[11px] font-medium text-[var(--ps-amber)] leading-snug">
+                                {cleanKmDesc}
+                              </p>
+                            ) : null;
+                          })()}
                           <p className="mt-1 font-mono text-[11px] text-[var(--ps-muted)]">
                             {tr.mode === 'circuit' ? 'Circuito' : 'Especial'} ·{' '}
-                            {tr.traps.length} traps · {tr.referenceDistanceKm.toFixed(2)} km ·{' '}
+                            {tr.traps.length} marcos · {tr.referenceDistanceKm.toFixed(2)} km ·{' '}
                             {passCount} voltas
                           </p>
                         </div>
@@ -4244,7 +4787,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteTrack(tr.id)}
+                          onClick={() => setPendingDeleteTrack(tr)}
                           className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] hover:bg-red-500/15 hover:text-red-500"
                           aria-label={`Excluir ${tr.name}`}
                           title="Excluir"
@@ -4280,22 +4823,33 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         };
 
         return (
-          <section className="space-y-3">
-            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5 sm:p-3 space-y-2">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-1 items-center gap-2 min-w-0">
+          <section className="space-y-2">
+            <div className="overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] shadow-xl">
+              {/* Controles Compactos em 3 Linhas Finas Acima do Mapa */}
+              <div className="border-b border-[var(--ps-border)] bg-[var(--ps-card)] px-2.5 py-2 space-y-1.5">
+                {/* Linha 1: Input compacto + Via GPS + Salvar na mesma linha */}
+                <div className="flex items-center gap-1.5">
                   <input
                     type="text"
                     value={mapTrackNameDraft}
                     onChange={(e) => setMapTrackNameDraft(e.target.value)}
-                    placeholder="Nome da pista (ex: SS-01 Erechim)"
+                    placeholder="Nome da pista (ex: SS-01 Serra Velha)"
                     aria-label="Nome da pista"
-                    className="min-h-[40px] min-w-0 flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none sm:text-sm"
+                    className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                   />
                   <button
                     type="button"
+                    onClick={handleOpenGpsMapping}
+                    className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg bg-emerald-600 px-3 text-xs font-extrabold text-white transition hover:bg-emerald-500 active:scale-[0.98]"
+                    title="Mapear pista dirigindo via GPS em tela cheia"
+                  >
+                    <Navigation className="h-3.5 w-3.5 shrink-0" />
+                    <span>Via GPS</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleSaveCurrentTrackToLibrary}
-                    className={`inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg px-3.5 text-xs font-extrabold uppercase transition-colors ${
+                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-3 text-xs font-extrabold uppercase transition-colors ${
                       justSavedTrack
                         ? 'bg-emerald-600 text-white'
                         : 'pitstop-btn-red'
@@ -4303,105 +4857,82 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   >
                     {justSavedTrack ? (
                       <>
-                        <Check className="h-4 w-4" />
+                        <Check className="h-3.5 w-3.5" />
                         <span>Salva</span>
                       </>
                     ) : (
                       <>
-                        <Save className="h-4 w-4" />
-                        <span>Salvar Pista</span>
+                        <Save className="h-3.5 w-3.5" />
+                        <span>Salvar</span>
                       </>
                     )}
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-[var(--ps-muted)]">
-                  <span className={trackTrapSummary.hasStart ? 'text-[var(--ps-emerald)] font-bold' : ''}>
-                    {trackTrapSummary.hasStart ? '✓ Largada' : '○ Largada'}
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span className={trackTrapSummary.splitsCount > 0 ? 'text-[var(--ps-amber)] font-bold' : ''}>
-                    Parciais ({trackTrapSummary.splitsCount})
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span className={trackTrapSummary.hasFinish ? 'text-[#FF4D47] font-bold' : ''}>
-                    {trackTrapSummary.hasFinish ? '✓ Chegada' : '○ Chegada'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="overflow-hidden rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] shadow-xl">
-              <div className="border-b border-[var(--ps-border)] bg-[var(--ps-card)] px-3 py-2.5 space-y-2.5">
-                <div>
-                  <div className="flex items-center justify-between text-xs font-bold">
-                    <span className="text-[var(--ps-text)]">Deslize para girar</span>
-                    <div className="flex items-center gap-1.5">
-                      {selectedTrap && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleRotateTrap(selectedTrap.id, -5)}
-                            className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-                            aria-label="Girar -5 graus"
-                          >
-                            -5°
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRotateTrap(selectedTrap.id, 5)}
-                            className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-                            aria-label="Girar +5 graus"
-                          >
-                            +5°
-                          </button>
-                        </>
-                      )}
-                      <span className="font-mono text-sm font-black text-[var(--ps-amber)] tabular-nums">
-                        {activeBearing.toFixed(1).replace('.', ',')} °
-                      </span>
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={360}
-                    step={0.5}
-                    value={activeBearing}
-                    aria-label="Deslize para girar o Marco"
-                    onChange={(e) => {
-                      const val = Number(e.target.value) % 360;
-                      setDraftBearingDeg(val);
-                      if (selectedTrap) {
-                        handleUpdateTrapProps(selectedTrap.id, { bearingDeg: val });
-                      }
-                    }}
-                    className="mt-1.5 h-6 w-full cursor-pointer accent-lime-500"
-                  />
+                {/* Linha 2: Barra segmentada fina de tipo de marco (h-8) */}
+                <div className="grid grid-cols-4 gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
+                  {(
+                    [
+                      ['start', 'Largada', 'text-[var(--ps-emerald)]'],
+                      ['finish', 'Chegada', 'text-red-500'],
+                      ['start_finish', 'Larg/Cheg', 'text-sky-500'],
+                      ['split', 'Parcial', 'text-[var(--ps-amber)]'],
+                    ] as const
+                  ).map(([kindVal, label, tone]) => {
+                    const isAct = activeKind === kindVal;
+                    return (
+                      <button
+                        key={kindVal}
+                        type="button"
+                        onClick={() => {
+                          if (placementKind !== null || !selectedTrap) {
+                            setPlacementKind(kindVal);
+                          } else {
+                            handleChangeTrapKind(selectedTrap.id, kindVal);
+                          }
+                        }}
+                        className={`h-8 rounded-md px-1 text-xs font-bold transition-colors ${
+                          isAct
+                            ? 'pitstop-btn-red'
+                            : `${tone} hover:bg-[var(--ps-card)]`
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label className="inline-flex min-h-[38px] cursor-pointer items-center gap-2 select-none">
+                {/* Linha 3: Ângulo (slider fino) + Largura (m) + Unidirecional + Novo Marco na mesma linha */}
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                  <div className="flex min-w-[140px] flex-1 items-center gap-1.5">
+                    <span className="shrink-0 font-mono text-[11px] font-bold text-[var(--ps-muted)]">
+                      Âng.
+                    </span>
+                    <span className="w-11 shrink-0 font-mono text-[11px] font-black text-[var(--ps-amber)] tabular-nums">
+                      {activeBearing.toFixed(1)}°
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={activeUnidirectional}
+                      type="range"
+                      min={0}
+                      max={360}
+                      step={0.5}
+                      value={activeBearing}
+                      aria-label="Ângulo do Marco"
                       onChange={(e) => {
-                        const checked = e.target.checked;
-                        setNewTrapUnidirectional(checked);
+                        const val = Number(e.target.value) % 360;
+                        setDraftBearingDeg(val);
                         if (selectedTrap) {
-                          handleUpdateTrapProps(selectedTrap.id, { unidirectional: checked });
+                          handleUpdateTrapProps(selectedTrap.id, { bearingDeg: val });
                         }
                       }}
-                      className="h-5 w-5 rounded border-[var(--ps-border-strong)] accent-lime-500 cursor-pointer"
+                      className="h-4 min-w-[60px] flex-1 cursor-pointer accent-lime-500"
                     />
-                    <span className="text-xs font-bold text-[var(--ps-text)] sm:text-sm">
-                      Unidirecional
-                    </span>
-                  </label>
+                  </div>
 
-                  <div className="flex items-center gap-2">
-                    <label className="inline-flex items-center gap-1.5 text-xs text-[var(--ps-muted)]">
-                      <span className="font-bold">Largura (m):</span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <label className="inline-flex items-center gap-1 text-[11px] text-[var(--ps-muted)]">
+                      <span className="font-bold">Larg.</span>
                       <input
                         type="number"
                         inputMode="numeric"
@@ -4419,10 +4950,26 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                           }
                         }}
                         aria-label="Largura do Marco em metros"
-                        className="h-9 w-16 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-center font-mono text-xs font-extrabold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
+                        className="h-7 w-12 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-center font-mono text-[11px] font-extrabold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none tabular-nums"
                       />
-                      <span className="hidden font-mono text-[10px] opacity-80 sm:inline">
-                        (±{Math.round(Math.max(40, activeWidthM) / 2)}m/lado)
+                      <span className="font-mono text-[10px]">m</span>
+                    </label>
+
+                    <label className="inline-flex cursor-pointer items-center gap-1 select-none">
+                      <input
+                        type="checkbox"
+                        checked={activeUnidirectional}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setNewTrapUnidirectional(checked);
+                          if (selectedTrap) {
+                            handleUpdateTrapProps(selectedTrap.id, { unidirectional: checked });
+                          }
+                        }}
+                        className="h-4 w-4 rounded border-[var(--ps-border-strong)] accent-lime-500 cursor-pointer"
+                      />
+                      <span className="text-[11px] font-bold text-[var(--ps-text)]">
+                        Unidirecional
                       </span>
                     </label>
 
@@ -4431,55 +4978,24 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                       onClick={() =>
                         setPlacementKind((prev) => (prev ? null : activeKind))
                       }
-                      className={`inline-flex min-h-[36px] items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition-colors ${
+                      className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-extrabold transition-colors ${
                         placementKind
                           ? 'bg-amber-400 text-zinc-950'
                           : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]'
                       }`}
                     >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span>{placementKind ? 'Toque no Mapa' : 'Novo Marco'}</span>
+                      <Plus className="h-3 w-3" />
+                      <span>{placementKind ? 'No Mapa' : 'Marco'}</span>
                     </button>
                   </div>
-                </div>
-
-                <div className="grid grid-cols-4 gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1">
-                  {(
-                    [
-                      ['start', 'Largada', 'text-[var(--ps-emerald)]'],
-                      ['finish', 'Chegada', 'text-red-500'],
-                      ['start_finish', 'Larg/Cheg', 'text-sky-500'],
-                      ['split', 'Parcial (Setor)', 'text-[var(--ps-amber)]'],
-                    ] as const
-                  ).map(([kindVal, label, tone]) => {
-                    const isAct = activeKind === kindVal;
-                    return (
-                      <button
-                        key={kindVal}
-                        type="button"
-                        onClick={() => {
-                          if (placementKind !== null || !selectedTrap) {
-                            setPlacementKind(kindVal);
-                          } else {
-                            handleChangeTrapKind(selectedTrap.id, kindVal);
-                          }
-                        }}
-                        className={`min-h-[36px] rounded-md px-1 text-[10px] font-bold transition-colors sm:text-xs ${
-                          isAct
-                            ? 'pitstop-btn-red'
-                            : `${tone} hover:bg-[var(--ps-card)]`
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
                 </div>
               </div>
 
               <VelocityMapboxView
                 trackId={activeTrackId}
                 editableTrace={editableTrace}
+                traceColor={activeTrack?.color}
+                waypoints={activeTrack?.waypoints}
                 orderedTraps={orderedTraps}
                 postEditIdx={postEditIdx}
                 currentPos={currentPos}
@@ -4491,7 +5007,9 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   setPlacementKind(null);
                 }}
                 onDragTrapEnd={handleDragTrapEnd}
-                containerClassName="relative h-[340px] w-full overflow-hidden bg-[#000000] sm:h-[440px]"
+                onRequestCenterPos={requestImmediateGpsPosition}
+                requireLongPressForTraps
+                containerClassName="relative h-[64vh] min-h-[64vh] w-full overflow-hidden bg-[#000000] sm:h-[68vh]"
                 fullscreenOverlay={
                   <div className="rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 p-2 text-[var(--ps-text)] shadow-2xl backdrop-blur-md space-y-2">
                     {/* Colocar Marcos direto em Tela Cheia */}
@@ -4633,7 +5151,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     <p className="font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
                       {kindLabelMap[activeKind]}, {activeBearing.toFixed(1).replace('.', ',')} °,{' '}
                       {activeWidthM.toFixed(2).replace('.', ',')} m
-                      {activeUnidirectional ? ' · Unidirecional' : ' · Bidirecional'}
+                      {activeUnidirectional ? ' · Unidirecional' : ' · Bidirecional'} · Segure 0,4s no mapa p/ mover
                     </p>
                   </div>
                 </div>
@@ -4974,6 +5492,294 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </div>
         </div>
       )}
+      {gpsMappingOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-black text-white"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mapear Pista via GPS ao vivo"
+          >
+            {/* Mapa Satélite 100% Tela Cheia */}
+            <div className="relative h-full w-full flex-1 overflow-hidden">
+              <VelocityMapboxView
+                trackId={`${activeTrack?.id || 'gps_map'}_live`}
+                editableTrace={gpsMappingTrace}
+                orderedTraps={orderedTraps}
+                postEditIdx={Math.max(0, gpsMappingTrace.length - 1)}
+                currentPos={currentPos}
+                navigationMode={true}
+                headingUp={gpsMappingHeadingUp}
+                onToggleHeadingUp={() => setGpsMappingHeadingUp((v) => !v)}
+                navHeadingDeg={headingDeg}
+                isExternalFullscreen={true}
+                hideBuiltInTopControls={true}
+                zoomControlsBottomClass="bottom-16 sm:bottom-20"
+                mapStyleIndex={gpsMappingStyleIdx}
+                onCycleMapStyle={() => setGpsMappingStyleIdx((v) => (v + 1) % 3)}
+                onRequestCenterPos={requestImmediateGpsPosition}
+                containerClassName="relative h-full w-full overflow-hidden bg-[#000000]"
+              />
+
+              {/* Barra Superior Única (1 Linha Só) + Pílulas Discretas no Canto */}
+              <div className="pointer-events-none absolute top-0 inset-x-0 z-[450] space-y-1.5 px-2.5 pt-[max(0.5rem,env(safe-area-inset-top))]">
+                <div className="pointer-events-auto flex items-center gap-1.5 rounded-xl border border-white/15 bg-black/40 px-2 py-1 shadow-lg backdrop-blur-sm">
+                  <button
+                    type="button"
+                    onClick={() => setGpsMappingOpen(false)}
+                    aria-label="Voltar"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/10 text-white hover:bg-white/20"
+                  >
+                    <ArrowLeft className="h-4 w-4 text-[#FF2A2A]" />
+                  </button>
+
+                  <input
+                    type="text"
+                    value={mapTrackNameDraft}
+                    onChange={(e) => setMapTrackNameDraft(e.target.value)}
+                    placeholder="Nome da especial..."
+                    aria-label="Nome da pista"
+                    className="h-8 min-w-0 flex-1 rounded-lg border border-white/15 bg-black/30 px-2.5 text-xs font-bold text-white placeholder:text-white/50 focus:border-emerald-400 focus:outline-none"
+                  />
+
+                  <span className="inline-flex h-8 shrink-0 items-center gap-1 px-1.5 font-mono text-[11px] font-bold tabular-nums">
+                    <Satellite
+                      className={`h-3.5 w-3.5 ${
+                        gpsActive ? 'text-emerald-400' : 'text-amber-400'
+                      }`}
+                    />
+                    <span className={gpsActive ? 'text-emerald-300' : 'text-amber-300'}>
+                      {gpsActive ? `${satCount} SAT` : 'GPS'}
+                    </span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleMappingSaveTrack(gpsMappingPhase === 'finished');
+                    }}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-3 text-xs font-extrabold uppercase transition ${
+                      justSavedTrack || gpsMappingPhase === 'finished'
+                        ? 'bg-emerald-600/90 text-white hover:bg-emerald-500'
+                        : 'bg-[#E10600]/90 text-white hover:bg-red-600'
+                    }`}
+                  >
+                    {justSavedTrack ? (
+                      <>
+                        <Check className="h-3.5 w-3.5" />
+                        <span>Salva</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-3.5 w-3.5" />
+                        <span>Salvar</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Linha de pílulas minúsculas: controles únicos do mapa à esquerda + micro-pílula de telemetria à direita */}
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="pointer-events-auto flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void requestImmediateGpsPosition();
+                      }}
+                      className="inline-flex h-6 items-center gap-1 rounded-full border border-white/20 bg-black/35 px-2 text-[10px] font-bold text-white/95 backdrop-blur-[2px] hover:bg-black/50"
+                      title="Centralizar na minha posição GPS"
+                    >
+                      <Navigation className="h-2.5 w-2.5 text-emerald-400" />
+                      <span>Minha Posição</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setGpsMappingStyleIdx((v) => (v + 1) % 3)}
+                      className="inline-flex h-6 items-center gap-1 rounded-full border border-white/20 bg-black/35 px-2 text-[10px] font-bold text-white/95 backdrop-blur-[2px] hover:bg-black/50"
+                      title="Alternar camada do mapa"
+                    >
+                      <Layers className="h-2.5 w-2.5 text-amber-400" />
+                      <span>
+                        {gpsMappingStyleIdx === 0
+                          ? 'Satélite'
+                          : gpsMappingStyleIdx === 1
+                            ? 'Híbrido'
+                            : 'Ruas'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setGpsMappingHeadingUp((v) => !v)}
+                      className="inline-flex h-6 items-center gap-1 rounded-full border border-white/20 bg-black/35 px-2 text-[10px] font-bold text-white/95 backdrop-blur-[2px] hover:bg-black/50"
+                      title="Alternar orientação do mapa"
+                    >
+                      <Compass
+                        className={`h-2.5 w-2.5 ${
+                          gpsMappingHeadingUp ? 'text-emerald-400' : 'text-sky-400'
+                        }`}
+                      />
+                      <span>{gpsMappingHeadingUp ? 'Heading-Up' : 'Norte'}</span>
+                    </button>
+                  </div>
+
+                  <div className="inline-flex h-6 items-center gap-1.5 rounded-full border border-white/20 bg-black/35 px-2.5 font-mono text-[10px] font-bold text-white backdrop-blur-[2px] tabular-nums">
+                    <span>
+                      {(gpsMappingTrace[gpsMappingTrace.length - 1]?.distKm ?? 0).toFixed(2)} km
+                    </span>
+                    <span className="text-white/45">·</span>
+                    <span>{Math.round(speedKmh)} km/h</span>
+                    <span className="text-white/45">·</span>
+                    <span>{trackTrapSummary.splitsCount} parc.</span>
+                  </div>
+                </div>
+
+                {gpsMappingPulse && (
+                  <div className="flex justify-center">
+                    <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/50 bg-black/60 px-3 py-1 text-[11px] font-extrabold text-emerald-300 backdrop-blur-sm">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                      <span>{gpsMappingPulse}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Botões Inferiores Finos e Ultratransparentes Rente à Borda Inferior */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[450] px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+                <div className="pointer-events-auto mx-auto max-w-xl">
+                  {gpsMappingPhase === 'ready' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleMappingMarkStart();
+                      }}
+                      className="flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/30 bg-black/25 px-4 text-xs font-bold tracking-wide text-white uppercase backdrop-blur-[2px] transition hover:bg-black/40 active:scale-[0.98]"
+                    >
+                      <Flag className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                      <span>Marcar Largada (GPS)</span>
+                    </button>
+                  )}
+
+                  {gpsMappingPhase === 'recording' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleMappingMarkSplit();
+                        }}
+                        className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/30 bg-black/25 px-4 text-xs font-bold tracking-wide text-white uppercase backdrop-blur-[2px] transition hover:bg-black/40 active:scale-[0.98]"
+                      >
+                        <Plus className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                        <span>Parcial (P{trackTrapSummary.splitsCount + 1})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleMappingMarkFinish();
+                        }}
+                        className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/30 bg-black/25 px-4 text-xs font-bold tracking-wide text-white uppercase backdrop-blur-[2px] transition hover:bg-black/40 active:scale-[0.98]"
+                      >
+                        <Flag className="h-3.5 w-3.5 shrink-0 text-[#FF2A2A]" />
+                        <span>Chegada (C)</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {gpsMappingPhase === 'finished' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          gpsMappingTraceRef.current = [];
+                          setGpsMappingTrace([]);
+                          setGpsMappingPhase('ready');
+                          setGpsMappingPulse(null);
+                        }}
+                        className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/30 bg-black/25 px-4 text-xs font-bold text-white uppercase backdrop-blur-[2px] transition hover:bg-black/40 active:scale-[0.98]"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        <span>Refazer</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleMappingSaveTrack(true);
+                        }}
+                        className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-emerald-400/50 bg-black/25 px-4 text-xs font-bold text-emerald-300 uppercase backdrop-blur-[2px] transition hover:bg-black/40 active:scale-[0.98]"
+                      >
+                        <Save className="h-3.5 w-3.5" />
+                        <span>Salvar Pista</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {pendingDeleteTrack &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
+            onClick={() => setPendingDeleteTrack(null)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-track-modal-title"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-5 text-[var(--ps-text)] shadow-2xl space-y-4"
+            >
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-red-500/40 bg-red-500/15 text-red-500">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <h2
+                    id="delete-track-modal-title"
+                    className="text-sm font-extrabold text-[var(--ps-text)] leading-snug"
+                  >
+                    Excluir Pista
+                  </h2>
+                  <p className="text-xs text-[var(--ps-muted)] leading-relaxed">
+                    Tem certeza que deseja excluir a pista &apos;
+                    <span className="font-bold text-[var(--ps-text)]">
+                      {formatCleanTrackName(pendingDeleteTrack.name)}
+                    </span>
+                    &apos;?
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteTrack(null)}
+                  className="min-h-[44px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-xs font-extrabold uppercase tracking-wide text-[var(--ps-text)] hover:bg-[var(--ps-card-deep)] active:scale-[0.98]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetId = pendingDeleteTrack.id;
+                    setPendingDeleteTrack(null);
+                    handleDeleteTrack(targetId);
+                  }}
+                  className="min-h-[44px] rounded-xl bg-[#E10600] px-3 text-xs font-extrabold uppercase tracking-wide text-white shadow-lg hover:bg-red-700 active:scale-[0.98]"
+                >
+                  Sim, Excluir
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

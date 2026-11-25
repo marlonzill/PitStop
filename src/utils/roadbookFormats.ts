@@ -2,10 +2,16 @@ import JSZip from 'jszip';
 import initSqlJs, { type SqlJsStatic } from 'sql.js';
 import type {
   ParsedRoadbook,
+  RoadbookGeoTrack,
   RoadbookRaceParameters,
   RoadbookTulipa,
   TulipaType,
 } from '../types/rally';
+import {
+  parseGpxOrGeoJsonToGeoResult,
+  parseKmlToGeoResult,
+  type ParsedGeoImportResult,
+} from './geoKmlParser';
 import {
   inferHeaderlessColumnMap,
   normalizeTypeToken,
@@ -2299,13 +2305,180 @@ function tryParseT15TplRoadbook(
   });
 }
 
+function roadbookFromGeoImport(
+  geo: ParsedGeoImportResult,
+  fileName: string,
+  sourceFormat: string
+): ParsedRoadbook | null {
+  if (geo.tracks.length === 0 && geo.waypoints.length === 0) return null;
+
+  const tulipas: RoadbookTulipa[] = [];
+  const geoTracks: RoadbookGeoTrack[] = [];
+  let tulNum = 1;
+  let runningTotalKm = 0;
+
+  if (geo.tracks.length > 0) {
+    geo.tracks.forEach((tr, trackIdx) => {
+      const sectionNum = trackIdx + 1;
+      const trace =
+        tr.baseTrace && tr.baseTrace.length >= 2
+          ? tr.baseTrace
+          : tr.traps.map((trap, tIdx) => ({
+              lat: trap.lat,
+              lon: trap.lon,
+              speedKmh: 0,
+              accuracyM: 5,
+              headingDeg: trap.bearingDeg,
+              altitudeM: null,
+              timestampMs: tr.createdAtMs + tIdx * 1000,
+              distKm: 0,
+              stageElapsedMs: tIdx * 1000,
+            }));
+
+      if (trace.length === 0) return;
+
+      geoTracks.push({
+        id: tr.id,
+        name: tr.name,
+        description: tr.description,
+        color: tr.color,
+        coords: trace.map((p) => ({ lat: p.lat, lon: p.lon })),
+      });
+
+      const maxPtsPerTrack = 160;
+      const step = trace.length > maxPtsPerTrack ? Math.ceil(trace.length / maxPtsPerTrack) : 1;
+      const sampledIndices = new Set<number>([0, trace.length - 1]);
+      for (let i = 0; i < trace.length; i += step) {
+        sampledIndices.add(i);
+      }
+      const orderedIndices = Array.from(sampledIndices).sort((a, b) => a - b);
+
+      let prevDisplayKm = 0;
+      orderedIndices.forEach((ptIdx, k) => {
+        const pt = trace[ptIdx];
+        const displayKm = Number((pt.distKm ?? 0).toFixed(3));
+        const interKm = k === 0 ? 0 : Number(Math.max(0, displayKm - prevDisplayKm).toFixed(3));
+        prevDisplayKm = displayKm;
+        const totalKm = Number((runningTotalKm + displayKm).toFixed(3));
+        const cap =
+          pt.headingDeg !== null && Number.isFinite(pt.headingDeg)
+            ? Math.round(pt.headingDeg)
+            : null;
+
+        const isFirst = k === 0;
+        const isLast = k === orderedIndices.length - 1;
+        let noteLabel = tr.name;
+        if (isFirst) {
+          noteLabel = `${tr.name}${tr.description ? ` (${tr.description})` : ''} · Largada`;
+        } else if (isLast) {
+          noteLabel = `${tr.name} · Chegada`;
+        }
+
+        tulipas.push({
+          tulipa: tulNum++,
+          totalKm,
+          displayKm,
+          interKm,
+          resetsOdometer:
+            (tulipas.length === 0 && isFirst) ||
+            (isLast && trackIdx < geo.tracks.length - 1),
+          lat: pt.lat,
+          lon: pt.lon,
+          cap,
+          idealTimeStr: '',
+          idealTimeMs: null,
+          type: 'V',
+          section: sectionNum,
+          avgSpeedKmh: 60,
+          notes: noteLabel,
+        });
+      });
+
+      const lastDist = trace[trace.length - 1]?.distKm ?? tr.referenceDistanceKm;
+      runningTotalKm += Math.max(lastDist, tr.referenceDistanceKm);
+    });
+  } else {
+    geo.waypoints.forEach((wp, idx) => {
+      tulipas.push({
+        tulipa: idx + 1,
+        totalKm: 0,
+        displayKm: 0,
+        interKm: 0,
+        resetsOdometer: idx === 0,
+        lat: wp.lat,
+        lon: wp.lon,
+        cap: null,
+        idealTimeStr: '',
+        idealTimeMs: null,
+        type: 'D',
+        section: 1,
+        notes: wp.description ? `${wp.name} · ${wp.description}` : wp.name,
+      });
+    });
+  }
+
+  if (tulipas.length === 0) return null;
+
+  return enrichRoadbookForNavigation({
+    eventName:
+      geo.documentName ||
+      fileName.replace(/\.(kml|kmz|gpx|geojson|json|zip)$/i, ''),
+    fileName,
+    sourceFormat,
+    convertedAtMs: Date.now(),
+    tulipas,
+    countV: tulipas.filter((t) => t.type === 'V').length,
+    countD: tulipas.filter((t) => t.type === 'D').length,
+    countN: tulipas.filter((t) => t.type === 'N').length,
+    totalKm: tulipas[tulipas.length - 1]?.totalKm ?? 0,
+    geoTracks: geoTracks.length > 0 ? geoTracks : undefined,
+    geoWaypoints: geo.waypoints.length > 0 ? geo.waypoints : undefined,
+  });
+}
+
 function tryParsePlainTextPayload(
   text: string,
   fileName: string,
   zipImages?: ZipImageIndex
 ): ParsedRoadbook | null {
+  const lower = fileName.toLowerCase();
+
+  if (lower.endsWith('.kml') || /<kml[\s>]/i.test(text)) {
+    try {
+      const geo = parseKmlToGeoResult(text, fileName);
+      const rb = roadbookFromGeoImport(geo, fileName, 'KML');
+      if (rb) return rb;
+    } catch {
+      // Fall through if invalid or empty KML
+    }
+  }
+
+  if (lower.endsWith('.gpx') || /<gpx[\s>]/i.test(text)) {
+    try {
+      const geo = parseGpxOrGeoJsonToGeoResult(text, fileName);
+      const rb = roadbookFromGeoImport(geo, fileName, 'GPX');
+      if (rb) return rb;
+    } catch {
+      // Fall through
+    }
+  }
+
   const asJson = tryParseJsonRoadbook(text, fileName, zipImages);
   if (asJson) return asJson;
+
+  if (
+    lower.endsWith('.geojson') ||
+    (lower.endsWith('.json') &&
+      /"FeatureCollection"|"LineString"|"MultiLineString"/i.test(text))
+  ) {
+    try {
+      const geo = parseGpxOrGeoJsonToGeoResult(text, fileName);
+      const rb = roadbookFromGeoImport(geo, fileName, 'GeoJSON');
+      if (rb) return rb;
+    } catch {
+      // Fall through
+    }
+  }
 
   const asXml = tryParseXmlRoadbook(text, fileName, zipImages);
   if (asXml) return asXml;
@@ -2338,8 +2511,8 @@ function isZipBuffer(buffer: ArrayBuffer): boolean {
 
 function getZipEntryPriority(name: string): number {
   const lower = name.toLowerCase();
-  if (lower.endsWith('.xml') || lower.endsWith('.gpx')) return 1;
-  if (lower.endsWith('.json')) return 2;
+  if (lower.endsWith('.kml') || lower.endsWith('.xml') || lower.endsWith('.gpx')) return 1;
+  if (lower.endsWith('.json') || lower.endsWith('.geojson')) return 2;
   if (lower.endsWith('.txt') || lower.endsWith('.csv') || lower.endsWith('.tsv')) return 3;
   if (lower.endsWith('.nbp') || lower.endsWith('.tpl') || lower.endsWith('.ini')) return 4;
   if (!lower.includes('.')) return 5;
@@ -2506,11 +2679,12 @@ async function parseZipContainer(
       }
     }
 
-    const parsed = tryParsePlainTextPayload(text, outerFileName, zipImages);
+    const parsed = tryParsePlainTextPayload(text, entry.name, zipImages);
     if (parsed) {
+      const isKmz = outerFileName.toLowerCase().endsWith('.kmz');
       const tagged = {
         ...parsed,
-        sourceFormat: parsed.sourceFormat || 'NBP-ZIP',
+        sourceFormat: isKmz && parsed.sourceFormat === 'KML' ? 'KMZ' : parsed.sourceFormat || 'NBP-ZIP',
       };
       parsedCandidates.push(tagged);
       if (!bestRoadbook || tagged.tulipas.length > bestRoadbook.tulipas.length) {

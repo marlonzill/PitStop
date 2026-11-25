@@ -2727,7 +2727,7 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
                   <span>Inspecionar .NBP</span>
                   <input
                     type="file"
-                    accept=".nbp,.zip,.txt,.csv,.xml,.gpx,.json,.db,.sqlite,.sqlite3,application/zip"
+                    accept=".nbp,.zip,.kml,.kmz,.gpx,.geojson,.txt,.csv,.xml,.json,.db,.sqlite,.sqlite3,application/zip"
                     className="hidden"
                     onChange={(e) => {
                       const f = e.target.files?.[0];

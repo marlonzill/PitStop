@@ -10,6 +10,7 @@ import {
   EyeOff,
   FileText,
   Lock,
+  MapPin,
   Navigation,
   Play,
   RotateCcw,
@@ -21,6 +22,12 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import { CockpitSelect } from './CockpitSelect';
+import { VelocityMapboxView, type MapPolylineLayer } from './VelocityMapboxView';
+import {
+  DEFAULT_TRACK_PALETTE,
+  formatImportedTrackNamesList,
+  type VelocitySample,
+} from '../utils/velocityEngine';
 import type {
   ParsedRoadbook,
   PassageRecord,
@@ -95,6 +102,7 @@ export const CompetitorCollector: React.FC = () => {
 
   const [parseError, setParseError] = useState<string | null>(null);
   const [loadingSample, setLoadingSample] = useState(false);
+  const [showRouteMap, setShowRouteMap] = useState(false);
 
   const [gpsTestState, setGpsTestState] = useState<{
     status: 'idle' | 'checking' | 'ok' | 'error';
@@ -1149,11 +1157,11 @@ export const CompetitorCollector: React.FC = () => {
               Selecionar arquivo .txt ou .nbp no celular
             </span>
             <span className="mt-1 text-xs text-[var(--ps-muted)]">
-              Arquivo digital da prova (.NBP, .NBP.ZIP ou .TXT) enviado pela organização.
+              Arquivo digital da prova (.NBP, .NBP.ZIP, .KML, .KMZ, .GPX ou .TXT) enviado pela organização.
             </span>
             <input
               type="file"
-              accept=".txt,.csv,.nbp,.zip,.bin,.rbk,.xml,.gpx,.json,.db,.sqlite,.sqlite3,application/zip,text/plain"
+              accept=".txt,.csv,.nbp,.zip,.kml,.kmz,.gpx,.geojson,.bin,.rbk,.xml,.json,.db,.sqlite,.sqlite3,application/zip,text/plain"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -1172,13 +1180,27 @@ export const CompetitorCollector: React.FC = () => {
 
           {roadbook && (
             <div className="mt-4 rounded-xl border border-emerald-500/35 bg-[var(--ps-card-deep)] p-4">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-sm font-semibold text-[var(--ps-text)]">
-                  {roadbook.eventName}
-                </p>
-                <span className="font-mono text-xs text-[var(--ps-muted)]">
-                  {roadbook.fileName}
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[var(--ps-text)]">
+                    {roadbook.eventName}
+                  </p>
+                  <span className="font-mono text-xs text-[var(--ps-muted)]">
+                    {roadbook.fileName}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRouteMap((v) => !v)}
+                  className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 text-xs font-bold ${
+                    showRouteMap
+                      ? 'border-sky-400 bg-sky-500/15 text-sky-300'
+                      : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]'
+                  }`}
+                >
+                  <MapPin className="h-3.5 w-3.5 text-sky-400" />
+                  <span>{showRouteMap ? 'Ocultar Mapa' : 'Mapa da Rota'}</span>
+                </button>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--ps-muted)] tabular-nums">
                 <span>
@@ -1189,8 +1211,76 @@ export const CompetitorCollector: React.FC = () => {
                   <strong className="text-[var(--ps-text)]">{roadbook.totalKm.toFixed(2)} km</strong> totais
                 </span>
                 <span aria-hidden="true">·</span>
-                <span className="text-[var(--ps-emerald)]">Planilha validada para coleta GPS</span>
+                <span className="text-[var(--ps-emerald)]">
+                  {roadbook.geoTracks && roadbook.geoTracks.length >= 2
+                    ? `${roadbook.geoTracks.length} especiais: ${formatImportedTrackNamesList(
+                        roadbook.geoTracks.map((t) => t.name)
+                      )}`
+                    : 'Planilha validada para coleta GPS'}
+                </span>
               </div>
+
+              {showRouteMap && (() => {
+                const mapLayers: MapPolylineLayer[] =
+                  roadbook.geoTracks && roadbook.geoTracks.length > 0
+                    ? roadbook.geoTracks.map((gt, gIdx) => ({
+                        id: gt.id,
+                        name: gt.name,
+                        description: gt.description,
+                        color:
+                          gt.color || DEFAULT_TRACK_PALETTE[gIdx % DEFAULT_TRACK_PALETTE.length],
+                        trace: gt.coords.map((c, cIdx) => ({
+                          lat: c.lat,
+                          lon: c.lon,
+                          speedKmh: 0,
+                          accuracyM: 5,
+                          headingDeg: null,
+                          altitudeM: null,
+                          timestampMs: cIdx * 1000,
+                          distKm: 0,
+                          stageElapsedMs: cIdx * 1000,
+                        })),
+                      }))
+                    : [];
+
+                const fallbackTrace: VelocitySample[] =
+                  mapLayers.length === 0
+                    ? roadbook.tulipas
+                        .filter((t) => t.lat !== 0 || t.lon !== 0)
+                        .map((t, idx) => ({
+                          lat: t.lat,
+                          lon: t.lon,
+                          speedKmh: t.avgSpeedKmh ?? 0,
+                          accuracyM: 5,
+                          headingDeg: t.cap,
+                          altitudeM: null,
+                          timestampMs: idx * 1000,
+                          distKm: t.totalKm,
+                          stageElapsedMs: idx * 1000,
+                        }))
+                    : [];
+
+                return (
+                  <div className="mt-3 space-y-2">
+                    <VelocityMapboxView
+                      trackId={`collector-${roadbook.id ?? roadbook.fileName}`}
+                      editableTrace={fallbackTrace}
+                      multiTraces={mapLayers.length > 0 ? mapLayers : undefined}
+                      waypoints={roadbook.geoWaypoints}
+                      orderedTraps={[]}
+                      postEditIdx={0}
+                      currentPos={
+                        gpsTestState.status === 'ok' &&
+                        gpsTestState.lat !== undefined &&
+                        gpsTestState.lon !== undefined
+                          ? { lat: gpsTestState.lat, lon: gpsTestState.lon }
+                          : null
+                      }
+                      containerClassName="relative h-56 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-64"
+                    />
+                  </div>
+                );
+              })()}
             </div>
           )}
         </section>

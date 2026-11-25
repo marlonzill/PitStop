@@ -1,6 +1,7 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Calculator, Crown, Flag, Home, Lock, Route, Settings, X } from 'lucide-react';
+import { DeviceLicenseGateScreen } from './components/DeviceLicenseGateScreen';
 import { InitialStatusTab } from './components/InitialStatusTab';
 import { NavigationCockpit } from './components/NavigationCockpit';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -9,6 +10,12 @@ import { PublicStandingsView } from './components/PublicStandingsView';
 import { SettingsTab } from './components/SettingsTab';
 import { TimeCalculatorTab } from './components/TimeCalculatorModal';
 import { VelocityCockpit } from './components/VelocityCockpit';
+import {
+  type DeviceLicenseStatus,
+  getCachedLicenseStatusSync,
+  useAdminLicenseSession,
+  verifyDeviceLicense,
+} from './services/deviceLicenseService';
 import type { ActiveTab, CompetitorResultFile, RallyMode } from './types/rally';
 import {
   ENABLE_SUBSCRIPTION_GATE,
@@ -28,12 +35,12 @@ const isNativeAndroid =
 const RALLY_MODE_STORAGE_KEY = 'pitstop_rally_mode_v1';
 
 function readSavedRallyMode(): RallyMode {
-  if (typeof window === 'undefined') return 'regularidade';
+  if (typeof window === 'undefined') return 'velocidade';
   try {
     const saved = window.localStorage.getItem(RALLY_MODE_STORAGE_KEY);
-    return saved === 'velocidade' ? 'velocidade' : 'regularidade';
+    return saved === 'regularidade' ? 'regularidade' : 'velocidade';
   } catch {
-    return 'regularidade';
+    return 'velocidade';
   }
 }
 
@@ -94,6 +101,31 @@ export default function App() {
   const [visitedTabs, setVisitedTabs] = useState<Set<ActiveTab>>(() => new Set(['inicial']));
   const [settingsMenu, setSettingsMenu] = useState<SettingsSubMenu>('hub');
   const [backofficeResults, setBackofficeResults] = useState<CompetitorResultFile[]>([]);
+  const adminSession = useAdminLicenseSession();
+  const [deviceLicense, setDeviceLicense] = useState<DeviceLicenseStatus>(() =>
+    getCachedLicenseStatusSync()
+  );
+  const [checkingDeviceLicense, setCheckingDeviceLicense] = useState(false);
+
+  const runDeviceLicenseCheck = useCallback(async () => {
+    setCheckingDeviceLicense(true);
+    try {
+      const nextStatus = await verifyDeviceLicense();
+      setDeviceLicense(nextStatus);
+    } finally {
+      setCheckingDeviceLicense(false);
+    }
+  }, []);
+
+  // Registra e verifica licença do dispositivo no Supabase na inicialização (e ao reconectar / alternar sessão admin)
+  useEffect(() => {
+    void runDeviceLicenseCheck();
+    const onOnline = () => {
+      void runDeviceLicenseCheck();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [runDeviceLicenseCheck, adminSession?.loggedInAtIso]);
 
   const setActiveTab = (tab: ActiveTab) => {
     setActiveTabState(tab);
@@ -237,6 +269,21 @@ export default function App() {
   };
 
   const isHomeFullCanvas = !publicResultSlug && !isApuracao && activeTab === 'inicial';
+
+  if (!publicResultSlug && !isApuracao && deviceLicense.status === 'blocked' && !adminSession) {
+    return (
+      <DeviceLicenseGateScreen
+        license={deviceLicense}
+        checking={checkingDeviceLicense}
+        onRetry={() => {
+          void runDeviceLicenseCheck();
+        }}
+        onAdminUnlocked={() => {
+          void runDeviceLicenseCheck();
+        }}
+      />
+    );
+  }
 
   return (
     <div
@@ -467,6 +514,11 @@ export default function App() {
                     setActiveTab('navegacao');
                   }}
                   onOpenApuracao={!isCompetitorEnv ? openApuracaoPortal : undefined}
+                  deviceLicense={deviceLicense}
+                  checkingDeviceLicense={checkingDeviceLicense}
+                  onRecheckDeviceLicense={() => {
+                    void runDeviceLicenseCheck();
+                  }}
                 />
               </div>
             )}

@@ -67,6 +67,7 @@ export interface VelocityLiveLayoutViewProps {
   lapNumber: number;
   liveSamples: VelocitySample[];
   liveMapTrace: VelocitySample[];
+  guideTrace?: VelocitySample[];
   currentPos: { lat: number; lon: number } | null;
   headingDeg: number | null;
   liveHeadingUp: boolean;
@@ -195,6 +196,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
   lapNumber,
   liveSamples,
   liveMapTrace,
+  guideTrace,
   currentPos,
   headingDeg,
   liveHeadingUp,
@@ -457,6 +459,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
         <VelocityMapboxView
           trackId={activeTrackId || 'live_free'}
           editableTrace={liveMapTrace}
+          guideTrace={guideTrace}
           orderedTraps={orderedTraps}
           postEditIdx={Math.max(0, liveMapTrace.length - 1)}
           currentPos={currentPos}
@@ -1066,6 +1069,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                 <VelocityMapboxView
                   trackId={activeTrackId || 'live_free'}
                   editableTrace={liveMapTrace}
+                  guideTrace={guideTrace}
                   orderedTraps={orderedTraps}
                   postEditIdx={Math.max(0, liveMapTrace.length - 1)}
                   currentPos={currentPos}
@@ -1614,6 +1618,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                 <VelocityMapboxView
                   trackId={activeTrackId || 'live_free'}
                   editableTrace={liveMapTrace}
+                  guideTrace={guideTrace}
                   orderedTraps={orderedTraps}
                   postEditIdx={Math.max(0, liveMapTrace.length - 1)}
                   currentPos={currentPos}
@@ -2135,6 +2140,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                       <VelocityMapboxView
                         trackId={activeTrackId || 'live_free'}
                         editableTrace={liveMapTrace}
+                        guideTrace={guideTrace}
                         orderedTraps={orderedTraps}
                         postEditIdx={Math.max(0, liveMapTrace.length - 1)}
                         currentPos={currentPos}

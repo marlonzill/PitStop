@@ -36,6 +36,24 @@ export interface RoadbookRaceParameters {
   rawHeaderLines?: string[];
 }
 
+export interface RoadbookGeoWaypoint {
+  id: string;
+  name: string;
+  description?: string;
+  lat: number;
+  lon: number;
+  color?: string;
+  folderName?: string;
+}
+
+export interface RoadbookGeoTrack {
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
+  coords: Array<{ lat: number; lon: number }>;
+}
+
 export interface ParsedRoadbook {
   id?: string;
   eventName: string;
@@ -48,6 +66,8 @@ export interface ParsedRoadbook {
   countN: number;
   totalKm: number;
   raceParameters?: RoadbookRaceParameters;
+  geoTracks?: RoadbookGeoTrack[];
+  geoWaypoints?: RoadbookGeoWaypoint[];
 }
 
 export type PassageStatus =
