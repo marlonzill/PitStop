@@ -16,7 +16,7 @@ export const SettingsWireframeArt: React.FC<SettingsWireframeArtProps> = ({ menu
     strokeLinejoin: 'round' as const,
     style: { filter: `drop-shadow(0 0 4px ${color}55)` },
     className:
-      'pointer-events-none absolute -left-1 top-1/2 h-[74px] w-[92px] -translate-y-1/2 opacity-55 transition-opacity duration-200 group-hover:opacity-80',
+      'pointer-events-none absolute left-1.5 top-1/2 h-[48px] w-[56px] -translate-y-1/2 opacity-40 transition-opacity duration-200 group-hover:opacity-70 sm:left-2 sm:h-[58px] sm:w-[70px]',
     'aria-hidden': true,
   };
 

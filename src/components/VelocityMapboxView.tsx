@@ -93,6 +93,7 @@ interface VelocityMapboxViewProps {
   fullscreenOverlay?: React.ReactNode;
   fullscreenOverlayFullWidth?: boolean;
   onFullscreenToggle?: () => void;
+  forceFullscreen?: boolean;
   isExternalFullscreen?: boolean;
   hideBuiltInTopControls?: boolean;
   zoomControlsBottomClass?: string;
@@ -206,7 +207,7 @@ function createMarcoPinElement(
 }
 
 function createVehicleMarkerElement(
-  headingDeg: number | null,
+  _headingDeg: number | null,
   variant: VehicleVariant = 'default'
 ): HTMLDivElement {
   const el = document.createElement('div');
@@ -230,25 +231,15 @@ function createVehicleMarkerElement(
             : '#E10600';
   const strokeColor = variant === 'lapB' ? '#111214' : '#FFFFFF';
 
-  const svgNS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(svgNS, 'svg');
-  svg.setAttribute('width', '15');
-  svg.setAttribute('height', '15');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.dataset.carArrow = '1';
-  svg.style.transform = `rotate(${typeof headingDeg === 'number' ? headingDeg : 0}deg)`;
-  svg.style.transformOrigin = '50% 50%';
-  svg.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.85))';
+  const dot = document.createElement('div');
+  dot.style.width = '14px';
+  dot.style.height = '14px';
+  dot.style.borderRadius = '9999px';
+  dot.style.backgroundColor = fillColor;
+  dot.style.border = `2.5px solid ${strokeColor}`;
+  dot.style.boxShadow = '0 1px 4px rgba(0,0,0,0.85)';
 
-  const path = document.createElementNS(svgNS, 'path');
-  path.setAttribute('d', 'M12 2L20 20L12 16L4 20Z');
-  path.setAttribute('fill', fillColor);
-  path.setAttribute('stroke', strokeColor);
-  path.setAttribute('stroke-width', '1.4');
-  path.setAttribute('stroke-linejoin', 'round');
-  svg.appendChild(path);
-
-  el.appendChild(svg);
+  el.appendChild(dot);
 
   return el;
 }
@@ -348,6 +339,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   fullscreenOverlay,
   fullscreenOverlayFullWidth = false,
   onFullscreenToggle,
+  forceFullscreen,
   isExternalFullscreen,
   hideBuiltInTopControls = false,
   zoomControlsBottomClass,
@@ -470,6 +462,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     mapStyleIndex !== undefined ? mapStyleIndex % MAP_STYLES.length : styleIndex;
   const currentStyle = MAP_STYLES[effectiveStyleIndex];
   const externalFs = Boolean(isExternalFullscreen);
+  const effectiveFullscreen = typeof forceFullscreen === 'boolean' ? forceFullscreen : isFullscreen;
 
   // Inicializa Leaflet em Modo Satélite
   useEffect(() => {
@@ -708,7 +701,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     map.invalidateSize({ animate: false });
     const t = window.setTimeout(() => map.invalidateSize({ animate: false }), 120);
     return () => window.clearTimeout(t);
-  }, [isFullscreen, externalFs, containerClassName]);
+  }, [effectiveFullscreen, externalFs, containerClassName]);
 
   // Renderiza traçados paralelos finos (V1 = 0m, V2 = +1.8m, V3 = -1.8m) e modos de camada (Volta / Vel / Acel-Freio)
   useEffect(() => {
@@ -1406,12 +1399,6 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         primaryMarkerRef.current = { marker, el, variant: vehicleStyle };
       } else {
         primaryMarkerRef.current.marker.setLatLng([currentPos.lat, currentPos.lon]);
-        const svg = primaryMarkerRef.current.el.querySelector(
-          'svg[data-car-arrow="1"]'
-        ) as SVGElement | null;
-        if (svg) {
-          svg.style.transform = `rotate(${typeof navHeadingDeg === 'number' ? navHeadingDeg : 0}deg)`;
-        }
       }
     } else if (primaryMarkerRef.current) {
       carLayer.removeLayer(primaryMarkerRef.current.marker);
@@ -1440,12 +1427,6 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         ghostMarkerRef.current = { marker, el };
       } else {
         ghostMarkerRef.current.marker.setLatLng([gLat, gLon]);
-        const svg = ghostMarkerRef.current.el.querySelector(
-          'svg[data-car-arrow="1"]'
-        ) as SVGElement | null;
-        if (svg) {
-          svg.style.transform = `rotate(${typeof ghostCar.headingDeg === 'number' ? ghostCar.headingDeg : 0}deg)`;
-        }
       }
     } else if (ghostMarkerRef.current) {
       carLayer.removeLayer(ghostMarkerRef.current.marker);
@@ -1474,12 +1455,6 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         thirdMarkerRef.current = { marker, el };
       } else {
         thirdMarkerRef.current.marker.setLatLng([tLat, tLon]);
-        const svg = thirdMarkerRef.current.el.querySelector(
-          'svg[data-car-arrow="1"]'
-        ) as SVGElement | null;
-        if (svg) {
-          svg.style.transform = `rotate(${typeof thirdCar.headingDeg === 'number' ? thirdCar.headingDeg : 0}deg)`;
-        }
       }
     } else if (thirdMarkerRef.current) {
       carLayer.removeLayer(thirdMarkerRef.current.marker);
@@ -1650,7 +1625,9 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   return (
     <div
       className={
-        isFullscreen ? 'fixed inset-0 z-50 overflow-hidden bg-[var(--ps-bg)]' : containerClassName
+        effectiveFullscreen
+          ? 'fixed inset-0 z-50 overflow-hidden bg-[var(--ps-bg)]'
+          : containerClassName
       }
     >
       <div
@@ -1767,15 +1744,19 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
               }
             }}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-            aria-label={isFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
+            aria-label={effectiveFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
           >
-            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            {effectiveFullscreen ? (
+              <Minimize2 className="h-4 w-4" />
+            ) : (
+              <Maximize2 className="h-4 w-4" />
+            )}
           </button>
         </div>
       )}
 
       {/* Micro-Overlay superior exclusivo de Tela Cheia (ex: Horário Oficial CH) */}
-      {isFullscreen && fullscreenTopOverlay && (
+      {effectiveFullscreen && fullscreenTopOverlay && (
         <div
           className={`pointer-events-none absolute left-2.5 z-[410] ${
             navigationMode ? 'top-12' : 'top-12 sm:top-2.5'
@@ -1816,7 +1797,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       {/* Controles de Zoom + / - estilo RaceChrono */}
       <div
         className={`absolute right-2.5 z-[400] flex flex-col overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 shadow-lg backdrop-blur-xs ${
-          isFullscreen && fullscreenZoomBottomClass
+          effectiveFullscreen && fullscreenZoomBottomClass
             ? fullscreenZoomBottomClass
             : zoomControlsBottomClass ?? (externalFs ? 'bottom-2.5' : 'bottom-14')
         }`}
@@ -1845,7 +1826,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           type="button"
           onClick={handlePlaceAtCrosshair}
           className={`pitstop-btn-red absolute z-[410] inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-extrabold shadow-xl active:scale-95 ${
-            isFullscreen && fullscreenOverlay ? 'top-2.5 left-2.5' : 'bottom-3 left-3'
+            effectiveFullscreen && fullscreenOverlay ? 'top-2.5 left-2.5' : 'bottom-3 left-3'
           }`}
         >
           <Plus className="h-4 w-4" />
@@ -1854,7 +1835,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       )}
 
       {/* Barra flutuante de criação/edição de Marcos ou HUD exclusiva do modo Tela Cheia */}
-      {isFullscreen && fullscreenOverlay && (
+      {effectiveFullscreen && fullscreenOverlay && (
         <div
           className={`pointer-events-none absolute inset-x-2.5 bottom-2.5 z-[410] flex justify-center ${
             fullscreenOverlayFullWidth ? '' : 'pr-12 sm:pr-0'

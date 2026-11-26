@@ -1,11 +1,11 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Calculator, Crown, Flag, Home, Lock, Route, Settings, X } from 'lucide-react';
+import { Crown, Lock, X } from 'lucide-react';
+import { AdminSecretLoginModal } from './components/AdminSecretLoginModal';
 import { DeviceLicenseGateScreen } from './components/DeviceLicenseGateScreen';
 import { InitialStatusTab } from './components/InitialStatusTab';
 import { NavigationCockpit } from './components/NavigationCockpit';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { PitStopLogo } from './components/PitStopLogo';
 import { PublicStandingsView } from './components/PublicStandingsView';
 import { SettingsTab } from './components/SettingsTab';
 import { TimeCalculatorTab } from './components/TimeCalculatorModal';
@@ -64,6 +64,102 @@ function readUrlRoute(): {
   return { isApuracao, publicResultSlug };
 }
 
+const TopNavIcon: React.FC<{
+  kind: 'home' | 'velocity' | 'regularity' | 'calc' | 'settings';
+  active: boolean;
+}> = ({ kind, active }) => {
+  const strokeCls = active ? 'text-white' : 'text-[var(--ps-muted)]';
+  const accentStroke = active ? '#E10600' : 'currentColor';
+  switch (kind) {
+    case 'home':
+      return (
+        <svg viewBox="0 0 24 24" className={`h-5 w-5 shrink-0 ${strokeCls}`} fill="none" aria-hidden="true">
+          <path
+            d="M3.5 10.5 L12 3.5 L20.5 10.5 V19.5 C20.5 20.1 20.1 20.5 19.5 20.5 H14.5 V14.5 H9.5 V20.5 H4.5 C3.9 20.5 3.5 20.1 3.5 19.5 Z"
+            fill="currentColor"
+            fillOpacity={active ? 0.16 : 0.06}
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+          <path d="M9.5 10.5 H14.5" stroke={accentStroke} strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
+      );
+    case 'velocity':
+      return (
+        <svg viewBox="0 0 24 24" className={`h-5 w-5 shrink-0 ${strokeCls}`} fill="none" aria-hidden="true">
+          <path
+            d="M4.5 16.5 A8.5 8.5 0 1 1 19.5 16.5"
+            stroke="currentColor"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+          />
+          <path
+            d="M7.5 16.5 A5.2 5.2 0 1 1 16.5 16.5"
+            stroke="currentColor"
+            strokeOpacity="0.45"
+            strokeWidth="1.4"
+            strokeDasharray="2.5 2.5"
+            strokeLinecap="round"
+          />
+          <path d="M12 13.5 L16.8 8.7" stroke={accentStroke} strokeWidth="2.3" strokeLinecap="round" />
+          <circle cx="12" cy="13.5" r="2.1" fill={accentStroke} />
+          <rect x="8.5" y="18" width="7" height="2.4" rx="1.2" fill="currentColor" fillOpacity="0.6" />
+        </svg>
+      );
+    case 'regularity':
+      return (
+        <svg viewBox="0 0 24 24" className={`h-5 w-5 shrink-0 ${strokeCls}`} fill="none" aria-hidden="true">
+          <path
+            d="M5 18.5 C5 13 10.5 13 12 10 C13.5 7 19 7 19 4.5"
+            stroke="currentColor"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+          />
+          <circle cx="5" cy="18.5" r="2.4" fill="currentColor" />
+          <circle cx="19" cy="5.5" r="2.6" fill={accentStroke} />
+          <path d="M9 6.5 H13 M11 4.5 V8.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" opacity="0.6" />
+        </svg>
+      );
+    case 'calc':
+      return (
+        <svg viewBox="0 0 24 24" className={`h-5 w-5 shrink-0 ${strokeCls}`} fill="none" aria-hidden="true">
+          <rect
+            x="4.5"
+            y="3"
+            width="15"
+            height="18"
+            rx="3"
+            fill="currentColor"
+            fillOpacity={active ? 0.14 : 0.05}
+            stroke="currentColor"
+            strokeWidth="2"
+          />
+          <rect x="7.5" y="6" width="9" height="3.5" rx="1" fill={accentStroke} fillOpacity={active ? 0.9 : 0.45} />
+          <circle cx="8.5" cy="13" r="1.15" fill="currentColor" />
+          <circle cx="12" cy="13" r="1.15" fill="currentColor" />
+          <circle cx="15.5" cy="13" r="1.15" fill="currentColor" />
+          <circle cx="8.5" cy="16.8" r="1.15" fill="currentColor" />
+          <path d="M11.2 16.8 H16.3" stroke={accentStroke} strokeWidth="2.1" strokeLinecap="round" />
+        </svg>
+      );
+    case 'settings':
+      return (
+        <svg viewBox="0 0 24 24" className={`h-5 w-5 shrink-0 ${strokeCls}`} fill="none" aria-hidden="true">
+          <path
+            d="M12 2.8 L14 4.8 L16.8 4.4 L17.6 7.1 L20.2 8.2 L19.6 11 L21.2 13.2 L19.2 15.2 L19.6 18 L16.9 18.8 L15.8 21.4 L13 20.8 L10.8 22.4 L8.8 20.4 L6 20.8 L5.2 18.1 L2.6 17 L3.2 14.2 L1.6 12 L3.6 10 L3.2 7.2 L5.9 6.4 L7 3.8 L9.8 4.4 Z"
+            fill="currentColor"
+            fillOpacity={active ? 0.16 : 0.06}
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="12" r="3.4" stroke={accentStroke} strokeWidth="2.2" />
+        </svg>
+      );
+  }
+};
+
 const OrganizerBackoffice = isCompetitorEnv
   ? null
   : lazy(() =>
@@ -106,6 +202,28 @@ export default function App() {
     getCachedLicenseStatusSync()
   );
   const [checkingDeviceLicense, setCheckingDeviceLicense] = useState(false);
+  const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const [footerTapCount, setFooterTapCount] = useState(0);
+
+  useEffect(() => {
+    if (footerTapCount === 0) return;
+    const t = window.setTimeout(() => setFooterTapCount(0), 2500);
+    return () => window.clearTimeout(t);
+  }, [footerTapCount]);
+
+  const handleFooterSecretTap = () => {
+    const next = footerTapCount + 1;
+    if (next >= 5) {
+      setFooterTapCount(0);
+      if (adminSession) {
+        openSettingsSection('system');
+      } else {
+        setAdminModalOpen(true);
+      }
+      return;
+    }
+    setFooterTapCount(next);
+  };
 
   const runDeviceLicenseCheck = useCallback(async () => {
     setCheckingDeviceLicense(true);
@@ -301,45 +419,31 @@ export default function App() {
       >
         <div className="relative overflow-hidden">
           <div className="relative mx-auto flex min-h-[54px] max-w-7xl items-center justify-between gap-2 px-2.5 py-1.5 sm:min-h-[58px] sm:gap-3 sm:px-4 lg:px-8">
-            {/* Stylized PitStop P badge (transparent background) */}
-            <a
-              href={import.meta.env.BASE_URL}
-              onClick={(e) => {
-                e.preventDefault();
-                if (isApuracao || publicResultSlug) {
-                  exitPortalToApp();
-                } else {
-                  setActiveTab('inicial');
-                }
-              }}
-              className="flex items-center whitespace-nowrap shrink-0 group bg-transparent"
-              aria-label="PitStop-Sports Início"
-            >
-              <PitStopLogo
-                variant="icon"
-                className="h-9 w-9 sm:h-10 sm:w-10 transition-transform group-hover:scale-105 bg-transparent drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]"
-              />
-            </a>
-
             {/* 4 Ordered Tabs filtered by active rallyMode (Início, Regul. OR Veloc., Calc., Config.) */}
             {!isApuracao && !publicResultSlug ? (
               <nav
                 aria-label="Menu principal"
-                className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-1 lg:flex-none lg:gap-1.5"
+                className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)]/90 p-1 lg:flex-none lg:gap-1.5"
               >
                 <button
                   type="button"
                   onClick={() => setActiveTab('inicial')}
                   aria-label="Início"
                   title="Início"
-                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
+                  className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'inicial'
-                      ? 'pitstop-btn-red'
-                      : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                      ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                      : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
                   }`}
                 >
-                  <Home className="h-4 w-4 shrink-0" />
+                  <TopNavIcon kind="home" active={activeTab === 'inicial'} />
                   <span className="truncate leading-none">Início</span>
+                  {activeTab === 'inicial' && (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[#E10600]"
+                    />
+                  )}
                 </button>
 
                 {rallyMode === 'regularidade' ? (
@@ -358,13 +462,13 @@ export default function App() {
                     }}
                     aria-label="Regularidade"
                     title="Regularidade"
-                    className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
+                    className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
                       activeTab === 'navegacao'
-                        ? 'pitstop-btn-red'
-                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                        ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                        : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
                     }`}
                   >
-                    <Route className="h-4 w-4 shrink-0" />
+                    <TopNavIcon kind="regularity" active={activeTab === 'navegacao'} />
                     <span className="inline-flex items-center gap-1 truncate leading-none">
                       <span className="lg:hidden">Regul.</span>
                       <span className="hidden lg:inline">Regularidade</span>
@@ -374,6 +478,12 @@ export default function App() {
                         </span>
                       )}
                     </span>
+                    {activeTab === 'navegacao' && (
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[#E10600]"
+                      />
+                    )}
                   </button>
                 ) : (
                   <button
@@ -384,15 +494,21 @@ export default function App() {
                     }}
                     aria-label="Velocidade"
                     title="Velocidade"
-                    className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
+                    className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
                       activeTab === 'velocidade'
-                        ? 'pitstop-btn-red'
-                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                        ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                        : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
                     }`}
                   >
-                    <Flag className="h-4 w-4 shrink-0" />
+                    <TopNavIcon kind="velocity" active={activeTab === 'velocidade'} />
                     <span className="truncate leading-none lg:hidden">Veloc.</span>
                     <span className="hidden lg:inline">Velocidade</span>
+                    {activeTab === 'velocidade' && (
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[#E10600]"
+                      />
+                    )}
                   </button>
                 )}
 
@@ -401,15 +517,21 @@ export default function App() {
                   onClick={() => setActiveTab('calculadora')}
                   aria-label="Calculadora"
                   title="Calculadora"
-                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
+                  className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'calculadora'
-                      ? 'pitstop-btn-red'
-                      : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                      ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                      : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
                   }`}
                 >
-                  <Calculator className="h-4 w-4 shrink-0" />
+                  <TopNavIcon kind="calc" active={activeTab === 'calculadora'} />
                   <span className="truncate leading-none lg:hidden">Calc.</span>
                   <span className="hidden lg:inline">Calculadora</span>
+                  {activeTab === 'calculadora' && (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[#E10600]"
+                    />
+                  )}
                 </button>
 
                 <button
@@ -417,15 +539,21 @@ export default function App() {
                   onClick={() => openSettingsSection('hub')}
                   aria-label="Configurações"
                   title="Configurações"
-                  className={`min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[40px] lg:flex-row items-center justify-center gap-0.5 lg:gap-2 rounded-xl px-1.5 py-1 sm:px-3.5 lg:px-4 text-[10px] sm:text-[11px] lg:text-xs font-bold transition-all active:scale-[0.98] whitespace-nowrap ${
+                  className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'configuracoes'
-                      ? 'pitstop-btn-red'
-                      : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                      ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                      : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
                   }`}
                 >
-                  <Settings className="h-4 w-4 shrink-0" />
+                  <TopNavIcon kind="settings" active={activeTab === 'configuracoes'} />
                   <span className="truncate leading-none lg:hidden">Config.</span>
                   <span className="hidden lg:inline">Configurações</span>
+                  {activeTab === 'configuracoes' && (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[#E10600]"
+                    />
+                  )}
                 </button>
               </nav>
             ) : (
@@ -528,11 +656,24 @@ export default function App() {
 
       {!isHomeFullCanvas && (
         <footer className="mx-auto w-full max-w-7xl px-4 pb-safe pt-2 text-center">
-          <p className="text-[11px] tracking-wide text-[var(--ps-muted)]">
+          <p
+            onClick={handleFooterSecretTap}
+            className="inline-block cursor-default select-none text-[11px] tracking-wide text-[var(--ps-muted)]"
+          >
             Desenvolvido por Márlon Zill · PitStop-Sports
           </p>
         </footer>
       )}
+
+      <AdminSecretLoginModal
+        open={adminModalOpen}
+        onClose={() => setAdminModalOpen(false)}
+        onSuccess={() => {
+          setAdminModalOpen(false);
+          void runDeviceLicenseCheck();
+          openSettingsSection('system');
+        }}
+      />
 
       <OfflineIndicator />
 
@@ -595,7 +736,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setProModal(null);
-                  openSettingsSection('account');
+                  openSettingsSection('system');
                 }}
                 className="pitstop-btn-red flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold tracking-wider uppercase"
               >

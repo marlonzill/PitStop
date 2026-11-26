@@ -11,6 +11,9 @@ export default defineConfig(() => {
 
   return {
     base: basePath,
+    define: {
+      __APP_BUILD_ISO__: JSON.stringify(new Date().toISOString()),
+    },
     plugins: [
       react(),
       tailwindcss(),

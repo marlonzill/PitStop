@@ -1116,6 +1116,36 @@ input[type="date"] {
   color: transparent;
 }
 
+@keyframes finishBannerPulseGreen {
+  0%, 100% {
+    box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 2px rgba(110, 231, 183, 0.75), 0 0 22px rgba(0, 230, 118, 0.35);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow: 0 24px 64px -10px rgba(0, 0, 0, 0.85), 0 0 0 4px rgba(255, 255, 255, 0.95), 0 0 44px rgba(0, 230, 118, 0.85);
+    filter: brightness(1.1);
+  }
+}
+
+@keyframes finishBannerPulseRed {
+  0%, 100% {
+    box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 2px rgba(252, 165, 165, 0.75), 0 0 22px rgba(225, 6, 0, 0.4);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow: 0 24px 64px -10px rgba(0, 0, 0, 0.85), 0 0 0 4px rgba(255, 255, 255, 0.95), 0 0 44px rgba(255, 42, 42, 0.88);
+    filter: brightness(1.12);
+  }
+}
+
+.finish-modal-pulse-green {
+  animation: finishBannerPulseGreen 0.9s ease-in-out 4;
+}
+
+.finish-modal-pulse-red {
+  animation: finishBannerPulseRed 0.9s ease-in-out 4;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

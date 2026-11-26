@@ -24,6 +24,7 @@ import {
   Upload,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { useNavSettings } from '../utils/navSettings';
 import {
@@ -70,6 +71,35 @@ interface ReccePrefs {
 }
 
 const RECCE_PREFS_KEY = 'pitstop_recce_speed_prefs_v1';
+const SURVEY_GEO_STORAGE_KEY = 'pitstop_survey_imported_geo_v1';
+
+interface StoredSurveyGeo {
+  geo: ParsedGeoImportResult;
+  selectedTrackIdx: number;
+}
+
+function loadStoredSurveyGeo(): StoredSurveyGeo | null {
+  try {
+    const raw = localStorage.getItem(SURVEY_GEO_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredSurveyGeo>;
+    if (
+      !parsed?.geo ||
+      !Array.isArray(parsed.geo.tracks) ||
+      !Array.isArray(parsed.geo.waypoints)
+    ) {
+      return null;
+    }
+    const maxIdx = Math.max(0, parsed.geo.tracks.length - 1);
+    const idx =
+      typeof parsed.selectedTrackIdx === 'number' && parsed.selectedTrackIdx >= 0
+        ? Math.min(maxIdx, Math.floor(parsed.selectedTrackIdx))
+        : 0;
+    return { geo: parsed.geo, selectedTrackIdx: idx };
+  } catch {
+    return null;
+  }
+}
 
 const DEFAULT_RECCE_PREFS: ReccePrefs = {
   enabled: true,
@@ -314,13 +344,19 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   const lastRecceAlertTsRef = useRef<number>(0);
   const wasOverLimitRef = useRef<boolean>(false);
 
-  // KML / KMZ & Waze Navigation State
+  // KML / KMZ & Waze Navigation State (persistido no localStorage)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [importedGeo, setImportedGeo] = useState<ParsedGeoImportResult | null>(null);
-  const [selectedTrackIdx, setSelectedTrackIdx] = useState(0);
+  const initialStoredGeo = useMemo(() => loadStoredSurveyGeo(), []);
+  const [importedGeo, setImportedGeo] = useState<ParsedGeoImportResult | null>(
+    () => initialStoredGeo?.geo ?? null
+  );
+  const [selectedTrackIdx, setSelectedTrackIdx] = useState<number>(
+    () => initialStoredGeo?.selectedTrackIdx ?? 0
+  );
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [wazeNavActive, setWazeNavActive] = useState(false);
+  const [navSpeedFullscreen, setNavSpeedFullscreen] = useState(false);
   const [wazeVoiceEnabled, setWazeVoiceEnabled] = useState(true);
   const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(null);
   const [headingDeg, setHeadingDeg] = useState<number | null>(null);
@@ -353,6 +389,21 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       // ignore storage errors
     }
   }, [gaugeVisibility]);
+
+  useEffect(() => {
+    try {
+      if (!importedGeo) {
+        localStorage.removeItem(SURVEY_GEO_STORAGE_KEY);
+      } else {
+        localStorage.setItem(
+          SURVEY_GEO_STORAGE_KEY,
+          JSON.stringify({ geo: importedGeo, selectedTrackIdx })
+        );
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [importedGeo, selectedTrackIdx]);
 
   const loadedTrack: VelocityTrack | null = useMemo(() => {
     if (!importedGeo || importedGeo.tracks.length === 0) return null;
@@ -766,6 +817,20 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     }
   };
 
+  const handleClearImportedGeo = () => {
+    setImportedGeo(null);
+    setSelectedTrackIdx(0);
+    setImportSummary(null);
+    setImportError(null);
+    setWazeNavActive(false);
+    simProgressKmRef.current = 0;
+    try {
+      localStorage.removeItem(SURVEY_GEO_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  };
+
   const applyOdometerKeyboardValue = (which: 'total' | 'trip', rawText: string) => {
     const num = Number(rawText.replace(',', '.'));
     if (Number.isFinite(num) && num >= 0) {
@@ -814,6 +879,22 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       }
       return next;
     });
+  };
+
+  const startSpeedNavigation = () => {
+    setWazeNavActive(true);
+    if (!currentPos && routeSamples.length > 1) {
+      setCurrentPos({ lat: routeSamples[0].lat, lon: routeSamples[0].lon });
+      setHeadingDeg(
+        bearingBetweenDeg(
+          routeSamples[0].lat,
+          routeSamples[0].lon,
+          routeSamples[1].lat,
+          routeSamples[1].lon
+        )
+      );
+    }
+    setNavSpeedFullscreen(true);
   };
 
   const speedPctOfLimit = Math.min(
@@ -1030,6 +1111,18 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            {importedGeo && (
+              <button
+                type="button"
+                onClick={handleClearImportedGeo}
+                title="Remover arquivo KML/GPX salvo"
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-red-500/50 hover:text-red-400 transition-colors"
+              >
+                <X className="h-3 w-3 shrink-0" />
+                <span>Limpar Arquivo</span>
+              </button>
+            )}
+
             {wazeNavActive && (
               <button
                 type="button"
@@ -1051,11 +1144,20 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-extrabold uppercase transition-colors ${
                 wazeNavActive
                   ? 'bg-sky-500 text-slate-950'
-                  : 'pitstop-btn-red'
+                  : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-sky-400'
               }`}
             >
               <Navigation className="h-3 w-3" />
               <span>{wazeNavActive ? 'Navegando' : 'Navegar'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={startSpeedNavigation}
+              className="pitstop-btn-red inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-extrabold uppercase transition-colors"
+            >
+              <Navigation className="h-3 w-3" />
+              <span>Iniciar Navegação</span>
             </button>
           </div>
         </div>
@@ -1139,81 +1241,180 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           editableTrace={routeSamples}
           traceColor={loadedTrack?.color}
           multiTraces={multiTraces.length > 0 ? multiTraces : undefined}
-          waypoints={importedGeo?.waypoints}
+          waypoints={
+            importedGeo
+              ? [
+                  ...importedGeo.waypoints,
+                  ...(loadedTrack?.detectedSplitPoints ?? []).map((pt) => ({
+                    id: pt.id,
+                    name: pt.originalName,
+                    lat: pt.lat,
+                    lon: pt.lon,
+                    color: '#F59E0B',
+                  })),
+                ]
+              : undefined
+          }
           orderedTraps={orderedTraps}
           postEditIdx={guidance ? guidance.closestIdx : 0}
           currentPos={currentPos}
           navigationMode={wazeNavActive}
           navHeadingDeg={headingDeg}
-          fullscreenTopOverlay={
-            <SurveyFullscreenClockPill clockOffsetMs={settings.clockOffsetMs} />
+          forceFullscreen={navSpeedFullscreen ? true : undefined}
+          onFullscreenToggle={
+            navSpeedFullscreen ? () => setNavSpeedFullscreen(false) : undefined
           }
-          fullscreenZoomBottomClass="bottom-[88px] sm:bottom-[92px]"
-          fullscreenOverlayFullWidth
+          fullscreenTopOverlay={
+            navSpeedFullscreen ? undefined : (
+              <SurveyFullscreenClockPill clockOffsetMs={settings.clockOffsetMs} />
+            )
+          }
+          fullscreenZoomBottomClass={
+            navSpeedFullscreen ? 'bottom-[96px] sm:bottom-[100px]' : 'bottom-[88px] sm:bottom-[92px]'
+          }
+          fullscreenOverlayFullWidth={!navSpeedFullscreen}
           fullscreenOverlay={
-            <div className="rounded-2xl border border-white/15 bg-black/45 px-2.5 py-2 text-white shadow-xl backdrop-blur-sm">
-              <div className="grid grid-cols-3 items-center gap-1.5 font-mono tabular-nums">
-                {/* Bloco 1: TRIP (Laranja #F59E0B) + Zerar */}
-                <div className="flex min-w-0 items-center justify-between gap-1.5 pr-1 border-r border-white/10">
-                  <div className="min-w-0 leading-tight">
-                    <p className="text-[9px] font-extrabold tracking-wider text-[#F59E0B] uppercase">
-                      TRIP {regressive ? 'REG' : ''}
-                    </p>
-                    <p className="truncate text-sm font-black text-[#F59E0B] sm:text-base">
-                      {displayedTripKm.toFixed(2).replace('.', ',')}
-                      <span className="ml-0.5 text-[10px] font-bold opacity-80">km</span>
-                    </p>
-                    <p className="truncate text-[10px] font-semibold text-amber-200/80">
-                      {tripMeters.toLocaleString('pt-BR')} m
-                    </p>
+            navSpeedFullscreen ? (
+              <div className="mx-auto w-full max-w-xs rounded-2xl border border-white/20 bg-black/65 px-3 py-2.5 text-white shadow-2xl backdrop-blur-md">
+                <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10">
+                  <span className="text-[10px] font-extrabold tracking-wider text-white/80 uppercase">
+                    Limite de Velocidade
+                  </span>
+                  <span
+                    className={`font-mono text-xs font-black tabular-nums ${
+                      recceZone === 'over'
+                        ? 'text-[#FF2A2A] animate-pulse'
+                        : recceZone === 'warning'
+                          ? 'text-amber-300'
+                          : 'text-[#6EE7B7]'
+                    }`}
+                  >
+                    Atual: {speedKmh} km/h
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-1.5 font-mono tabular-nums">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setReccePrefs((prev) => ({
+                        ...prev,
+                        enabled: true,
+                        speedLimitKmh: Math.max(10, prev.speedLimitKmh - 5),
+                      }))
+                    }
+                    className="inline-flex h-10 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-xs font-extrabold text-white active:scale-95"
+                  >
+                    -5
+                  </button>
+                  <div className="flex items-baseline justify-center gap-1 rounded-xl border border-white/20 bg-black/50 px-2.5 py-1">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={10}
+                      max={200}
+                      value={reccePrefs.speedLimitKmh}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          setReccePrefs((prev) => ({
+                            ...prev,
+                            enabled: true,
+                            speedLimitKmh: Math.max(10, Math.min(200, Math.round(val))),
+                          }));
+                        }
+                      }}
+                      aria-label="Limite de Velocidade em km/h"
+                      className="w-14 bg-transparent text-center font-mono text-lg font-black text-white focus:outline-none"
+                    />
+                    <span className="text-[10px] font-bold text-white/70 uppercase">km/h</span>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setTripKm(0)}
-                    className="inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 text-[10px] font-extrabold tracking-wide text-[#F59E0B] uppercase active:scale-95"
+                    onClick={() =>
+                      setReccePrefs((prev) => ({
+                        ...prev,
+                        enabled: true,
+                        speedLimitKmh: Math.min(200, prev.speedLimitKmh + 5),
+                      }))
+                    }
+                    className="inline-flex h-10 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-xs font-extrabold text-white active:scale-95"
                   >
-                    Zerar
+                    +5
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNavSpeedFullscreen(false)}
+                    className="inline-flex h-10 items-center justify-center rounded-xl border border-white/20 bg-white/10 px-2.5 text-[11px] font-extrabold text-white/90 uppercase active:scale-95"
+                  >
+                    Fechar
                   </button>
                 </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-white/15 bg-black/45 px-2.5 py-2 text-white shadow-xl backdrop-blur-sm">
+                <div className="grid grid-cols-3 items-center gap-1.5 font-mono tabular-nums">
+                  {/* Bloco 1: TRIP (Laranja #F59E0B) + Zerar */}
+                  <div className="flex min-w-0 items-center justify-between gap-1.5 pr-1 border-r border-white/10">
+                    <div className="min-w-0 leading-tight">
+                      <p className="text-[9px] font-extrabold tracking-wider text-[#F59E0B] uppercase">
+                        TRIP {regressive ? 'REG' : ''}
+                      </p>
+                      <p className="truncate text-sm font-black text-[#F59E0B] sm:text-base">
+                        {displayedTripKm.toFixed(2).replace('.', ',')}
+                        <span className="ml-0.5 text-[10px] font-bold opacity-80">km</span>
+                      </p>
+                      <p className="truncate text-[10px] font-semibold text-amber-200/80">
+                        {tripMeters.toLocaleString('pt-BR')} m
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTripKm(0)}
+                      className="inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 text-[10px] font-extrabold tracking-wide text-[#F59E0B] uppercase active:scale-95"
+                    >
+                      Zerar
+                    </button>
+                  </div>
 
-                {/* Bloco 2: VELOCIDADE (Branco) + Média */}
-                <div className="min-w-0 text-center leading-tight px-1 border-r border-white/10">
-                  <p className="text-[9px] font-extrabold tracking-wider text-white/70 uppercase">
-                    Velocidade
-                  </p>
-                  <p
-                    className={`text-lg font-black leading-none sm:text-xl ${
-                      recceZone === 'over'
-                        ? 'text-red-400'
-                        : recceZone === 'warning'
-                          ? 'text-amber-300'
-                          : 'text-white'
-                    }`}
-                  >
-                    {speedKmh}{' '}
-                    <span className="text-[10px] font-bold text-white/75">KM/H</span>
-                  </p>
-                  <p className="mt-0.5 truncate text-[10px] font-semibold text-[#6EE7B7]">
-                    Méd: {avgSpeedKmh} km/h
-                  </p>
-                </div>
+                  {/* Bloco 2: VELOCIDADE (Branco) + Média */}
+                  <div className="min-w-0 text-center leading-tight px-1 border-r border-white/10">
+                    <p className="text-[9px] font-extrabold tracking-wider text-white/70 uppercase">
+                      Velocidade
+                    </p>
+                    <p
+                      className={`text-lg font-black leading-none sm:text-xl ${
+                        recceZone === 'over'
+                          ? 'text-red-400'
+                          : recceZone === 'warning'
+                            ? 'text-amber-300'
+                            : 'text-white'
+                      }`}
+                    >
+                      {speedKmh}{' '}
+                      <span className="text-[10px] font-bold text-white/75">KM/H</span>
+                    </p>
+                    <p className="mt-0.5 truncate text-[10px] font-semibold text-[#6EE7B7]">
+                      Méd: {avgSpeedKmh} km/h
+                    </p>
+                  </div>
 
-                {/* Bloco 3: ODÔMETRO TOTAL & GPS */}
-                <div className="min-w-0 pl-1 text-right leading-tight">
-                  <p className="truncate text-[9px] font-extrabold tracking-wider text-white/70 uppercase">
-                    Odôm. Total
-                  </p>
-                  <p className="truncate text-sm font-black text-white sm:text-base">
-                    {totalKm.toFixed(2).replace('.', ',')}
-                    <span className="ml-0.5 text-[10px] font-bold text-white/75">km</span>
-                  </p>
-                  <p className="truncate text-[10px] font-semibold text-emerald-300/90">
-                    {gpsAccuracy !== null ? `±${gpsAccuracy}m` : 'GPS --'}
-                    {altitudeM !== null ? ` · ${altitudeM}m` : ''}
-                  </p>
+                  {/* Bloco 3: ODÔMETRO TOTAL & GPS */}
+                  <div className="min-w-0 pl-1 text-right leading-tight">
+                    <p className="truncate text-[9px] font-extrabold tracking-wider text-white/70 uppercase">
+                      Odôm. Total
+                    </p>
+                    <p className="truncate text-sm font-black text-white sm:text-base">
+                      {totalKm.toFixed(2).replace('.', ',')}
+                      <span className="ml-0.5 text-[10px] font-bold text-white/75">km</span>
+                    </p>
+                    <p className="truncate text-[10px] font-semibold text-emerald-300/90">
+                      {gpsAccuracy !== null ? `±${gpsAccuracy}m` : 'GPS --'}
+                      {altitudeM !== null ? ` · ${altitudeM}m` : ''}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )
           }
           containerClassName="relative mt-2 h-56 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-72"
         />

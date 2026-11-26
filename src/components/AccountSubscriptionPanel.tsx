@@ -1,48 +1,40 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Ban,
-  CalendarClock,
   Check,
+  ChevronDown,
   Copy,
-  Crown,
-  Eye,
-  EyeOff,
+  Download,
   Infinity as InfinityIcon,
   LogOut,
   RefreshCw,
   Save,
   Search,
-  ShieldAlert,
   ShieldCheck,
   Smartphone,
   Trash2,
-  UserCheck,
-  UserPlus,
   Users,
 } from 'lucide-react';
+import { AdminSecretLoginModal } from './AdminSecretLoginModal';
 import {
-  authenticateUnifiedAdmin,
+  applyGithubReleaseUpdate,
+  checkGithubReleaseUpdate,
   deleteDispositivoRecord,
   type DeviceLicenseStatus,
   type DispositivoRecord,
   fetchAllDispositivos,
   getOrCreateDeviceIdentitySync,
+  type GithubReleaseCheckResult,
   isLicenseExpired,
   logoutAdminSession,
   updateDispositivoRecord,
   useAdminLicenseSession,
 } from '../services/deviceLicenseService';
-import {
-  ENABLE_SUBSCRIPTION_GATE,
-  getEffectiveUserPlan,
-  loginUserAccount,
-  logoutUserAccount,
-  registerUserAccount,
-  useAuthSession,
-} from '../utils/authSubscription';
+import { ENABLE_SUBSCRIPTION_GATE, useAuthSession } from '../utils/authSubscription';
 
 interface AccountSubscriptionPanelProps {
   deviceLicense?: DeviceLicenseStatus;
+  checkingDeviceLicense?: boolean;
   onRecheckDeviceLicense?: () => void;
 }
 
@@ -58,6 +50,17 @@ function formatDateTimePtBr(iso: string | null | undefined): string {
     year: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+  });
+}
+
+function formatExpirationShortPtBr(expiresAt: string | null | undefined): string {
+  if (!expiresAt) return '';
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms).toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
   });
 }
 
@@ -94,10 +97,11 @@ function isDeviceInTrial24h(d: DispositivoRecord): boolean {
 
 export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> = ({
   deviceLicense,
+  checkingDeviceLicense = false,
   onRecheckDeviceLicense,
 }) => {
   const adminSession = useAdminLicenseSession();
-  const { user, isPro, isAdmin: isBackendAdmin, syncing, refresh } = useAuthSession();
+  const { isAdmin: isBackendAdmin } = useAuthSession();
   const currentIdentity = useMemo(
     () => deviceLicense?.identity ?? getOrCreateDeviceIdentitySync(),
     [deviceLicense]
@@ -105,15 +109,19 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
 
   const isUnifiedAdmin = Boolean(adminSession) || (ENABLE_SUBSCRIPTION_GATE && isBackendAdmin);
 
-  const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
-  const [name, setName] = useState('');
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState(false);
+  const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const tapCountRef = useRef(0);
+  const tapTimerRef = useRef<number | null>(null);
+
+  // App Version Update check state (GitHub Releases)
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateCheckResult, setUpdateCheckResult] = useState<{
+    status: 'latest' | 'available' | 'error';
+    remoteInfo?: GithubReleaseCheckResult | null;
+    message: string;
+  } | null>(null);
+  const [updatingApp, setUpdatingApp] = useState(false);
 
   // Supabase dispositivos admin state
   const [devices, setDevices] = useState<DispositivoRecord[]>([]);
@@ -121,9 +129,29 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [deviceSearch, setDeviceSearch] = useState('');
   const [busyDeviceId, setBusyDeviceId] = useState<string | null>(null);
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
   const [editingNames, setEditingNames] = useState<Record<string, string>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [panelFeedback, setPanelFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleVersionRowTap = () => {
+    tapCountRef.current += 1;
+    if (tapTimerRef.current !== null) {
+      window.clearTimeout(tapTimerRef.current);
+    }
+    if (tapCountRef.current >= 5) {
+      tapCountRef.current = 0;
+      tapTimerRef.current = null;
+      if (!isUnifiedAdmin) {
+        setAdminModalOpen(true);
+      }
+      return;
+    }
+    tapTimerRef.current = window.setTimeout(() => {
+      tapCountRef.current = 0;
+      tapTimerRef.current = null;
+    }, 2500);
+  };
 
   const loadDevices = useCallback(async () => {
     if (!isUnifiedAdmin) return;
@@ -141,7 +169,7 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
       });
     } catch (err) {
       setDevicesError(
-        err instanceof Error ? err.message : 'Não foi possível carregar os dispositivos do Supabase.'
+        err instanceof Error ? err.message : 'Não foi possível carregar os dispositivos.'
       );
     } finally {
       setDevicesLoading(false);
@@ -158,6 +186,15 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
     try {
       if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
         await navigator.clipboard.writeText(currentIdentity.deviceId);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = currentIdentity.deviceId;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
       }
       setCopiedId(true);
       window.setTimeout(() => setCopiedId(false), 2000);
@@ -166,59 +203,50 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
     }
   };
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    setAuthSuccess(null);
-    setSubmitting(true);
+  const handleCheckForUpdates = async () => {
+    setCheckingUpdate(true);
+    setUpdateCheckResult(null);
     try {
-      if (authTab === 'login') {
-        const unifiedAdmin = authenticateUnifiedAdmin(identifier, password);
-        if (unifiedAdmin) {
-          setPassword('');
-          setAuthSuccess('Sessão de Administrador autenticada! Uso irrestrito liberado.');
-          onRecheckDeviceLicense?.();
-          return;
-        }
-      }
-
-      if (!ENABLE_SUBSCRIPTION_GATE) {
-        setAuthError('Usuário ou senha inválidos.');
-        return;
-      }
-
-      if (authTab === 'register') {
-        const res = await registerUserAccount({ name, email: identifier, password });
-        setAuthSuccess(
-          res.user.role === 'admin'
-            ? 'Conta Admin Master criada com Plano PRO ativo!'
-            : 'Conta criada com sucesso!'
-        );
+      const remote = await checkGithubReleaseUpdate();
+      if (remote.hasUpdate) {
+        setUpdateCheckResult({
+          status: 'available',
+          remoteInfo: remote,
+          message: 'Nova atualização disponível',
+        });
       } else {
-        const res = await loginUserAccount({ email: identifier, password });
-        setAuthSuccess(
-          getEffectiveUserPlan(res.user) === 'pro'
-            ? 'Login realizado · Assinatura PRO sincronizada.'
-            : 'Login realizado com sucesso.'
-        );
+        setUpdateCheckResult({
+          status: 'latest',
+          remoteInfo: remote,
+          message: 'Seu aplicativo já está atualizado',
+        });
       }
-      setPassword('');
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Usuário ou senha inválidos.');
+      setUpdateCheckResult({
+        status: 'error',
+        message:
+          err instanceof Error
+            ? `Erro ao verificar atualizações (${err.message}).`
+            : 'Sem conexão para verificar atualizações.',
+      });
     } finally {
-      setSubmitting(false);
+      setCheckingUpdate(false);
     }
   };
 
-  const handleLogoutAll = () => {
-    logoutAdminSession();
-    if (user) {
-      logoutUserAccount();
+  const handleApplyUpdate = async () => {
+    setUpdatingApp(true);
+    try {
+      await applyGithubReleaseUpdate(updateCheckResult?.remoteInfo?.publishedAt);
+    } finally {
+      setUpdatingApp(false);
     }
-    setDevices([]);
-    setAuthSuccess(null);
-    setAuthError(null);
-    setPanelFeedback(null);
+  };
+
+  const handleAdminLogout = () => {
+    logoutAdminSession();
+    setExpandedDeviceId(null);
+    setConfirmDeleteId(null);
     onRecheckDeviceLicense?.();
   };
 
@@ -316,376 +344,202 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
     });
   }, [devices, deviceSearch, currentIdentity.deviceId]);
 
-  const currentLicenseStatusLabel = useMemo(() => {
+  const isAllowed = isUnifiedAdmin || deviceLicense?.status !== 'blocked';
+
+  const statusText = useMemo(() => {
     if (isUnifiedAdmin || deviceLicense?.isAdminBypass) {
-      return 'Liberado · Acesso Irrestrito (Admin)';
+      return 'Liberado (Admin)';
     }
-    if (!deviceLicense) return 'Teste / Ativo';
-    if (deviceLicense.status === 'blocked') {
-      return deviceLicense.reason === 'expired' ? 'Período Expirado' : 'Bloqueado';
-    }
-    if (!deviceLicense.expiresAt) return 'Licença Vitalícia';
-    const ms = Date.parse(deviceLicense.expiresAt);
-    if (Number.isFinite(ms)) {
-      const remainingH = Math.max(0, Math.ceil((ms - Date.now()) / (60 * 60 * 1000)));
-      if (remainingH <= 26) {
-        return `Teste 24h Ativo (${remainingH}h restantes)`;
+    if (!deviceLicense || deviceLicense.status !== 'blocked') {
+      if (!deviceLicense?.expiresAt) return 'Liberado';
+      const ms = Date.parse(deviceLicense.expiresAt);
+      if (Number.isFinite(ms)) {
+        const remainingH = Math.max(0, Math.ceil((ms - Date.now()) / (60 * 60 * 1000)));
+        if (remainingH <= 26) {
+          return `Liberado (Teste ${remainingH}h)`;
+        }
+        return `Liberado · até ${new Date(ms).toLocaleDateString('pt-BR')}`;
       }
+      return 'Liberado';
     }
-    return formatExpirationLabel(deviceLicense.expiresAt);
+    return deviceLicense.reason === 'expired' ? 'Bloqueado (Expirado)' : 'Bloqueado';
   }, [deviceLicense, isUnifiedAdmin]);
 
   return (
-    <div className="space-y-3.5">
-      {/* CARD DE CONTA / LOGIN UNIFICADO */}
-      {isUnifiedAdmin ? (
-        <section className="rounded-xl border border-cyan-500/45 bg-[var(--ps-surface)] p-4 sm:p-5 space-y-3.5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="font-['Barlow_Condensed'] text-2xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-                  {adminSession?.username ?? user?.name ?? 'marlonzill'}
-                </h2>
-                <span className="inline-flex items-center gap-1 rounded-md border border-cyan-500/45 bg-cyan-500/15 px-2 py-0.5 font-mono text-[10px] font-black text-cyan-300 uppercase">
-                  <ShieldCheck className="h-3 w-3" />
-                  <span>ADMIN MASTER</span>
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-mono text-[10px] font-black text-[var(--ps-emerald)] uppercase">
-                  <Crown className="h-3 w-3" />
-                  <span>USO IRRESTRITO</span>
-                </span>
-              </div>
-              <p className="font-mono text-xs text-[var(--ps-muted)]">
-                Aparelho atual:{' '}
-                <strong className="text-[var(--ps-amber)] tabular-nums">
-                  {currentIdentity.deviceId}
-                </strong>{' '}
-                · {currentIdentity.deviceModel}
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleLogoutAll}
-              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-red-500/45 bg-red-500/12 px-3.5 text-xs font-extrabold text-red-300 transition hover:bg-red-500/20"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              <span>Sair da Conta</span>
-            </button>
-          </div>
-
-          {authSuccess && (
-            <div className="rounded-lg border border-emerald-500/40 bg-emerald-950/30 px-3 py-2 text-xs font-semibold text-emerald-300">
-              {authSuccess}
-            </div>
-          )}
-        </section>
-      ) : ENABLE_SUBSCRIPTION_GATE && user ? (
-        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="font-['Barlow_Condensed'] text-2xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-                  {user.name}
-                </h2>
+    <div className="space-y-3">
+      {/* CARD DE CREDENCIAL DO APARELHO (Motorsport / Telemetria Pro) */}
+      <section className="rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-4 space-y-3">
+        <div className="space-y-1.5">
+          <p className="font-mono text-[11px] font-bold tracking-[0.14em] text-[var(--ps-muted)] uppercase leading-none">
+            ID do Aparelho
+          </p>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Smartphone className="h-4 w-4 shrink-0 text-[var(--ps-muted)]" />
+              <span className="font-mono text-[20px] font-extrabold tracking-[0.12em] text-[var(--ps-text)] tabular-nums select-all leading-none">
+                {currentIdentity.deviceId}
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-0.5 font-mono text-xs font-semibold text-[var(--ps-text)]">
                 <span
-                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-[10px] font-black uppercase ${
-                    isPro
-                      ? 'border border-emerald-500/40 bg-emerald-500/20 text-emerald-400'
-                      : 'border border-[var(--ps-border)] bg-zinc-700/40 text-[var(--ps-muted)]'
+                  className={`h-2 w-2 shrink-0 rounded-full ${
+                    isAllowed ? 'bg-emerald-400' : 'bg-red-500'
                   }`}
-                >
-                  <Crown className="h-3 w-3" />
-                  <span>{isPro ? 'PLANO PRO ATIVO' : 'PLANO FREE'}</span>
-                </span>
-              </div>
-              <p className="font-mono text-xs text-[var(--ps-muted)]">{user.email}</p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={syncing}
-                onClick={() => void refresh()}
-                className="pitstop-btn-metal inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 text-xs font-bold"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-                <span>Sincronizar</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleLogoutAll}
-                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-muted)] hover:border-[var(--ps-accent)] hover:text-[var(--ps-text)]"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-                <span>Sair da Conta</span>
-              </button>
-            </div>
-          </div>
-        </section>
-      ) : (
-        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-['Barlow_Condensed'] text-xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-                Conta &amp; Assinatura PitStop
-              </h2>
-              <p className="text-xs text-[var(--ps-muted)]">
-                Entre com sua conta para gerenciar seu acesso e assinatura.
-              </p>
-            </div>
-
-            {ENABLE_SUBSCRIPTION_GATE && (
-              <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1 text-xs font-bold">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthTab('login');
-                    setAuthError(null);
-                  }}
-                  className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-md px-3 transition-colors ${
-                    authTab === 'login'
-                      ? 'pitstop-btn-red'
-                      : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-                  }`}
-                >
-                  <UserCheck className="h-3.5 w-3.5" />
-                  <span>Entrar</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthTab('register');
-                    setAuthError(null);
-                  }}
-                  className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-md px-3 transition-colors ${
-                    authTab === 'register'
-                      ? 'pitstop-btn-red'
-                      : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
-                  }`}
-                >
-                  <UserPlus className="h-3.5 w-3.5" />
-                  <span>Criar Conta</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          <form onSubmit={handleAuthSubmit} className="space-y-3">
-            {ENABLE_SUBSCRIPTION_GATE && authTab === 'register' && (
-              <label className="block space-y-1">
-                <span className="text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                  Nome Completo / Equipe
-                </span>
-                <input
-                  type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Ex: Piloto / Carro 42"
-                  className="min-h-[44px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-sm font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
                 />
-              </label>
-            )}
-
-            <label className="block space-y-1">
-              <span className="text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                Usuário / E-mail
+                <span>{statusText}</span>
               </span>
-              <input
-                type="text"
-                required
-                autoComplete="username"
-                autoCapitalize="none"
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="Usuário ou e-mail"
-                className="min-h-[44px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-sm font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
-              />
-            </label>
+            </div>
 
-            <label className="block space-y-1">
-              <span className="text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                Senha
-              </span>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  autoComplete={authTab === 'register' ? 'new-password' : 'current-password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Digite sua senha"
-                  className="min-h-[44px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] pr-11 pl-3 text-sm font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute top-1/2 right-2.5 -translate-y-1/2 p-1 text-[var(--ps-muted)] hover:text-[var(--ps-text)]"
-                  aria-label="Mostrar ou ocultar senha"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </label>
-
-            {authError && (
-              <div className="rounded-lg border border-red-500/45 bg-red-950/40 px-3 py-2 text-xs font-semibold text-red-200">
-                {authError}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="pitstop-btn-red flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold tracking-wider uppercase disabled:opacity-60"
-            >
-              {submitting ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : (
-                <UserCheck className="h-4 w-4" />
-              )}
-              <span>
-                {submitting
-                  ? 'Conectando...'
-                  : ENABLE_SUBSCRIPTION_GATE && authTab === 'register'
-                    ? 'Criar Conta'
-                    : 'Entrar'}
-              </span>
-            </button>
-          </form>
-        </section>
-      )}
-
-      {/* STATUS DA LICENÇA DESTE APARELHO */}
-      <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Smartphone className="h-4 w-4 text-[var(--ps-accent)]" />
-            <h3 className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-              Licença deste Aparelho
-            </h3>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => void handleCopyCurrentId()}
-              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
-            >
-              {copiedId ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
-                  <span className="text-[var(--ps-emerald)]">Copiado</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" />
-                  <span>Copiar ID</span>
-                </>
-              )}
-            </button>
-            {onRecheckDeviceLicense && (
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                onClick={onRecheckDeviceLicense}
-                className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-emerald)]"
+                onClick={() => void handleCopyCurrentId()}
+                aria-label="Copiar ID do aparelho"
+                title="Copiar ID"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] transition-colors hover:border-white/30"
               >
-                <RefreshCw className="h-3.5 w-3.5" />
-                <span>Verificar</span>
+                {copiedId ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
+                )}
               </button>
-            )}
+
+              {onRecheckDeviceLicense && (
+                <button
+                  type="button"
+                  disabled={checkingDeviceLicense}
+                  onClick={onRecheckDeviceLicense}
+                  aria-label="Sincronizar licença"
+                  title="Sincronizar licença"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] transition-colors hover:border-white/30 disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${checkingDeviceLicense ? 'animate-spin' : ''}`}
+                  />
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-2 font-mono text-[11px] sm:grid-cols-3">
-          <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
-            <p className="text-[10px] text-[var(--ps-muted)] uppercase">ID do Aparelho</p>
-            <p className="mt-0.5 text-sm font-black tracking-wider text-[var(--ps-amber)] tabular-nums select-all">
-              {currentIdentity.deviceId}
-            </p>
-          </div>
-          <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
-            <p className="text-[10px] text-[var(--ps-muted)] uppercase">Aparelho / Versão</p>
-            <p className="mt-0.5 truncate font-bold text-[var(--ps-text)]">
+        {/* Linha inferior: Aparelho e Versão em largura total sem cortar + Buscar Atualização */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-[var(--ps-border)] pt-3">
+          <div
+            onClick={handleVersionRowTap}
+            className="min-w-0 flex-1 cursor-default select-none font-mono"
+          >
+            <span className="block text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+              Aparelho / Versão
+            </span>
+            <span className="mt-0.5 block break-words text-[13px] font-semibold text-[var(--ps-text)] leading-snug">
               {currentIdentity.deviceModel} · {currentIdentity.appVersion}
-            </p>
+            </span>
           </div>
-          <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
-            <p className="text-[10px] text-[var(--ps-muted)] uppercase">Situação</p>
-            <p
-              className={`mt-0.5 font-extrabold ${
-                isUnifiedAdmin || deviceLicense?.status !== 'blocked'
-                  ? 'text-[var(--ps-emerald)]'
-                  : 'text-[#FF2A2A]'
-              }`}
-            >
-              {currentLicenseStatusLabel}
-            </p>
-          </div>
+
+          <button
+            type="button"
+            disabled={checkingUpdate}
+            onClick={() => void handleCheckForUpdates()}
+            className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-transparent px-3 text-xs font-bold text-[var(--ps-text)] transition-colors hover:border-white/35 hover:bg-white/5 disabled:opacity-50 whitespace-nowrap"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${checkingUpdate ? 'animate-spin' : ''}`} />
+            <span>{checkingUpdate ? 'Verificando...' : 'Buscar Atualização'}</span>
+          </button>
         </div>
+
+        {updateCheckResult && (
+          <div
+            className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[13px] font-medium ${
+              updateCheckResult.status === 'available'
+                ? 'border-emerald-500/35 bg-[#141619] text-[var(--ps-text)]'
+                : updateCheckResult.status === 'error'
+                  ? 'border-amber-500/35 bg-[#141619] text-[var(--ps-muted)]'
+                  : 'border-[var(--ps-border)] bg-[#141619] text-[var(--ps-text)]'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${
+                  updateCheckResult.status === 'available'
+                    ? 'bg-emerald-400'
+                    : updateCheckResult.status === 'error'
+                      ? 'bg-amber-400'
+                      : 'bg-zinc-400'
+                }`}
+              />
+              <span>{updateCheckResult.message}</span>
+            </span>
+            {updateCheckResult.status === 'available' && (
+              <button
+                type="button"
+                disabled={updatingApp}
+                onClick={() => void handleApplyUpdate()}
+                className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-3 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25 whitespace-nowrap"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>{updatingApp ? 'Atualizando...' : 'Baixar e Atualizar'}</span>
+              </button>
+            )}
+          </div>
+        )}
       </section>
 
-      {/* PAINEL COMPLETO DE GERENCIAMENTO DE DISPOSITIVOS & LICENÇAS (ADMIN SUPABASE) */}
+      {/* PAINEL ADMIN SÓBRIO & EXPANSÍVEL (TELEMETRIA PRO / ACORDEÃO) */}
       {isUnifiedAdmin && (
-        <section className="rounded-xl border border-cyan-500/40 bg-[var(--ps-surface)] p-4 sm:p-5 space-y-4">
+        <section className="rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Users className="h-5 w-5 text-cyan-400" />
-              <div>
-                <h3 className="font-['Barlow_Condensed'] text-xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-                  Gerenciamento de Dispositivos &amp; Licenças
-                </h3>
-                <p className="text-[11px] text-[var(--ps-muted)]">
-                  Controle direto da tabela <code className="font-mono text-cyan-300">dispositivos</code> (Supabase) com ações de 1 toque.
-                </p>
-              </div>
+              <ShieldCheck className="h-4 w-4 text-[var(--ps-muted)]" />
+              <h3 className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                Painel Admin · Dispositivos
+              </h3>
             </div>
 
-            <button
-              type="button"
-              disabled={devicesLoading}
-              onClick={() => void loadDevices()}
-              className="pitstop-btn-metal inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${devicesLoading ? 'animate-spin' : ''}`} />
-              <span>Atualizar Lista</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={devicesLoading}
+                onClick={() => void loadDevices()}
+                className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-white/30"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${devicesLoading ? 'animate-spin' : ''}`} />
+                <span>Atualizar</span>
+              </button>
+
+              {adminSession && (
+                <button
+                  type="button"
+                  onClick={handleAdminLogout}
+                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[#141619] px-3 text-xs font-bold text-[var(--ps-muted)] hover:border-white/30 hover:text-[var(--ps-text)]"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span>Sair</span>
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Resumo no topo */}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
-              <p className="font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
-                Total
-              </p>
-              <p className="mt-0.5 font-mono text-xl font-black text-[var(--ps-text)] tabular-nums">
-                {summary.total}
-              </p>
-            </div>
-            <div className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2">
-              <p className="font-mono text-[10px] font-bold text-emerald-300 uppercase">
-                Ativos
-              </p>
-              <p className="mt-0.5 font-mono text-xl font-black text-emerald-400 tabular-nums">
-                {summary.active}
-              </p>
-            </div>
-            <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2">
-              <p className="font-mono text-[10px] font-bold text-amber-300 uppercase">
-                Em Teste (24h)
-              </p>
-              <p className="mt-0.5 font-mono text-xl font-black text-[var(--ps-amber)] tabular-nums">
-                {summary.trial}
-              </p>
-            </div>
-            <div className="rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2">
-              <p className="font-mono text-[10px] font-bold text-red-300 uppercase">
-                Expirados / Bloq.
-              </p>
-              <p className="mt-0.5 font-mono text-xl font-black text-[#FF2A2A] tabular-nums">
-                {summary.blockedOrExpired}
-              </p>
-            </div>
+          {/* 4 Contadores Minimalistas (baixos, bordas finas, sem fundos coloridos) */}
+          <div className="grid grid-cols-4 gap-1.5 font-mono tabular-nums">
+            {[
+              { label: 'Total', value: summary.total, dotClass: 'bg-zinc-400' },
+              { label: 'Ativos', value: summary.active, dotClass: 'bg-emerald-400' },
+              { label: '24h', value: summary.trial, dotClass: 'bg-amber-400' },
+              { label: 'Bloq.', value: summary.blockedOrExpired, dotClass: 'bg-red-500' },
+            ].map((stat) => (
+              <div
+                key={stat.label}
+                className="flex flex-col items-center justify-center gap-0.5 rounded-lg border border-[var(--ps-border)] bg-[#141619] px-2 py-1.5 sm:flex-row sm:justify-between sm:px-2.5"
+              >
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-[var(--ps-muted)] uppercase">
+                  <span className={`h-1.5 w-1.5 rounded-full ${stat.dotClass}`} />
+                  <span>{stat.label}</span>
+                </span>
+                <span className="text-sm font-black text-[var(--ps-text)] leading-none">
+                  {stat.value}
+                </span>
+              </div>
+            ))}
           </div>
 
           {/* Busca */}
@@ -695,17 +549,17 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
               type="text"
               value={deviceSearch}
               onChange={(e) => setDeviceSearch(e.target.value)}
-              placeholder="Buscar por nome do piloto, ID (PS-...) ou modelo do aparelho..."
-              className="min-h-[42px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] pr-3 pl-9 text-xs font-semibold text-[var(--ps-text)] focus:border-cyan-400 focus:outline-none"
+              placeholder="Buscar piloto, ID de 5 dígitos ou aparelho..."
+              className="min-h-[38px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[#141619] pr-3 pl-9 text-[13px] font-medium text-[var(--ps-text)] focus:border-white/40 focus:outline-none"
             />
           </div>
 
           {panelFeedback && (
             <div
-              className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+              className={`rounded-lg border px-3 py-2 text-xs font-medium bg-[#141619] ${
                 panelFeedback.ok
-                  ? 'border-emerald-500/40 bg-emerald-950/35 text-emerald-300'
-                  : 'border-red-500/45 bg-red-950/40 text-red-200'
+                  ? 'border-emerald-500/35 text-emerald-300'
+                  : 'border-red-500/35 text-red-300'
               }`}
             >
               {panelFeedback.msg}
@@ -713,259 +567,270 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
           )}
 
           {devicesError && (
-            <div className="rounded-lg border border-red-500/45 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+            <div className="rounded-lg border border-red-500/35 bg-[#141619] px-3 py-2 text-xs text-red-300">
               {devicesError}
             </div>
           )}
 
           {devicesLoading && devices.length === 0 ? (
-            <div className="py-8 text-center text-xs text-[var(--ps-muted)]">
+            <div className="py-6 text-center text-xs text-[var(--ps-muted)]">
               Carregando dispositivos cadastrados...
             </div>
           ) : filteredDevices.length === 0 ? (
-            <div className="py-8 text-center text-xs text-[var(--ps-muted)]">
-              Nenhum dispositivo encontrado.
+            <div className="flex items-center justify-center gap-1.5 py-6 text-xs text-[var(--ps-muted)]">
+              <Users className="h-3.5 w-3.5" />
+              <span>Nenhum dispositivo encontrado.</span>
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="divide-y divide-[var(--ps-border)] rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] overflow-hidden">
               {filteredDevices.map((d) => {
                 const isCurrent = d.device_id === currentIdentity.deviceId;
                 const expired = isLicenseExpired(d.expires_at);
                 const blocked = d.allowed === false;
                 const inTrial = isDeviceInTrial24h(d);
                 const busy = busyDeviceId === d.device_id;
+                const isExpanded = expandedDeviceId === d.device_id;
                 const draftName = editingNames[d.device_id] ?? d.pilot_name ?? '';
                 const nameDirty = draftName.trim() !== (d.pilot_name ?? '').trim();
+                const shortExp = formatExpirationShortPtBr(d.expires_at);
 
-                let statusBadge = (
-                  <span className="inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] font-black text-emerald-300 uppercase">
-                    <Check className="h-3 w-3" />
-                    <span>{d.expires_at ? 'ATIVO' : 'VITALÍCIO'}</span>
-                  </span>
-                );
+                let statusDotClass = 'bg-emerald-400';
+                let statusLabel = d.expires_at ? `Ativo · ${shortExp}` : 'Vitalício';
                 if (blocked) {
-                  statusBadge = (
-                    <span className="inline-flex items-center gap-1 rounded border border-red-500/45 bg-red-500/20 px-1.5 py-0.5 font-mono text-[10px] font-black text-red-300 uppercase">
-                      <Ban className="h-3 w-3" />
-                      <span>BLOQUEADO</span>
-                    </span>
-                  );
+                  statusDotClass = 'bg-red-500';
+                  statusLabel = 'Bloqueado';
                 } else if (expired) {
-                  statusBadge = (
-                    <span className="inline-flex items-center gap-1 rounded border border-red-500/45 bg-red-500/20 px-1.5 py-0.5 font-mono text-[10px] font-black text-red-300 uppercase">
-                      <ShieldAlert className="h-3 w-3" />
-                      <span>EXPIRADO</span>
-                    </span>
-                  );
+                  statusDotClass = 'bg-red-500';
+                  statusLabel = shortExp ? `Expirado · ${shortExp}` : 'Expirado';
                 } else if (inTrial) {
-                  statusBadge = (
-                    <span className="inline-flex items-center gap-1 rounded border border-amber-500/45 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-black text-[var(--ps-amber)] uppercase">
-                      <CalendarClock className="h-3 w-3" />
-                      <span>TESTE 24H</span>
-                    </span>
-                  );
+                  statusDotClass = 'bg-amber-400';
+                  statusLabel = shortExp ? `Teste 24h · ${shortExp}` : 'Teste 24h';
                 }
 
                 return (
-                  <div
-                    key={d.device_id}
-                    className={`rounded-xl border p-3.5 space-y-3 ${
-                      isCurrent
-                        ? 'border-cyan-400/60 bg-cyan-950/15'
-                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)]'
-                    }`}
-                  >
-                    {/* Cabeçalho do dispositivo + Badges */}
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono text-sm font-black tracking-wider text-[var(--ps-amber)] tabular-nums select-all">
-                          {d.device_id}
-                        </span>
-                        {statusBadge}
-                        {isCurrent && (
-                          <span className="inline-flex items-center rounded border border-cyan-400/50 bg-cyan-500/20 px-1.5 py-0.5 font-mono text-[10px] font-black text-cyan-200 uppercase">
-                            Este Aparelho
+                  <div key={d.device_id} className="transition-colors">
+                    {/* Visão Padrão da Linha (Compacta) */}
+                    <div className="flex items-center justify-between gap-2.5 px-3 py-2.5">
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-sm font-black tracking-wider text-[var(--ps-text)] tabular-nums select-all">
+                            {d.device_id}
                           </span>
-                        )}
+                          <span className="text-[13px] font-semibold text-[var(--ps-text)] break-words">
+                            {d.pilot_name?.trim() || 'Piloto Sem Nome'}
+                          </span>
+                          {isCurrent && (
+                            <span className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--ps-muted)] uppercase">
+                              Este
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-xs text-[var(--ps-muted)]">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass}`} />
+                            <span className={blocked || expired ? 'text-red-300' : 'text-[var(--ps-muted)]'}>
+                              {statusLabel}
+                            </span>
+                          </span>
+                          <span className="opacity-75">
+                            {d.app_version || '--'}
+                          </span>
+                        </div>
                       </div>
 
-                      <span className="font-mono text-[10px] text-[var(--ps-muted)] tabular-nums">
-                        Último acesso: {formatDateTimePtBr(d.last_seen_at)}
-                      </span>
+                      <button
+                        type="button"
+                        aria-expanded={isExpanded}
+                        onClick={() => {
+                          setConfirmDeleteId(null);
+                          setExpandedDeviceId((prev) =>
+                            prev === d.device_id ? null : d.device_id
+                          );
+                        }}
+                        className="inline-flex min-h-[34px] shrink-0 items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[#141619] px-2.5 text-xs font-bold text-[var(--ps-text)] transition-colors hover:border-white/35"
+                      >
+                        <span>Gerenciar</span>
+                        <ChevronDown
+                          className={`h-3.5 w-3.5 text-[var(--ps-muted)] transition-transform ${
+                            isExpanded ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
                     </div>
 
-                    {/* Nome editável do piloto */}
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <div className="flex flex-1 items-center gap-1.5">
-                        <input
-                          type="text"
-                          value={draftName}
-                          onChange={(e) =>
-                            setEditingNames((prev) => ({
-                              ...prev,
-                              [d.device_id]: e.target.value,
-                            }))
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
+                    {/* Painel Acordeão Expandido */}
+                    {isExpanded && (
+                      <div className="border-t border-[var(--ps-border)] bg-[#141619] px-3 py-3 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-[var(--ps-muted)]">
+                          <span>
+                            {d.device_model || 'Modelo desconhecido'} · Último acesso:{' '}
+                            {formatDateTimePtBr(d.last_seen_at)}
+                          </span>
+                          <span className={blocked || expired ? 'text-red-300' : 'text-[var(--ps-text)]'}>
+                            {blocked ? 'Bloqueado' : formatExpirationLabel(d.expires_at)}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={draftName}
+                            onChange={(e) =>
+                              setEditingNames((prev) => ({
+                                ...prev,
+                                [d.device_id]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void handleUpdateDevice(
+                                  d.device_id,
+                                  { pilot_name: draftName.trim() || 'Piloto Sem Nome' },
+                                  `Nome atualizado para ${draftName.trim() || 'Piloto Sem Nome'}.`
+                                );
+                              }
+                            }}
+                            placeholder="Nome do piloto / equipe"
+                            className="min-h-[36px] flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 text-[13px] font-semibold text-[var(--ps-text)] focus:border-white/40 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            disabled={busy || !nameDirty}
+                            onClick={() =>
                               void handleUpdateDevice(
                                 d.device_id,
                                 { pilot_name: draftName.trim() || 'Piloto Sem Nome' },
                                 `Nome atualizado para ${draftName.trim() || 'Piloto Sem Nome'}.`
-                              );
+                              )
                             }
-                          }}
-                          placeholder="Nome do piloto / equipe"
-                          className="min-h-[38px] flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-bold text-[var(--ps-text)] focus:border-cyan-400 focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          disabled={busy || !nameDirty}
-                          onClick={() =>
-                            void handleUpdateDevice(
-                              d.device_id,
-                              { pilot_name: draftName.trim() || 'Piloto Sem Nome' },
-                              `Nome atualizado para ${draftName.trim() || 'Piloto Sem Nome'}.`
-                            )
-                          }
-                          className={`inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition ${
-                            nameDirty
-                              ? 'bg-cyan-500/25 border border-cyan-400/60 text-cyan-200 hover:bg-cyan-500/35'
-                              : 'border border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] opacity-60'
-                          }`}
-                        >
-                          <Save className="h-3.5 w-3.5" />
-                          <span>Salvar</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Metadados + validade */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-[var(--ps-muted)]">
-                      <span className="truncate">
-                        {d.device_model || 'Modelo desconhecido'}
-                        {d.app_version ? ` · ${d.app_version}` : ''}
-                      </span>
-                      <span
-                        className={`font-bold tabular-nums ${
-                          blocked || expired ? 'text-red-300' : 'text-[var(--ps-text)]'
-                        }`}
-                      >
-                        {blocked ? 'Acesso bloqueado' : formatExpirationLabel(d.expires_at)}
-                      </span>
-                    </div>
-
-                    {/* Ações de 1 toque */}
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          void handleUpdateDevice(
-                            d.device_id,
-                            { allowed: true, expires_at: null },
-                            `${d.device_id} liberado com acesso Vitalício.`
-                          )
-                        }
-                        className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-amber-500/45 bg-amber-500/15 px-2.5 text-[11px] font-extrabold text-amber-200 hover:bg-amber-500/25 disabled:opacity-50"
-                      >
-                        <InfinityIcon className="h-3.5 w-3.5" />
-                        <span>Vitalício</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          void handleUpdateDevice(
-                            d.device_id,
-                            { allowed: true, expires_at: addDaysFromBase(d.expires_at, 1) },
-                            `+1 dia adicionado para ${d.device_id}.`
-                          )
-                        }
-                        className="inline-flex min-h-[34px] items-center rounded-md border border-emerald-500/45 bg-emerald-500/15 px-2.5 text-[11px] font-extrabold text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-50 tabular-nums"
-                      >
-                        +1 Dia
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          void handleUpdateDevice(
-                            d.device_id,
-                            { allowed: true, expires_at: addDaysFromBase(d.expires_at, 30) },
-                            `+30 dias adicionados para ${d.device_id}.`
-                          )
-                        }
-                        className="inline-flex min-h-[34px] items-center rounded-md border border-emerald-500/45 bg-emerald-500/15 px-2.5 text-[11px] font-extrabold text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-50 tabular-nums"
-                      >
-                        +30 Dias
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          void handleUpdateDevice(
-                            d.device_id,
-                            { allowed: true, expires_at: addDaysFromBase(d.expires_at, 365) },
-                            `+1 ano adicionado para ${d.device_id}.`
-                          )
-                        }
-                        className="inline-flex min-h-[34px] items-center rounded-md border border-cyan-500/45 bg-cyan-500/15 px-2.5 text-[11px] font-extrabold text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-50 tabular-nums"
-                      >
-                        +1 Ano
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={busy || blocked}
-                        onClick={() =>
-                          void handleUpdateDevice(
-                            d.device_id,
-                            { allowed: false },
-                            `Dispositivo ${d.device_id} bloqueado.`
-                          )
-                        }
-                        className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-red-500/45 bg-red-500/15 px-2.5 text-[11px] font-extrabold text-red-200 hover:bg-red-500/25 disabled:opacity-45"
-                      >
-                        <Ban className="h-3.5 w-3.5" />
-                        <span>Bloquear</span>
-                      </button>
-
-                      {confirmDeleteId === d.device_id ? (
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void handleDeleteDevice(d.device_id)}
-                            className="inline-flex min-h-[34px] items-center gap-1 rounded-md bg-red-600 px-2.5 text-[11px] font-black text-white hover:bg-red-500 disabled:opacity-50"
+                            className={`inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-lg border px-3 text-xs font-bold transition ${
+                              nameDirty
+                                ? 'border-white/30 bg-white/10 text-[var(--ps-text)] hover:bg-white/15'
+                                : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)] opacity-50'
+                            }`}
                           >
-                            <span>Confirmar Exclusão</span>
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="inline-flex min-h-[34px] items-center rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 text-[11px] font-bold text-[var(--ps-muted)]"
-                          >
-                            Cancelar
+                            <Save className="h-3.5 w-3.5" />
+                            <span>Salvar</span>
                           </button>
                         </div>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => setConfirmDeleteId(d.device_id)}
-                          className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 text-[11px] font-bold text-[var(--ps-muted)] hover:border-red-500/50 hover:text-red-300 disabled:opacity-50"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          <span>Excluir</span>
-                        </button>
-                      )}
-                    </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void handleUpdateDevice(
+                                d.device_id,
+                                { allowed: true, expires_at: null },
+                                `${d.device_id} liberado com acesso Vitalício.`
+                              )
+                            }
+                            className="inline-flex min-h-[32px] items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-white/35 hover:bg-white/10 disabled:opacity-50"
+                          >
+                            <InfinityIcon className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
+                            <span>Vitalício</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void handleUpdateDevice(
+                                d.device_id,
+                                { allowed: true, expires_at: addDaysFromBase(d.expires_at, 1) },
+                                `+1 dia adicionado para ${d.device_id}.`
+                              )
+                            }
+                            className="inline-flex min-h-[32px] items-center rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-white/35 hover:bg-white/10 disabled:opacity-50 tabular-nums"
+                          >
+                            +1 Dia
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void handleUpdateDevice(
+                                d.device_id,
+                                { allowed: true, expires_at: addDaysFromBase(d.expires_at, 30) },
+                                `+30 dias adicionados para ${d.device_id}.`
+                              )
+                            }
+                            className="inline-flex min-h-[32px] items-center rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-white/35 hover:bg-white/10 disabled:opacity-50 tabular-nums"
+                          >
+                            +30 Dias
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void handleUpdateDevice(
+                                d.device_id,
+                                { allowed: true, expires_at: addDaysFromBase(d.expires_at, 365) },
+                                `+1 ano adicionado para ${d.device_id}.`
+                              )
+                            }
+                            className="inline-flex min-h-[32px] items-center rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-white/35 hover:bg-white/10 disabled:opacity-50 tabular-nums"
+                          >
+                            +1 Ano
+                          </button>
+
+                          <div className="ml-auto flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                void handleUpdateDevice(
+                                  d.device_id,
+                                  { allowed: blocked ? true : false },
+                                  blocked
+                                    ? `Dispositivo ${d.device_id} desbloqueado.`
+                                    : `Dispositivo ${d.device_id} bloqueado.`
+                                )
+                              }
+                              className="inline-flex min-h-[32px] items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-red-500/40 hover:text-red-300 disabled:opacity-45"
+                            >
+                              <Ban className="h-3.5 w-3.5 text-[var(--ps-muted)]" />
+                              <span>{blocked ? 'Desbloquear' : 'Bloquear'}</span>
+                            </button>
+
+                            {confirmDeleteId === d.device_id ? (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void handleDeleteDevice(d.device_id)}
+                                  className="inline-flex min-h-[32px] items-center rounded-md border border-red-500/50 bg-red-600/80 px-2.5 text-xs font-bold text-white hover:bg-red-600 disabled:opacity-50"
+                                >
+                                  Confirmar
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="inline-flex min-h-[32px] items-center rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2.5 text-xs font-semibold text-[var(--ps-muted)]"
+                                >
+                                  Não
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => setConfirmDeleteId(d.device_id)}
+                                className="inline-flex min-h-[32px] items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2.5 text-xs font-semibold text-[var(--ps-muted)] hover:border-red-500/40 hover:text-red-300 disabled:opacity-50"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                <span>Excluir</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -973,6 +838,15 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
           )}
         </section>
       )}
+
+      <AdminSecretLoginModal
+        open={adminModalOpen}
+        onClose={() => setAdminModalOpen(false)}
+        onSuccess={() => {
+          setAdminModalOpen(false);
+          onRecheckDeviceLicense?.();
+        }}
+      />
     </div>
   );
 };

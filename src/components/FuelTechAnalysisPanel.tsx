@@ -8,14 +8,17 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Target,
   Trash2,
+  TrendingUp,
   ZoomIn,
 } from 'lucide-react';
 import {
+  analyzeTrackCornersAndBraking,
   buildTrackSectors,
-  computeBrakePointOffsetNearDist,
   computeMultiLapSectorComparison,
   computeRunSectorMetrics,
+  computeSafeAverageSpeedKmh,
   detectTelemetryCriticalPoints,
   ensureTraceGForces,
   formatStageDuration,
@@ -207,7 +210,12 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string | null>(null);
   const [proFullscreen, setProFullscreen] = useState(false);
   const [proReplayPlaying, setProReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<0.25 | 0.5 | 1 | 2>(1);
   const [replayElapsedMs, setReplayElapsedMs] = useState<number | null>(null);
+  const replaySpeedRef = useRef(replaySpeed);
+  replaySpeedRef.current = replaySpeed;
+  const replayElapsedRef = useRef<number | null>(null);
+  replayElapsedRef.current = replayElapsedMs;
   const [fsMapStyleIdx, setFsMapStyleIdx] = useState(0);
   const fsMapStyleLabels = ['Satélite', 'Híbrido', 'Ruas'] as const;
 
@@ -284,7 +292,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     };
   }, [proFullscreen]);
 
-  // Replay sincronizado pelo mesmo TEMPO REAL DECORRIDO (t em ms) para V1, V2 e V3
+  // Replay sincronizado pelo mesmo TEMPO REAL DECORRIDO (t em ms) com multiplicador 0.25x / 0.5x / 1x / 2x
   useEffect(() => {
     if (!proReplayPlaying) return;
     const startWindowMs =
@@ -299,24 +307,33 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               maxReplayElapsedMs
           )
         : maxReplayElapsedMs;
-    const stepMs = Math.max(40, Math.round((endWindowMs - startWindowMs) / 360));
 
-    const timer = window.setInterval(() => {
-      setReplayElapsedMs((prev) => {
-        const base = prev ?? startWindowMs;
-        const next = base + stepMs;
-        const clampedNext = next >= endWindowMs ? endWindowMs : next;
-        const v1AtT = interpolateSampleAtElapsedMs(lap1Samples, clampedNext);
-        if (v1AtT) {
-          setScrubDistM(Math.round(v1AtT.distKm * 1000));
-        }
-        if (next >= endWindowMs) {
-          setProReplayPlaying(false);
-        }
-        return clampedNext;
-      });
-    }, 50);
-    return () => window.clearInterval(timer);
+    let currentSimMs = replayElapsedRef.current ?? startWindowMs;
+    if (currentSimMs < startWindowMs || currentSimMs >= endWindowMs) {
+      currentSimMs = startWindowMs;
+    }
+
+    let lastPerfMs = performance.now();
+    let rafId = 0;
+
+    const tick = (nowPerfMs: number) => {
+      const dtRealMs = Math.min(120, Math.max(0, nowPerfMs - lastPerfMs));
+      lastPerfMs = nowPerfMs;
+      currentSimMs = Math.min(endWindowMs, currentSimMs + dtRealMs * replaySpeedRef.current);
+      setReplayElapsedMs(currentSimMs);
+      const v1AtT = interpolateSampleAtElapsedMs(lap1Samples, currentSimMs);
+      if (v1AtT) {
+        setScrubDistM(Math.round(v1AtT.distKm * 1000));
+      }
+      if (currentSimMs >= endWindowMs) {
+        setProReplayPlaying(false);
+        return;
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
   }, [
     proReplayPlaying,
     zoomSectorIdx,
@@ -831,13 +848,6 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         ? Number(((s3AtDist.stageElapsedMs - s1.stageElapsedMs) / 1000).toFixed(2))
         : null;
 
-    const brakeOffset2 = showLap2
-      ? computeBrakePointOffsetNearDist(lap1Samples, lap2Samples, activeDistM)
-      : null;
-    const brakeOffset3 = showLap3
-      ? computeBrakePointOffsetNearDist(lap1Samples, lap3Samples, activeDistM)
-      : null;
-
     return {
       distM: activeDistM,
       distKmStr: (activeDistM / 1000).toFixed(3),
@@ -857,8 +867,6 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       latG1,
       latG2,
       latG3,
-      brakeOffset2,
-      brakeOffset3,
     };
   }, [replayElapsedMs, scrubDistM, lap1Samples, lap2Samples, lap3Samples, showLap2, showLap3]);
 
@@ -954,25 +962,11 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         )}
       </div>
 
-      <div className="grid grid-cols-6 gap-1 font-mono text-[11px] font-extrabold">
-        <button
-          type="button"
-          onClick={() => scrubByManualDist(scrubPoint.distM - 50)}
-          className="flex min-h-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
-        >
-          -50m
-        </button>
-        <button
-          type="button"
-          onClick={() => scrubByManualDist(scrubPoint.distM - 10)}
-          className="flex min-h-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
-        >
-          -10m
-        </button>
+      <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] font-extrabold">
         <button
           type="button"
           onClick={handleToggleReplay}
-          className="pitstop-btn-red col-span-2 flex min-h-[36px] items-center justify-center gap-1 rounded-lg px-2 font-black active:scale-95"
+          className="pitstop-btn-red flex min-h-[36px] min-w-[96px] flex-1 items-center justify-center gap-1.5 rounded-lg px-3 font-black active:scale-95"
         >
           {proReplayPlaying ? (
             <>
@@ -986,17 +980,58 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
             </>
           )}
         </button>
+
+        <div
+          className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5"
+          role="group"
+          aria-label="Velocidade de reprodução do replay"
+        >
+          {([0.25, 0.5, 1, 2] as const).map((spd) => {
+            const activeSpd = replaySpeed === spd;
+            return (
+              <button
+                key={`spd_${spd}`}
+                type="button"
+                onClick={() => setReplaySpeed(spd)}
+                className={`min-h-[30px] rounded-md px-2 text-[10px] font-black transition-colors active:scale-95 ${
+                  activeSpd
+                    ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                    : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                }`}
+              >
+                {spd}x
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-1 font-mono text-[11px] font-extrabold">
+        <button
+          type="button"
+          onClick={() => scrubByManualDist(scrubPoint.distM - 50)}
+          className="flex min-h-[34px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
+        >
+          -50m
+        </button>
+        <button
+          type="button"
+          onClick={() => scrubByManualDist(scrubPoint.distM - 10)}
+          className="flex min-h-[34px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
+        >
+          -10m
+        </button>
         <button
           type="button"
           onClick={() => scrubByManualDist(scrubPoint.distM + 10)}
-          className="flex min-h-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
+          className="flex min-h-[34px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
         >
           +10m
         </button>
         <button
           type="button"
           onClick={() => scrubByManualDist(scrubPoint.distM + 50)}
-          className="flex min-h-[36px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
+          className="flex min-h-[34px] items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-95"
         >
           +50m
         </button>
@@ -1049,6 +1084,453 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
     );
   };
 
+  const cornerAnalysis = useMemo(() => {
+    const laps: Array<{ slot: 1 | 2 | 3; runNumber: number; samples: VelocitySample[] }> = [];
+    if (lap1 && lap1Samples.length >= 6) {
+      laps.push({ slot: 1, runNumber: lap1.runNumber, samples: lap1Samples });
+    }
+    if (showLap2 && lap2 && lap2Samples.length >= 6) {
+      laps.push({ slot: 2, runNumber: lap2.runNumber, samples: lap2Samples });
+    }
+    if (showLap3 && lap3 && lap3Samples.length >= 6) {
+      laps.push({ slot: 3, runNumber: lap3.runNumber, samples: lap3Samples });
+    }
+    if (laps.length === 0) return [];
+    return analyzeTrackCornersAndBraking(laps);
+  }, [lap1, lap1Samples, showLap2, lap2, lap2Samples, showLap3, lap3, lap3Samples]);
+
+  const improvementDiagnostic = useMemo(() => {
+    if (sectorComparison.rows.length === 0) return null;
+
+    let worstLoss: {
+      slot: 2 | 3;
+      sectorIndex: number;
+      timeDeltaSec: number;
+      avgSpeedDeltaKmh: number | null;
+      maxSpeedDeltaKmh: number | null;
+      minSpeedDeltaKmh: number | null;
+    } | null = null;
+
+    let bestGain: {
+      slot: 2 | 3;
+      sectorIndex: number;
+      timeDeltaSec: number;
+    } | null = null;
+
+    for (const row of sectorComparison.rows) {
+      for (const entry of row.entries) {
+        if (entry.slot === 1 || entry.timeDeltaSec === null) continue;
+        const cmpSlot = entry.slot as 2 | 3;
+        if (entry.timeDeltaSec > 0) {
+          if (!worstLoss || entry.timeDeltaSec > worstLoss.timeDeltaSec) {
+            worstLoss = {
+              slot: cmpSlot,
+              sectorIndex: row.index,
+              timeDeltaSec: entry.timeDeltaSec,
+              avgSpeedDeltaKmh: entry.avgSpeedDeltaKmh,
+              maxSpeedDeltaKmh: entry.maxSpeedDeltaKmh,
+              minSpeedDeltaKmh: entry.minSpeedDeltaKmh,
+            };
+          }
+        } else if (entry.timeDeltaSec < 0) {
+          if (!bestGain || entry.timeDeltaSec < bestGain.timeDeltaSec) {
+            bestGain = {
+              slot: cmpSlot,
+              sectorIndex: row.index,
+              timeDeltaSec: entry.timeDeltaSec,
+            };
+          }
+        }
+      }
+    }
+
+    let worstCornerTip: {
+      cornerIndex: number;
+      refApexDistM: number;
+      slot: 2 | 3;
+      metricLabel: 'mínima' | 'saída';
+      speedDropKmh: number;
+    } | null = null;
+
+    for (const corner of cornerAnalysis) {
+      for (const e of corner.entries) {
+        if (e.slot === 1) continue;
+        const cmpSlot = e.slot as 2 | 3;
+        if (e.deltaExitKmh !== null && e.deltaExitKmh < 0) {
+          const drop = Math.abs(e.deltaExitKmh);
+          if (!worstCornerTip || drop > worstCornerTip.speedDropKmh) {
+            worstCornerTip = {
+              cornerIndex: corner.cornerIndex,
+              refApexDistM: corner.refApexDistM,
+              slot: cmpSlot,
+              metricLabel: 'saída',
+              speedDropKmh: drop,
+            };
+          }
+        }
+        if (e.deltaApexKmh !== null && e.deltaApexKmh < 0) {
+          const drop = Math.abs(e.deltaApexKmh);
+          if (!worstCornerTip || drop > worstCornerTip.speedDropKmh) {
+            worstCornerTip = {
+              cornerIndex: corner.cornerIndex,
+              refApexDistM: corner.refApexDistM,
+              slot: cmpSlot,
+              metricLabel: 'mínima',
+              speedDropKmh: drop,
+            };
+          }
+        }
+      }
+    }
+
+    if (worstLoss) {
+      const speedReason =
+        worstLoss.avgSpeedDeltaKmh !== null && worstLoss.avgSpeedDeltaKmh < 0
+          ? `Velocidade média ${Math.abs(worstLoss.avgSpeedDeltaKmh)} km/h abaixo da VOLTA 1`
+          : worstLoss.maxSpeedDeltaKmh !== null && worstLoss.maxSpeedDeltaKmh < 0
+            ? `Velocidade máxima ${Math.abs(worstLoss.maxSpeedDeltaKmh)} km/h abaixo da VOLTA 1`
+            : worstLoss.minSpeedDeltaKmh !== null && worstLoss.minSpeedDeltaKmh < 0
+              ? `Velocidade mínima ${Math.abs(worstLoss.minSpeedDeltaKmh)} km/h abaixo da VOLTA 1`
+              : 'Retomada/traçado mais lento que a VOLTA 1';
+
+      return {
+        tone: 'loss' as const,
+        sectorIndex: worstLoss.sectorIndex,
+        slot: worstLoss.slot,
+        headline: `Maior perda na VOLTA ${worstLoss.slot} no Setor ${worstLoss.sectorIndex} (+${worstLoss.timeDeltaSec.toFixed(2)}s) · ${speedReason}`,
+        subtip: worstCornerTip
+          ? `Curva ${worstCornerTip.cornerIndex} (${worstCornerTip.refApexDistM}m): velocidade de ${worstCornerTip.metricLabel} ${worstCornerTip.speedDropKmh} km/h abaixo da VOLTA 1.`
+          : null,
+        jumpDistM: worstCornerTip?.refApexDistM ?? null,
+      };
+    }
+
+    if (bestGain) {
+      return {
+        tone: 'gain' as const,
+        sectorIndex: bestGain.sectorIndex,
+        slot: bestGain.slot,
+        headline: `VOLTA ${bestGain.slot} mais rápida que a VOLTA 1 · Maior ganho no Setor ${bestGain.sectorIndex} (${bestGain.timeDeltaSec.toFixed(2)}s)`,
+        subtip: worstCornerTip
+          ? `Ajuste fino na Curva ${worstCornerTip.cornerIndex} (${worstCornerTip.refApexDistM}m): ${worstCornerTip.metricLabel} ${worstCornerTip.speedDropKmh} km/h abaixo da VOLTA 1.`
+          : 'Manteve ritmo superior em todos os setores comparados.',
+        jumpDistM: worstCornerTip?.refApexDistM ?? null,
+      };
+    }
+
+    let slowestSec = sectorComparison.rows[0];
+    for (const row of sectorComparison.rows) {
+      const currAvg = row.entries[0]?.metrics.avgSpeedKmh ?? Infinity;
+      const slowAvg = slowestSec?.entries[0]?.metrics.avgSpeedKmh ?? Infinity;
+      if (currAvg < slowAvg) slowestSec = row;
+    }
+    const v1Avg = slowestSec?.entries[0]?.metrics.avgSpeedKmh ?? null;
+    return {
+      tone: 'neutral' as const,
+      sectorIndex: slowestSec?.index ?? null,
+      slot: 1 as const,
+      headline:
+        slowestSec && v1Avg !== null
+          ? `Setor mais técnico na VOLTA 1: Setor ${slowestSec.index} (média ${v1Avg} km/h) · Selecione VOLTA 2 ou VOLTA 3 para ver onde ganhar tempo.`
+          : 'Selecione VOLTA 2 ou VOLTA 3 para identificar onde ganhar tempo por setor.',
+      subtip: null,
+      jumpDistM: null,
+    };
+  }, [sectorComparison.rows, cornerAnalysis]);
+
+  const lapSlotColorClass = (slot: 1 | 2 | 3) =>
+    slot === 1
+      ? 'text-[var(--ps-emerald)]'
+      : slot === 2
+        ? 'text-[#FF2A2A]'
+        : 'text-[#38BDF8]';
+
+  const lapSlotBorderLeftClass = (slot: 1 | 2 | 3) =>
+    slot === 1
+      ? 'border-l-2 border-l-[#10B981]'
+      : slot === 2
+        ? 'border-l-2 border-l-[#FF2A2A]'
+        : 'border-l-2 border-l-[#38BDF8]';
+
+  const renderSectorComparisonCards = (compact: boolean) => {
+    if (sectorComparison.rows.length === 0) return null;
+    return (
+      <div
+        className={`rounded-xl border border-[var(--ps-border)] ${
+          compact ? 'bg-[var(--ps-surface)] p-2' : 'bg-[var(--ps-card-deep)] p-2.5'
+        } space-y-2 font-mono tabular-nums`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[10px] font-extrabold tracking-wider text-[var(--ps-muted)] uppercase">
+            Comparativo por Setores (S1..S{sectorComparison.rows.length})
+          </span>
+          <span className="text-[9px] font-bold text-[var(--ps-muted)]">
+            <strong className="text-[var(--ps-emerald)]">Verde = Mais rápido</strong> ·{' '}
+            <strong className="text-[#FF2A2A]">Vermelho = Mais lento</strong>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {sectorComparison.rows.map((row) => {
+            const fastestDurationMs = row.entries.reduce<number | null>((min, entry) => {
+              const d = entry.metrics.durationMs;
+              if (d === null || d <= 0) return min;
+              return min === null ? d : Math.min(min, d);
+            }, null);
+
+            return (
+              <button
+                key={`sec_cmp_${row.index}`}
+                type="button"
+                onClick={() => {
+                  setProReplayPlaying(false);
+                  setReplayElapsedMs(null);
+                  setZoomSectorIdx((prev) => (prev === row.index ? null : row.index));
+                }}
+                className={`rounded-lg border p-2 text-left transition-colors ${
+                  zoomSectorIdx === row.index
+                    ? 'border-[var(--ps-amber)] bg-amber-500/10'
+                    : 'border-[var(--ps-border)] bg-[var(--ps-surface)] hover:border-[var(--ps-border-strong)]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] pb-1">
+                  <span className="text-[11px] font-black text-[var(--ps-amber)]">
+                    S{row.index} · Setor {row.index}
+                  </span>
+                  <span className="text-[9px] font-bold text-[var(--ps-muted)]">
+                    {row.fromDistM}–{row.toDistM}m
+                  </span>
+                </div>
+
+                <div className="mt-1.5 space-y-1 text-[10px]">
+                  {row.entries.map((entry, idx) => {
+                    const isBest =
+                      fastestDurationMs !== null &&
+                      entry.metrics.durationMs !== null &&
+                      Math.abs(entry.metrics.durationMs - fastestDurationMs) <= 15;
+                    const isFasterThanRef =
+                      idx > 0 && entry.timeDeltaSec !== null && entry.timeDeltaSec < 0;
+                    const isSlowerThanRef =
+                      idx > 0 && entry.timeDeltaSec !== null && entry.timeDeltaSec > 0;
+                    const deltaColorCls =
+                      isFasterThanRef || (idx > 0 && isBest)
+                        ? 'text-[var(--ps-emerald)]'
+                        : isSlowerThanRef
+                          ? 'text-[#FF2A2A]'
+                          : 'text-[var(--ps-muted)]';
+
+                    return (
+                      <div
+                        key={`sec_${row.index}_v${entry.slot}`}
+                        className={`flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1.5 py-1 ${
+                          compact ? 'bg-[var(--ps-card-deep)]/80' : 'bg-[var(--ps-card-deep)]'
+                        } ${lapSlotBorderLeftClass(entry.slot)}`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className={`font-black ${lapSlotColorClass(entry.slot)}`}>
+                            VOLTA {entry.slot}
+                          </span>
+                          <span className="font-black text-[var(--ps-text)]">
+                            {formatSectorSec(entry.metrics.durationMs)}
+                          </span>
+                          {idx === 0 ? (
+                            <span className="rounded bg-emerald-500/15 px-1 py-px text-[8px] font-black text-[var(--ps-emerald)]">
+                              REF
+                            </span>
+                          ) : (
+                            entry.timeDeltaSec !== null && (
+                              <span className={`font-black ${deltaColorCls}`}>
+                                ({formatSignedSec(entry.timeDeltaSec)})
+                              </span>
+                            )
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 text-[9px] font-bold text-[var(--ps-muted)]">
+                          <span>
+                            Méd{' '}
+                            <strong className="text-[var(--ps-text)]">
+                              {entry.metrics.avgSpeedKmh ?? '--'}
+                            </strong>
+                          </span>
+                          <span>
+                            Máx{' '}
+                            <strong className="text-[var(--ps-text)]">
+                              {entry.metrics.maxSpeedKmh ?? '--'}
+                            </strong>{' '}
+                            km/h
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderImprovementDiagnosticCard = (compact: boolean) => {
+    if (!improvementDiagnostic) return null;
+    const borderCls =
+      improvementDiagnostic.tone === 'loss'
+        ? 'border-red-500/45 bg-red-500/10'
+        : improvementDiagnostic.tone === 'gain'
+          ? 'border-emerald-500/45 bg-emerald-500/10'
+          : 'border-[var(--ps-border)] bg-[var(--ps-surface)]';
+    const badgeCls =
+      improvementDiagnostic.tone === 'loss'
+        ? 'text-[#FF2A2A]'
+        : improvementDiagnostic.tone === 'gain'
+          ? 'text-[var(--ps-emerald)]'
+          : 'text-[var(--ps-amber)]';
+
+    return (
+      <div
+        className={`rounded-xl border ${borderCls} ${
+          compact ? 'px-2.5 py-2' : 'px-3 py-2.5'
+        } space-y-1 font-mono tabular-nums`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className={`inline-flex items-center gap-1.5 text-[10px] font-black uppercase ${badgeCls}`}>
+            <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+            <span>Onde Melhorar na Próxima Volta</span>
+          </span>
+          {improvementDiagnostic.sectorIndex !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                setProReplayPlaying(false);
+                setReplayElapsedMs(null);
+                setZoomSectorIdx(improvementDiagnostic.sectorIndex);
+              }}
+              className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-1.5 py-0.5 text-[9px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-amber)]"
+            >
+              Ver Setor {improvementDiagnostic.sectorIndex}
+            </button>
+          )}
+        </div>
+        <p className="text-[11px] font-extrabold leading-snug text-[var(--ps-text)]">
+          {improvementDiagnostic.headline}
+        </p>
+        {improvementDiagnostic.subtip && (
+          <p className="text-[10px] font-semibold leading-snug text-[var(--ps-muted)]">
+            {improvementDiagnostic.subtip}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  const renderCriticalCornersComparison = (compact: boolean) => {
+    if (lap1Samples.length < 6) return null;
+    return (
+      <div
+        className={`rounded-xl border border-[var(--ps-border)] ${
+          compact ? 'bg-[var(--ps-surface)] p-2' : 'bg-[var(--ps-card-deep)] p-2.5'
+        } space-y-2 font-mono tabular-nums`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-extrabold tracking-wider text-[var(--ps-muted)] uppercase">
+            <Target className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+            <span>Curvas Críticas (Entrada · Mínima · Saída)</span>
+          </span>
+          <span className="text-[9px] font-bold text-[var(--ps-muted)]">
+            <strong className="text-[var(--ps-emerald)]">Verde = Mais rápido</strong> ·{' '}
+            <strong className="text-[#FF2A2A]">Vermelho = Mais lento</strong>
+          </span>
+        </div>
+
+        {cornerAnalysis.length === 0 ? (
+          <p className="py-2 text-center text-[10px] text-[var(--ps-muted)]">
+            Nenhuma curva com desaceleração acentuada detectada neste traçado.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {cornerAnalysis.map((corner) => (
+              <button
+                key={`corner_${corner.cornerIndex}`}
+                type="button"
+                onClick={() => scrubByManualDist(corner.refApexDistM)}
+                title={`Ir para Curva ${corner.cornerIndex} (${corner.refApexDistM}m) no mapa e gráficos`}
+                className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2 text-left transition-colors hover:border-[var(--ps-amber)]"
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-border)] pb-1">
+                  <span className="text-[11px] font-black text-[var(--ps-text)]">
+                    {corner.label}
+                  </span>
+                  <span className="text-[9px] font-bold text-[var(--ps-muted)]">
+                    Frenagem {corner.refBrakeStartM}m · Ápice {corner.refApexDistM}m
+                  </span>
+                </div>
+
+                <div className="mt-1.5 space-y-1 text-[10px]">
+                  <div className="grid grid-cols-[62px_1fr_1fr_1fr] gap-1 px-1 text-[8px] font-bold text-[var(--ps-muted)] uppercase">
+                    <span>Volta</span>
+                    <span className="text-right">Entrada</span>
+                    <span className="text-right">Mínima</span>
+                    <span className="text-right">Saída</span>
+                  </div>
+
+                  {corner.entries.map((entry) => {
+                    const apexDeltaCls =
+                      entry.deltaApexKmh === null || entry.deltaApexKmh === 0
+                        ? 'text-[var(--ps-muted)]'
+                        : entry.deltaApexKmh > 0
+                          ? 'text-[var(--ps-emerald)]'
+                          : 'text-[#FF2A2A]';
+                    const exitDeltaCls =
+                      entry.deltaExitKmh === null || entry.deltaExitKmh === 0
+                        ? 'text-[var(--ps-muted)]'
+                        : entry.deltaExitKmh > 0
+                          ? 'text-[var(--ps-emerald)]'
+                          : 'text-[#FF2A2A]';
+
+                    return (
+                      <div
+                        key={`corner_${corner.cornerIndex}_v${entry.slot}`}
+                        className={`grid grid-cols-[62px_1fr_1fr_1fr] items-center gap-1 rounded px-1.5 py-1 ${
+                          compact ? 'bg-[var(--ps-card-deep)]/80' : 'bg-[var(--ps-card-deep)]'
+                        } ${lapSlotBorderLeftClass(entry.slot)}`}
+                      >
+                        <span className={`font-black ${lapSlotColorClass(entry.slot)}`}>
+                          VOLTA {entry.slot}
+                        </span>
+                        <span className="text-right font-bold text-[var(--ps-text)]">
+                          {entry.entrySpeedKmh}
+                          <span className="text-[8px] text-[var(--ps-muted)]"> km/h</span>
+                        </span>
+                        <span className="text-right font-extrabold text-[var(--ps-text)]">
+                          {entry.apexSpeedKmh}
+                          {entry.slot > 1 && entry.deltaApexKmh !== null && entry.deltaApexKmh !== 0 && (
+                            <span className={`ml-0.5 text-[9px] font-black ${apexDeltaCls}`}>
+                              ({formatSignedKmh(entry.deltaApexKmh)})
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-right font-extrabold text-[var(--ps-text)]">
+                          {entry.exitSpeedKmh}
+                          {entry.slot > 1 && entry.deltaExitKmh !== null && entry.deltaExitKmh !== 0 && (
+                            <span className={`ml-0.5 text-[9px] font-black ${exitDeltaCls}`}>
+                              ({formatSignedKmh(entry.deltaExitKmh)})
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-3">
       {/* 1. MELHOR VOLTA & MATRIZ GERAL DE VOLTAS & PARCIAIS NO TOPO */}
@@ -1077,6 +1559,20 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Vel. Máx</p>
                 <p className="font-extrabold text-[var(--ps-text)]">
                   {raceChronoMatrix.bestRun ? `${raceChronoMatrix.bestRun.maxSpeedKmh} km/h` : '--'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Vel. Méd</p>
+                <p className="font-extrabold text-[var(--ps-emerald)]">
+                  {raceChronoMatrix.bestRun
+                    ? `${computeSafeAverageSpeedKmh({
+                        distanceKm: raceChronoMatrix.bestRun.distanceKm,
+                        totalMs: raceChronoMatrix.bestRun.totalMs,
+                        maxSpeedKmh: raceChronoMatrix.bestRun.maxSpeedKmh,
+                        samples: raceChronoMatrix.bestRun.samples,
+                        storedAvgSpeedKmh: raceChronoMatrix.bestRun.avgSpeedKmh,
+                      })} km/h`
+                    : '--'}
                 </p>
               </div>
               <div>
@@ -1355,18 +1851,18 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]">
             <span className="inline-flex items-center gap-1.5 font-bold text-[var(--ps-emerald)]">
               <span className="inline-block h-2.5 w-3.5 rounded-xs border-t-2 border-[#10B981] bg-[#10B981]/20" />
-              V1 #{lap1?.runNumber ?? '-'}
+              VOLTA 1
             </span>
             {showLap2 && (
               <span className="inline-flex items-center gap-1.5 font-bold text-[#FF2A2A]">
                 <span className="inline-block h-[2.5px] w-3.5 bg-[#FF2A2A]" />
-                V2 #{lap2?.runNumber ?? '-'}
+                VOLTA 2
               </span>
             )}
             {showLap3 && (
               <span className="inline-flex items-center gap-1.5 font-bold text-[#38BDF8]">
                 <span className="inline-block w-3.5 border-t-2 border-dashed border-[#38BDF8]" />
-                V3 #{lap3?.runNumber ?? '-'}
+                VOLTA 3
               </span>
             )}
           </div>
@@ -1384,7 +1880,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 >
                   {(
                     [
-                      { id: 'laps', label: 'Por Volta (V1/V2/V3)' },
+                      { id: 'laps', label: 'Por Volta (VOLTA 1/2/3)' },
                       { id: 'speed', label: 'Velocidade (km/h)' },
                       { id: 'accel', label: 'Frenagem / Acel.' },
                     ] as const
@@ -1438,9 +1934,9 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9px] font-bold">
                 {mapLayerMode === 'laps' ? (
                   <>
-                    <span className="text-[#10B981]">━ V1</span>
-                    {showLap2 && <span className="text-[#FF2A2A]">━ V2</span>}
-                    {showLap3 && <span className="text-[#38BDF8]">━ V3</span>}
+                    <span className="text-[#10B981]">━ VOLTA 1</span>
+                    {showLap2 && <span className="text-[#FF2A2A]">━ VOLTA 2</span>}
+                    {showLap3 && <span className="text-[#38BDF8]">━ VOLTA 3</span>}
                   </>
                 ) : mapLayerMode === 'speed' ? (
                   <>
@@ -1526,142 +2022,14 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               </div>
               {replayElapsedMs !== null && (
                 <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black text-[var(--ps-emerald)]">
-                  REPLAY TEMPO REAL · {(replayElapsedMs / 1000).toFixed(2)}s
+                  REPLAY {replaySpeed}x · {(replayElapsedMs / 1000).toFixed(2)}s
                 </span>
               )}
             </div>
 
-            <div className="grid grid-cols-1 gap-2 font-mono text-[11px] tabular-nums sm:grid-cols-2 lg:grid-cols-4">
-              {/* 1. Velocidade V1 / V2 / V3 */}
-              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2">
-                <span className="block text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                  Velocidade (km/h)
-                </span>
-                <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-extrabold">
-                  <span className="text-sm text-[var(--ps-emerald)]">
-                    V1 {scrubPoint.speed1 ?? '--'}
-                  </span>
-                  {showLap2 && (
-                    <span className="text-sm text-[#FF2A2A]">
-                      V2 {scrubPoint.speed2 ?? '--'}{' '}
-                      <span className="text-[10px] font-bold">
-                        ({formatSignedKmh(scrubPoint.speedDelta2vs1)})
-                      </span>
-                    </span>
-                  )}
-                  {showLap3 && (
-                    <span className="text-sm text-[#38BDF8]">
-                      V3 {scrubPoint.speed3 ?? '--'}{' '}
-                      <span className="text-[10px] font-bold">
-                        ({formatSignedKmh(scrubPoint.speedDelta3vs1)})
-                      </span>
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* 2. Time Slip (ΔT) V1 / V2 / V3 */}
-              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2">
-                <span className="block text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                  Delta de Tempo (ΔT vs V1)
-                </span>
-                <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-extrabold">
-                  <span className="text-sm text-[var(--ps-emerald)]">V1 REF</span>
-                  {showLap2 && (
-                    <span
-                      className={`text-sm ${
-                        (scrubPoint.timeDelta2vs1Sec ?? 0) <= 0
-                          ? 'text-[var(--ps-emerald)]'
-                          : 'text-[#FF2A2A]'
-                      }`}
-                    >
-                      V2 {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
-                    </span>
-                  )}
-                  {showLap3 && (
-                    <span
-                      className={`text-sm ${
-                        (scrubPoint.timeDelta3vs1Sec ?? 0) <= 0
-                          ? 'text-[var(--ps-emerald)]'
-                          : 'text-[#38BDF8]'
-                      }`}
-                    >
-                      V3 {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* 3. Força G / Pedal V1 / V2 / V3 */}
-              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2">
-                <span className="block text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                  Força G · Pedal / Curva
-                </span>
-                <div className="mt-1 space-y-0.5 text-[10px] font-extrabold">
-                  <p className="text-[var(--ps-emerald)]">
-                    V1 {scrubPoint.longG1 >= 0 ? '+' : ''}
-                    {scrubPoint.longG1.toFixed(2)}G · Lat {Math.abs(scrubPoint.latG1).toFixed(2)}G
-                  </p>
-                  {showLap2 && (
-                    <p className="text-[#FF2A2A]">
-                      V2 {scrubPoint.longG2 >= 0 ? '+' : ''}
-                      {scrubPoint.longG2.toFixed(2)}G · Lat {Math.abs(scrubPoint.latG2).toFixed(2)}G
-                    </p>
-                  )}
-                  {showLap3 && (
-                    <p className="text-[#38BDF8]">
-                      V3 {scrubPoint.longG3 >= 0 ? '+' : ''}
-                      {scrubPoint.longG3.toFixed(2)}G · Lat {Math.abs(scrubPoint.latG3).toFixed(2)}G
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* 4. Ponto de Frenagem (V2 e V3 vs V1) */}
-              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2">
-                <span className="block text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                  Ponto de Frenagem
-                </span>
-                <div className="mt-1 space-y-0.5 text-[10px] font-extrabold">
-                  {!showLap2 && !showLap3 ? (
-                    <p className="text-[var(--ps-muted)]">Selecione V2 ou V3 para comparar</p>
-                  ) : (
-                    <>
-                      {showLap2 && (
-                        <p>
-                          {scrubPoint.brakeOffset2 ? (
-                            scrubPoint.brakeOffset2.offsetM > 0 ? (
-                              <span className="text-[var(--ps-emerald)]">
-                                V2 freou +{scrubPoint.brakeOffset2.offsetM}m depois
-                              </span>
-                            ) : scrubPoint.brakeOffset2.offsetM < 0 ? (
-                              <span className="text-[#FF2A2A]">
-                                V2 freou {Math.abs(scrubPoint.brakeOffset2.offsetM)}m antes
-                              </span>
-                            ) : (
-                              <span className="text-[var(--ps-amber)]">V2 mesmo ponto (0m)</span>
-                            )
-                          ) : (
-                            <span className="text-[var(--ps-muted)]">V2: trecho sem freada</span>
-                          )}
-                        </p>
-                      )}
-                      {showLap3 && (
-                        <p className="text-[#38BDF8]">
-                          {scrubPoint.brakeOffset3
-                            ? scrubPoint.brakeOffset3.offsetM > 0
-                              ? `V3 freou +${scrubPoint.brakeOffset3.offsetM}m depois`
-                              : scrubPoint.brakeOffset3.offsetM < 0
-                                ? `V3 freou ${Math.abs(scrubPoint.brakeOffset3.offsetM)}m antes`
-                                : 'V3 mesmo ponto (0m)'
-                            : 'V3: trecho sem freada'}
-                        </p>
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
+            {renderSectorComparisonCards(false)}
+            {renderImprovementDiagnosticCard(false)}
+            {renderCriticalCornersComparison(false)}
           </div>
         )}
 
@@ -1901,12 +2269,12 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
             <div className="touch-pan-y rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1.5">
               <div className="mb-0.5 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
                 <span className="font-bold uppercase">
-                  Painel 2 · Time Slip / Delta de Tempo Contínuo (ΔT vs V1)
+                  Painel 2 · Time Slip / Delta de Tempo Contínuo (ΔT vs VOLTA 1)
                 </span>
                 <span>
                   <strong className="text-[var(--ps-emerald)]">Verde (-s) = Mais Rápido</strong> ·{' '}
                   <strong className="text-[#FF2A2A]">Vermelho (+s) = Mais Lento</strong>
-                  {showLap2 && showLap3 ? ' · Tracejado Ciano = V3' : ''}
+                  {showLap2 && showLap3 ? ' · Tracejado Ciano = VOLTA 3' : ''}
                 </span>
               </div>
               {showLap2 || showLap3 ? (
@@ -2078,7 +2446,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 <span>
                   <strong className="text-[var(--ps-emerald)]">Verde = Acel</strong> ·{' '}
                   <strong className="text-[#FF2A2A]">Vermelho = Freio</strong>
-                  {showLap2 ? ' · Linha Âmbar = V2' : ''}
+                  {showLap2 ? ' · Linha Âmbar = VOLTA 2' : ''}
                 </span>
               </div>
               <svg
@@ -2546,127 +2914,10 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   </button>
                 </div>
 
-                {/* 3 Cards Lado a Lado com V1, V2 e V3 completos */}
-                <div className="grid grid-cols-3 gap-2 font-mono tabular-nums">
-                  {/* Card 1: VELOCIDADE (KM/H) V1 / V2 / V3 */}
-                  <div className="min-w-0 flex flex-col justify-between rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2">
-                    <span className="truncate text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                      VELOCIDADE (KM/H)
-                    </span>
-                    <div className="mt-1 space-y-0.5">
-                      <div className="flex items-baseline justify-between gap-1">
-                        <span className="text-[10px] font-bold text-[var(--ps-emerald)]">V1</span>
-                        <span className="text-lg font-black leading-none text-[var(--ps-emerald)]">
-                          {scrubPoint.speed1 ?? '--'}
-                        </span>
-                      </div>
-                      {showLap2 && (
-                        <div className="flex items-baseline justify-between gap-1">
-                          <span className="text-[10px] font-bold text-[#FF2A2A]">V2</span>
-                          <span className="text-sm font-extrabold leading-none text-[#FF2A2A]">
-                            {scrubPoint.speed2 ?? '--'}{' '}
-                            <span className="text-[9px]">
-                              ({formatSignedKmh(scrubPoint.speedDelta2vs1)})
-                            </span>
-                          </span>
-                        </div>
-                      )}
-                      {showLap3 && (
-                        <div className="flex items-baseline justify-between gap-1">
-                          <span className="text-[10px] font-bold text-[#38BDF8]">V3</span>
-                          <span className="text-sm font-extrabold leading-none text-[#38BDF8]">
-                            {scrubPoint.speed3 ?? '--'}{' '}
-                            <span className="text-[9px]">
-                              ({formatSignedKmh(scrubPoint.speedDelta3vs1)})
-                            </span>
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Card 2: DELTA TEMPO (ΔT) V1 / V2 / V3 */}
-                  <div className="min-w-0 flex flex-col justify-between rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2">
-                    <span className="truncate text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                      DELTA TEMPO (ΔT)
-                    </span>
-                    <div className="mt-1 space-y-0.5">
-                      <div className="flex items-baseline justify-between gap-1">
-                        <span className="text-[10px] font-bold text-[var(--ps-emerald)]">V1</span>
-                        <span className="text-sm font-black leading-none text-[var(--ps-emerald)]">
-                          REF
-                        </span>
-                      </div>
-                      {showLap2 ? (
-                        <div className="flex items-baseline justify-between gap-1">
-                          <span className="text-[10px] font-bold text-[#FF2A2A]">V2</span>
-                          <span
-                            className={`text-sm font-black leading-none ${
-                              (scrubPoint.timeDelta2vs1Sec ?? 0) <= 0
-                                ? 'text-[var(--ps-emerald)]'
-                                : 'text-[#FF2A2A]'
-                            }`}
-                          >
-                            {formatSignedSec(scrubPoint.timeDelta2vs1Sec)}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="text-[10px] font-bold text-[var(--ps-muted)]">V2 --</div>
-                      )}
-                      {showLap3 && (
-                        <div className="flex items-baseline justify-between gap-1">
-                          <span className="text-[10px] font-bold text-[#38BDF8]">V3</span>
-                          <span
-                            className={`text-sm font-black leading-none ${
-                              (scrubPoint.timeDelta3vs1Sec ?? 0) <= 0
-                                ? 'text-[var(--ps-emerald)]'
-                                : 'text-[#38BDF8]'
-                            }`}
-                          >
-                            {formatSignedSec(scrubPoint.timeDelta3vs1Sec)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Card 3: FORÇA G / PEDAL V1 / V2 / V3 */}
-                  <div className="min-w-0 flex flex-col justify-between rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2.5 py-2">
-                    <span className="truncate text-[9px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                      FORÇA G / PEDAL
-                    </span>
-                    <div className="mt-1 space-y-0.5 text-[10px] font-extrabold">
-                      <div className="flex items-baseline justify-between gap-1 text-[var(--ps-emerald)]">
-                        <span>V1</span>
-                        <span>
-                          {scrubPoint.longG1 >= 0 ? '+' : ''}
-                          {scrubPoint.longG1.toFixed(2)}G
-                        </span>
-                      </div>
-                      {showLap2 && (
-                        <div className="flex items-baseline justify-between gap-1 text-[#FF2A2A]">
-                          <span>V2</span>
-                          <span>
-                            {scrubPoint.longG2 >= 0 ? '+' : ''}
-                            {scrubPoint.longG2.toFixed(2)}G
-                          </span>
-                        </div>
-                      )}
-                      {showLap3 && (
-                        <div className="flex items-baseline justify-between gap-1 text-[#38BDF8]">
-                          <span>V3</span>
-                          <span>
-                            {scrubPoint.longG3 >= 0 ? '+' : ''}
-                            {scrubPoint.longG3.toFixed(2)}G
-                          </span>
-                        </div>
-                      )}
-                      <div className="truncate text-[9px] text-[var(--ps-muted)]">
-                        Lat {Math.abs(scrubPoint.latG1).toFixed(2)}G
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                {/* Comparativo por Setores + Diagnóstico + Curvas Críticas */}
+                {renderSectorComparisonCards(true)}
+                {renderImprovementDiagnosticCard(true)}
+                {renderCriticalCornersComparison(true)}
 
                 {/* Gráfico de Velocidade & Zonas Acel/Frenagem sincronizado */}
                 <div className="touch-pan-y rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2">
@@ -2675,9 +2926,9 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                       Velocidade (km/h) &amp; Zonas Acel/Frenagem (Toque)
                     </span>
                     <span className="flex items-center gap-2 font-bold">
-                      <span className="text-[var(--ps-emerald)]">V1 #{lap1?.runNumber ?? '-'}</span>
-                      {showLap2 && <span className="text-[#FF2A2A]">V2 #{lap2?.runNumber ?? '-'}</span>}
-                      {showLap3 && <span className="text-[#38BDF8]">V3 #{lap3?.runNumber ?? '-'}</span>}
+                      <span className="text-[var(--ps-emerald)]">VOLTA 1</span>
+                      {showLap2 && <span className="text-[#FF2A2A]">VOLTA 2</span>}
+                      {showLap3 && <span className="text-[#38BDF8]">VOLTA 3</span>}
                     </span>
                   </div>
                   <svg
@@ -2896,7 +3147,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 <div className="touch-pan-y rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2">
                   <div className="mb-1 flex flex-wrap items-center justify-between gap-1 px-1 font-mono text-[9px] text-[var(--ps-muted)]">
                     <span className="font-bold uppercase">
-                      Time Slip · Delta de Tempo (ΔT vs V1)
+                      Time Slip · Delta de Tempo (ΔT vs VOLTA 1)
                     </span>
                     <span>
                       <strong className="text-[var(--ps-emerald)]">Verde = Mais Rápido</strong> ·{' '}

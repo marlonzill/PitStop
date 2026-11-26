@@ -952,7 +952,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                   : 'text-[var(--ps-emerald)] hover:bg-[var(--ps-card)]'
               }`}
             >
-              V1 #{lap1?.runNumber ?? '-'}
+              VOLTA 1
             </button>
             {lap2 && (
               <button
@@ -964,7 +964,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                     : 'text-[var(--ps-danger)] hover:bg-[var(--ps-card)]'
                 }`}
               >
-                V2 #{lap2.runNumber}
+                VOLTA 2
               </button>
             )}
             {lap3 && (
@@ -977,7 +977,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                     : 'text-sky-500 hover:bg-[var(--ps-card)]'
                 }`}
               >
-                V3 #{lap3.runNumber}
+                VOLTA 3
               </button>
             )}
           </div>

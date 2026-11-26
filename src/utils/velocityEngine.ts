@@ -7,6 +7,7 @@ import {
   parseKmlColorToHex,
   parseKmlToGeoResult,
   parseTrackFileToGeoResult,
+  type GeoDetectedSplitPoint,
   type GeoWaypoint,
   type ParsedGeoImportResult,
 } from './geoKmlParser';
@@ -19,6 +20,7 @@ export {
   parseKmlColorToHex,
   parseKmlToGeoResult,
   parseTrackFileToGeoResult,
+  type GeoDetectedSplitPoint,
   type GeoWaypoint,
   type ParsedGeoImportResult,
 };
@@ -73,6 +75,7 @@ export interface VelocityTrack {
   waypoints?: GeoWaypoint[];
   mode: TrackMode;
   traps: VelocityTrap[];
+  detectedSplitPoints?: GeoDetectedSplitPoint[];
   createdAtMs: number;
   referenceDistanceKm: number;
   baseTrace?: VelocitySample[];
@@ -1626,6 +1629,97 @@ export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrac
 }
 
 /**
+ * Divide o traçado em setores iguais (ex: P1 a 20%, P2 a 40%, P3 a 60%, P4 a 80%)
+ * calculando a posição interpolada e o vetor de direção (linha de corte perpendicular).
+ */
+export function generateEqualSplitTraps(
+  track: VelocityTrack,
+  fractions: readonly number[] = [0.2, 0.4, 0.6, 0.8]
+): VelocityTrap[] {
+  const pts = track.baseTrace;
+  if (!pts || pts.length < 2) return [];
+  const totalKm = pts[pts.length - 1].distKm;
+  if (!Number.isFinite(totalKm) || totalKm <= 0.5) return [];
+
+  const now = Date.now();
+  const splits: VelocityTrap[] = [];
+
+  fractions.forEach((frac, idx) => {
+    const targetKm = totalKm * frac;
+    let segIdx = 0;
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      if (pts[i].distKm <= targetKm && pts[i + 1].distKm >= targetKm) {
+        segIdx = i;
+        break;
+      }
+      if (pts[i].distKm <= targetKm) {
+        segIdx = i;
+      }
+    }
+    const p0 = pts[segIdx];
+    const p1 = pts[Math.min(pts.length - 1, segIdx + 1)];
+    const spanKm = Math.max(1e-9, p1.distKm - p0.distKm);
+    const t = Math.max(0, Math.min(1, (targetKm - p0.distKm) / spanKm));
+    const lat = p0.lat + (p1.lat - p0.lat) * t;
+    const lon = p0.lon + (p1.lon - p0.lon) * t;
+
+    let i0 = segIdx;
+    let i1 = Math.min(pts.length - 1, segIdx + 1);
+    while (i1 < pts.length - 1 && haversineMetersVel(pts[i0].lat, pts[i0].lon, pts[i1].lat, pts[i1].lon) < 5) {
+      i1 += 1;
+    }
+    while (i0 > 0 && haversineMetersVel(pts[i0].lat, pts[i0].lon, pts[i1].lat, pts[i1].lon) < 5) {
+      i0 -= 1;
+    }
+    const bearingDeg =
+      i0 !== i1 ? bearingBetweenDeg(pts[i0].lat, pts[i0].lon, pts[i1].lat, pts[i1].lon) : 0;
+
+    const splitNum = idx + 1;
+    splits.push({
+      id: `trap_split_auto_${splitNum}_${track.id}_${now}`,
+      name: `Parcial ${splitNum} (P${splitNum})`,
+      kind: 'split',
+      lat,
+      lon,
+      bearingDeg,
+      widthM: 40,
+      unidirectional: true,
+    });
+  });
+
+  return splits;
+}
+
+/**
+ * Converte pontos detectados no KML/GPX (Zona de Público, Rádio, PC, etc.) em parciais P1, P2, P3...
+ * ordenadas pela distância acumulada desde a Largada (L) e mantendo o nome original como referência.
+ */
+export function convertDetectedPointsToSplitTraps(
+  track: VelocityTrack,
+  points: GeoDetectedSplitPoint[]
+): VelocityTrap[] {
+  const now = Date.now();
+  const sorted = [...points].sort((a, b) => a.distKm - b.distKm);
+  return sorted.map((pt, idx) => {
+    const pNum = idx + 1;
+    const cleanOrig = pt.originalName.trim();
+    const alreadyStartsWithP = new RegExp(`^p\\s*0?${pNum}\\b`, 'i').test(cleanOrig);
+    const label =
+      cleanOrig && !alreadyStartsWithP ? `P${pNum} · ${cleanOrig}` : cleanOrig || `Parcial ${pNum} (P${pNum})`;
+    return {
+      id: `trap_kml_split_${pNum}_${track.id}_${now}`,
+      name: label,
+      kind: 'split',
+      lat: pt.lat,
+      lon: pt.lon,
+      bearingDeg: pt.bearingDeg,
+      widthM: 40,
+      unidirectional: true,
+    };
+  });
+}
+
+/**
  * Reconhece automaticamente o circuito/especial mais próximo medindo EXCLUSIVAMENTE
  * a distância até a linha de Largada (Start / Start-Finish) ou ponto inicial do traçado.
  */
@@ -1882,9 +1976,88 @@ export function computeLapComparisonSummary(
     lapBNumber: lapB.runNumber,
     totalDeltaSec: Number(((lapA.totalMs - lapB.totalMs) / 1000).toFixed(2)),
     maxSpeedDeltaKmh: Math.round(lapA.maxSpeedKmh - lapB.maxSpeedKmh),
-    avgSpeedDeltaKmh: Math.round(lapA.avgSpeedKmh - lapB.avgSpeedKmh),
+    avgSpeedDeltaKmh: Math.round(
+      computeSafeAverageSpeedKmh({
+        distanceKm: lapA.distanceKm,
+        totalMs: lapA.totalMs,
+        maxSpeedKmh: lapA.maxSpeedKmh,
+        samples: lapA.samples,
+        storedAvgSpeedKmh: lapA.avgSpeedKmh,
+      }) -
+        computeSafeAverageSpeedKmh({
+          distanceKm: lapB.distanceKm,
+          totalMs: lapB.totalMs,
+          maxSpeedKmh: lapB.maxSpeedKmh,
+          samples: lapB.samples,
+          storedAvgSpeedKmh: lapB.avgSpeedKmh,
+        })
+    ),
     corners,
   };
+}
+
+export function computeSafeAverageSpeedKmh(params: {
+  distanceKm?: number | null;
+  totalMs?: number | null;
+  maxSpeedKmh?: number | null;
+  samples?: Array<{ speedKmh?: number | null }> | null;
+  storedAvgSpeedKmh?: number | null;
+}): number {
+  const samples = Array.isArray(params.samples) ? params.samples : [];
+  const validSpeeds = samples
+    .map((s) => s.speedKmh)
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+
+  const sampleMax = validSpeeds.length > 0 ? Math.max(...validSpeeds) : 0;
+  const effectiveMax = Math.max(
+    typeof params.maxSpeedKmh === 'number' && Number.isFinite(params.maxSpeedKmh)
+      ? Math.round(params.maxSpeedKmh)
+      : 0,
+    Math.round(sampleMax)
+  );
+
+  const distKm =
+    typeof params.distanceKm === 'number' &&
+    Number.isFinite(params.distanceKm) &&
+    params.distanceKm > 0
+      ? params.distanceKm
+      : 0;
+  const elapsedHours =
+    typeof params.totalMs === 'number' && Number.isFinite(params.totalMs) && params.totalMs > 0
+      ? params.totalMs / 3600000
+      : 0;
+
+  const distBasedAvg = distKm > 0 && elapsedHours > 0 ? distKm / elapsedHours : 0;
+  const sampleMeanAvg =
+    validSpeeds.length > 0
+      ? validSpeeds.reduce((sum, v) => sum + v, 0) / validSpeeds.length
+      : 0;
+  const storedAvg =
+    typeof params.storedAvgSpeedKmh === 'number' &&
+    Number.isFinite(params.storedAvgSpeedKmh) &&
+    params.storedAvgSpeedKmh > 0
+      ? params.storedAvgSpeedKmh
+      : 0;
+
+  let candidate = 0;
+  if (distBasedAvg > 0 && (effectiveMax <= 0 || distBasedAvg <= effectiveMax)) {
+    candidate = Math.round(distBasedAvg);
+  } else if (sampleMeanAvg > 0 && (effectiveMax <= 0 || sampleMeanAvg <= effectiveMax)) {
+    candidate = Math.round(sampleMeanAvg);
+  } else if (storedAvg > 0 && (effectiveMax <= 0 || storedAvg <= effectiveMax)) {
+    candidate = Math.round(storedAvg);
+  } else if (distBasedAvg > 0) {
+    candidate = Math.round(distBasedAvg);
+  } else if (sampleMeanAvg > 0) {
+    candidate = Math.round(sampleMeanAvg);
+  } else {
+    candidate = Math.round(storedAvg);
+  }
+
+  if (effectiveMax > 0) {
+    return Math.max(0, Math.min(effectiveMax, candidate));
+  }
+  return Math.max(0, candidate);
 }
 
 export interface TrackSectorDef {
@@ -2182,12 +2355,12 @@ export function computeRunSectorMetrics(
     const peakAccelG = Number(Math.max(0, ...longGs).toFixed(2));
 
     const spanDistKm = Math.max(0, endSample.distKm - startSample.distKm);
-    const avgSpeedKmh =
-      durationMs && durationMs > 0 && spanDistKm > 0.005
-        ? Math.round(spanDistKm / (durationMs / 3600000))
-        : Math.round(
-            pool.reduce((sum, s) => sum + (s.speedKmh || 0), 0) / Math.max(1, pool.length)
-          );
+    const avgSpeedKmh = computeSafeAverageSpeedKmh({
+      distanceKm: spanDistKm > 0.005 ? spanDistKm : 0,
+      totalMs: durationMs,
+      maxSpeedKmh,
+      samples: pool,
+    });
 
     const exitSpeedKmh = Math.round(endSample.speedKmh || 0);
 
@@ -2647,16 +2820,17 @@ export function computeLapTelemetrySummary(
     worstDelaySec = Number(maxD.toFixed(2));
   }
 
-  const maxSpeedKmh =
-    run.maxSpeedKmh > 0
-      ? Math.round(run.maxSpeedKmh)
-      : Math.round(samples.reduce((m, s) => Math.max(m, s.speedKmh || 0), 0));
-  const avgSpeedKmh =
-    run.avgSpeedKmh > 0
-      ? Math.round(run.avgSpeedKmh)
-      : samples.length > 0
-        ? Math.round(samples.reduce((sum, s) => sum + (s.speedKmh || 0), 0) / samples.length)
-        : 0;
+  const maxSpeedKmh = Math.max(
+    run.maxSpeedKmh > 0 ? Math.round(run.maxSpeedKmh) : 0,
+    Math.round(samples.reduce((m, s) => Math.max(m, s.speedKmh || 0), 0))
+  );
+  const avgSpeedKmh = computeSafeAverageSpeedKmh({
+    distanceKm: run.distanceKm,
+    totalMs: run.totalMs,
+    maxSpeedKmh,
+    samples,
+    storedAvgSpeedKmh: run.avgSpeedKmh,
+  });
 
   return {
     maxSpeedKmh,

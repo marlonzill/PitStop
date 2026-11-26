@@ -1,14 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
+import { APP_VERSION as ROOT_APP_VERSION } from '../version';
+
+declare const __APP_BUILD_ISO__: string | undefined;
 
 export const SUPABASE_URL = 'https://xoicjwgoovpqouxmliru.supabase.co';
 export const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_7My7wzmW62pPHSq27G7rpQ_YULvsrGk';
-export const APP_VERSION = 'v2.0.5';
+export const APP_VERSION = ROOT_APP_VERSION;
+export const GITHUB_LATEST_RELEASE_API =
+  'https://api.github.com/repos/marlonzill/PitStop/releases/latest';
+export const GITHUB_APK_DOWNLOAD_URL =
+  'https://github.com/marlonzill/PitStop/releases/download/latest/PitStop-Sports.apk';
 
 const DEVICE_IDENTITY_KEY = 'pitstop_device_identity_v1';
 const DEVICE_LICENSE_CACHE_KEY = 'pitstop_device_license_cache_v1';
 const ADMIN_SESSION_KEY = 'pitstop_supabase_admin_session_v1';
 const ADMIN_SESSION_EVENT = 'pitstop:admin-license-session-updated';
+const APP_VERSION_RESERVED_ID = '__APP_VERSION__';
+const INSTALLED_RELEASE_AT_KEY = 'pitstop_installed_release_published_at_v1';
 
 const TRIAL_24H_MS = 24 * 60 * 60 * 1000; // 24 horas grátis na primeira instalação
 const OFFLINE_TOLERANCE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
@@ -29,6 +38,12 @@ export interface DispositivoRecord {
   allowed?: boolean | null;
   expires_at?: string | null;
   last_seen_at?: string | null;
+}
+
+export interface OfficialAppVersionInfo {
+  version: string;
+  download_url?: string | null;
+  source: 'app_version' | 'fallback';
 }
 
 export interface DeviceLicenseCache {
@@ -90,41 +105,27 @@ function getCapacitorDevicePlugin(): CapacitorDevicePluginLike | null {
   return null;
 }
 
-const READABLE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export function isValidNumericDeviceId(id: string | null | undefined): boolean {
+  return typeof id === 'string' && /^\d{5}$/.test(id.trim());
+}
 
-function formatReadableDeviceCodeFromSeed(seed: string): string {
+function formatNumericDeviceCodeFromSeed(seed: string): string {
   let h1 = 0x811c9dc5;
-  let h2 = 0x9e3779b9;
   for (let i = 0; i < seed.length; i += 1) {
     const ch = seed.charCodeAt(i);
     h1 = Math.imul(h1 ^ ch, 0x01000193) >>> 0;
-    h2 = Math.imul(h2 ^ (ch + i), 0x85ebca6b) >>> 0;
   }
-  let part1 = '';
-  let part2 = '';
-  for (let i = 0; i < 4; i += 1) {
-    part1 += READABLE_CHARS[(h1 >>> (i * 5)) % READABLE_CHARS.length];
-    part2 += READABLE_CHARS[(h2 >>> (i * 5)) % READABLE_CHARS.length];
-  }
-  return `PS-${part1}-${part2}`;
+  const code = 10000 + (h1 % 90000);
+  return String(code);
 }
 
-function generateRandomReadableDeviceId(): string {
-  const bytes = new Uint8Array(8);
+function generateRandomNumericDeviceId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i += 1) {
-      bytes[i] = Math.floor(Math.random() * 256);
-    }
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    return String(10000 + (buf[0] % 90000));
   }
-  let p1 = '';
-  let p2 = '';
-  for (let i = 0; i < 4; i += 1) {
-    p1 += READABLE_CHARS[bytes[i] % READABLE_CHARS.length];
-    p2 += READABLE_CHARS[bytes[i + 4] % READABLE_CHARS.length];
-  }
-  return `PS-${p1}-${p2}`;
+  return String(10000 + Math.floor(Math.random() * 90000));
 }
 
 function detectWebDeviceModel(): string {
@@ -243,15 +244,23 @@ export function readStoredDeviceIdentitySync(): DeviceIdentity | null {
     const raw = window.localStorage.getItem(DEVICE_IDENTITY_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<DeviceIdentity>;
-    if (typeof parsed?.deviceId === 'string' && parsed.deviceId.trim().length >= 5) {
-      return {
-        deviceId: parsed.deviceId.trim(),
+    if (typeof parsed?.deviceId === 'string' && parsed.deviceId.trim().length > 0) {
+      const trimmed = parsed.deviceId.trim();
+      const numericId = isValidNumericDeviceId(trimmed)
+        ? trimmed
+        : formatNumericDeviceCodeFromSeed(trimmed);
+      const migrated: DeviceIdentity = {
+        deviceId: numericId,
         deviceModel:
           typeof parsed.deviceModel === 'string' && parsed.deviceModel.trim()
             ? parsed.deviceModel.trim()
             : detectWebDeviceModel(),
         appVersion: APP_VERSION,
       };
+      if (numericId !== trimmed) {
+        window.localStorage.setItem(DEVICE_IDENTITY_KEY, JSON.stringify(migrated));
+      }
+      return migrated;
     }
   } catch {
     // Ignore storage parse error
@@ -263,7 +272,7 @@ export function getOrCreateDeviceIdentitySync(): DeviceIdentity {
   const existing = readStoredDeviceIdentitySync();
   if (existing) return existing;
   const identity: DeviceIdentity = {
-    deviceId: generateRandomReadableDeviceId(),
+    deviceId: generateRandomNumericDeviceId(),
     deviceModel: detectWebDeviceModel(),
     appVersion: APP_VERSION,
   };
@@ -316,10 +325,11 @@ export async function getOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
 
   const identity: DeviceIdentity = {
     deviceId:
-      existing?.deviceId ??
-      (nativeSeedId
-        ? formatReadableDeviceCodeFromSeed(nativeSeedId)
-        : generateRandomReadableDeviceId()),
+      existing && isValidNumericDeviceId(existing.deviceId)
+        ? existing.deviceId
+        : nativeSeedId
+          ? formatNumericDeviceCodeFromSeed(nativeSeedId)
+          : generateRandomNumericDeviceId(),
     deviceModel: nativeModel || existing?.deviceModel || detectWebDeviceModel(),
     appVersion: APP_VERSION,
   };
@@ -460,6 +470,7 @@ export async function verifyDeviceLicense(): Promise<DeviceLicenseStatus> {
   try {
     const getRes = await fetchWithTimeout(queryUrl, {
       method: 'GET',
+      cache: 'no-store',
       headers: getSupabaseHeaders(),
     });
 
@@ -470,7 +481,6 @@ export async function verifyDeviceLicense(): Promise<DeviceLicenseStatus> {
     const rows = (await getRes.json()) as DispositivoRecord[];
 
     if (!Array.isArray(rows) || rows.length === 0) {
-      // Primeira instalação: registra automaticamente com 1 dia grátis (24h)
       const trialExpiresAt = new Date(Date.now() + TRIAL_24H_MS).toISOString();
       const postRes = await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/dispositivos`, {
         method: 'POST',
@@ -549,7 +559,6 @@ export async function verifyDeviceLicense(): Promise<DeviceLicenseStatus> {
       };
     }
 
-    // Dispositivo já existe -> atualiza last_seen_at e lê allowed / expires_at
     const record = rows[0];
     const allowed = record.allowed !== false;
     const expiresAt = record.expires_at ?? null;
@@ -665,7 +674,6 @@ export async function verifyDeviceLicense(): Promise<DeviceLicenseStatus> {
       };
     }
 
-    // Primeira execução sem internet: libera temporariamente para não travar em trilha sem sinal
     return {
       status: 'allowed',
       offlineGrace: true,
@@ -683,6 +691,7 @@ export async function fetchAllDispositivos(): Promise<DispositivoRecord[]> {
     `${SUPABASE_URL}/rest/v1/dispositivos?select=*&order=last_seen_at.desc.nullslast`,
     {
       method: 'GET',
+      cache: 'no-store',
       headers: getSupabaseHeaders(),
     }
   );
@@ -690,7 +699,9 @@ export async function fetchAllDispositivos(): Promise<DispositivoRecord[]> {
     throw new Error(`Erro ao listar dispositivos (HTTP ${res.status}).`);
   }
   const rows = (await res.json()) as DispositivoRecord[];
-  return Array.isArray(rows) ? rows : [];
+  return Array.isArray(rows)
+    ? rows.filter((r) => r.device_id !== APP_VERSION_RESERVED_ID)
+    : [];
 }
 
 export async function updateDispositivoRecord(
@@ -745,4 +756,329 @@ export async function deleteDispositivoRecord(deviceId: string): Promise<void> {
   if (!res.ok) {
     throw new Error(`Erro ao excluir dispositivo (HTTP ${res.status}).`);
   }
+}
+
+export function normalizeAppVersionString(raw: string): string {
+  const clean = raw.trim().replace(/^v+/i, '');
+  return clean ? `v${clean}` : APP_VERSION;
+}
+
+export function compareAppVersions(remoteVer: string, localVer: string): number {
+  const parseParts = (v: string) =>
+    v
+      .trim()
+      .replace(/^v+/i, '')
+      .split('.')
+      .map((n) => {
+        const parsed = parseInt(n.replace(/[^0-9].*$/, ''), 10);
+        return Number.isFinite(parsed) ? parsed : 0;
+      });
+  const a = parseParts(remoteVer);
+  const b = parseParts(localVer);
+  const maxLen = Math.max(a.length, b.length, 3);
+  for (let i = 0; i < maxLen; i += 1) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+}
+
+function sanitizeSafeDownloadUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function fetchOfficialAppVersion(): Promise<OfficialAppVersionInfo | null> {
+  const cacheBust = Date.now();
+  try {
+    const res = await fetchWithTimeout(
+      `${SUPABASE_URL}/rest/v1/app_version?select=*&limit=1&_t=${cacheBust}`,
+      {
+        method: 'GET',
+        cache: 'no-store',
+        headers: getSupabaseHeaders(),
+      }
+    );
+    if (res.ok) {
+      const rows = (await res.json()) as Array<{
+        version?: string | null;
+        download_url?: string | null;
+      }>;
+      if (Array.isArray(rows) && rows[0]?.version) {
+        return {
+          version: normalizeAppVersionString(rows[0].version),
+          download_url: sanitizeSafeDownloadUrl(rows[0].download_url),
+          source: 'app_version',
+        };
+      }
+    }
+  } catch {
+    // Fallback to dispositivos metadata row
+  }
+
+  const encodedReserved = encodeURIComponent(APP_VERSION_RESERVED_ID);
+  const fallbackRes = await fetchWithTimeout(
+    `${SUPABASE_URL}/rest/v1/dispositivos?device_id=eq.${encodedReserved}&select=*&_t=${cacheBust}`,
+    {
+      method: 'GET',
+      cache: 'no-store',
+      headers: getSupabaseHeaders(),
+    }
+  );
+  if (!fallbackRes.ok) {
+    throw new Error(`Falha ao consultar versão oficial (HTTP ${fallbackRes.status}).`);
+  }
+  const fbRows = (await fallbackRes.json()) as DispositivoRecord[];
+  const row = Array.isArray(fbRows) ? fbRows[0] : undefined;
+  if (!row || !row.app_version) return null;
+  return {
+    version: normalizeAppVersionString(row.app_version),
+    download_url: sanitizeSafeDownloadUrl(row.pilot_name),
+    source: 'fallback',
+  };
+}
+
+export async function publishOfficialAppVersion(
+  versionInput: string,
+  downloadUrlInput?: string | null
+): Promise<OfficialAppVersionInfo> {
+  const cleanVersion = normalizeAppVersionString(versionInput);
+  const safeUrl = sanitizeSafeDownloadUrl(downloadUrlInput);
+
+  try {
+    const checkRes = await fetchWithTimeout(
+      `${SUPABASE_URL}/rest/v1/app_version?select=*&limit=1&_t=${Date.now()}`,
+      {
+        method: 'GET',
+        cache: 'no-store',
+        headers: getSupabaseHeaders(),
+      }
+    );
+    if (checkRes.ok) {
+      const rows = (await checkRes.json()) as Array<{ id?: string | number }>;
+      if (Array.isArray(rows) && rows.length > 0 && rows[0]?.id !== undefined) {
+        const patchRes = await fetchWithTimeout(
+          `${SUPABASE_URL}/rest/v1/app_version?id=eq.${encodeURIComponent(String(rows[0].id))}`,
+          {
+            method: 'PATCH',
+            headers: {
+              ...getSupabaseHeaders(),
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify({
+              version: cleanVersion.replace(/^v/i, ''),
+              download_url: safeUrl,
+            }),
+          }
+        );
+        if (patchRes.ok) {
+          return { version: cleanVersion, download_url: safeUrl, source: 'app_version' };
+        }
+      } else {
+        const postRes = await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/app_version`, {
+          method: 'POST',
+          headers: {
+            ...getSupabaseHeaders(),
+            Prefer: 'return=representation',
+          },
+          body: JSON.stringify({
+            version: cleanVersion.replace(/^v/i, ''),
+            download_url: safeUrl,
+          }),
+        });
+        if (postRes.ok) {
+          return { version: cleanVersion, download_url: safeUrl, source: 'app_version' };
+        }
+      }
+    }
+  } catch {
+    // Fallback to reserved row in dispositivos
+  }
+
+  const encodedReserved = encodeURIComponent(APP_VERSION_RESERVED_ID);
+  const fbGet = await fetchWithTimeout(
+    `${SUPABASE_URL}/rest/v1/dispositivos?device_id=eq.${encodedReserved}&select=device_id`,
+    {
+      method: 'GET',
+      cache: 'no-store',
+      headers: getSupabaseHeaders(),
+    }
+  );
+  const existing = fbGet.ok ? ((await fbGet.json()) as DispositivoRecord[]) : [];
+  if (Array.isArray(existing) && existing.length > 0) {
+    const patchRes = await fetchWithTimeout(
+      `${SUPABASE_URL}/rest/v1/dispositivos?device_id=eq.${encodedReserved}`,
+      {
+        method: 'PATCH',
+        headers: getSupabaseHeaders(),
+        body: JSON.stringify({
+          app_version: cleanVersion,
+          pilot_name: safeUrl ?? '',
+          last_seen_at: new Date().toISOString(),
+        }),
+      }
+    );
+    if (!patchRes.ok) {
+      throw new Error(`Não foi possível salvar a versão oficial (HTTP ${patchRes.status}).`);
+    }
+  } else {
+    const postRes = await fetchWithTimeout(`${SUPABASE_URL}/rest/v1/dispositivos`, {
+      method: 'POST',
+      headers: getSupabaseHeaders(),
+      body: JSON.stringify({
+        device_id: APP_VERSION_RESERVED_ID,
+        pilot_name: safeUrl ?? '',
+        device_model: 'Official Release Metadata',
+        app_version: cleanVersion,
+        allowed: false,
+        expires_at: null,
+        last_seen_at: new Date().toISOString(),
+      }),
+    });
+    if (!postRes.ok) {
+      throw new Error(`Não foi possível registrar a versão oficial (HTTP ${postRes.status}).`);
+    }
+  }
+
+  return { version: cleanVersion, download_url: safeUrl, source: 'fallback' };
+}
+
+export async function forceAppUpdateReload(downloadUrl?: string | null): Promise<void> {
+  const safeUrl = sanitizeSafeDownloadUrl(downloadUrl);
+  if (safeUrl) {
+    window.location.assign(safeUrl);
+    return;
+  }
+
+  try {
+    if ('caches' in window) {
+      const keys = await window.caches.keys();
+      await Promise.all(keys.map((k) => window.caches.delete(k)));
+    }
+  } catch {
+    // Ignore cache clear failure
+  }
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+  } catch {
+    // Ignore service worker failure
+  }
+
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('_upd', String(Date.now()));
+    window.location.replace(url.toString());
+  } catch {
+    window.location.reload();
+  }
+}
+
+export interface GithubReleaseCheckResult {
+  hasUpdate: boolean;
+  publishedAt: string | null;
+  tagName: string | null;
+  apkDownloadUrl: string;
+}
+
+function getLocalReleaseReferenceMs(): number {
+  let storedMs = 0;
+  try {
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem(INSTALLED_RELEASE_AT_KEY);
+      if (saved) {
+        const parsed = Date.parse(saved);
+        if (Number.isFinite(parsed)) storedMs = parsed;
+      }
+    }
+  } catch {
+    // Ignore storage error
+  }
+
+  let buildMs = 0;
+  try {
+    if (typeof __APP_BUILD_ISO__ === 'string' && __APP_BUILD_ISO__) {
+      const parsed = Date.parse(__APP_BUILD_ISO__);
+      // Allow 3 min grace for CI build -> release publish timing offset on the same release
+      if (Number.isFinite(parsed)) buildMs = parsed + 3 * 60 * 1000;
+    }
+  } catch {
+    // Ignore missing compile constant
+  }
+
+  return Math.max(storedMs, buildMs);
+}
+
+export async function checkGithubReleaseUpdate(): Promise<GithubReleaseCheckResult> {
+  const res = await fetchWithTimeout(GITHUB_LATEST_RELEASE_API, {
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/vnd.github+json',
+    },
+  });
+
+  if (res.status === 404) {
+    return {
+      hasUpdate: false,
+      publishedAt: null,
+      tagName: null,
+      apkDownloadUrl: GITHUB_APK_DOWNLOAD_URL,
+    };
+  }
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  const data = (await res.json()) as {
+    published_at?: string | null;
+    tag_name?: string | null;
+  };
+
+  const publishedAt = typeof data?.published_at === 'string' ? data.published_at : null;
+  const publishedMs = publishedAt ? Date.parse(publishedAt) : NaN;
+  const localRefMs = getLocalReleaseReferenceMs();
+
+  const hasUpdate =
+    Number.isFinite(publishedMs) && (localRefMs <= 0 || publishedMs > localRefMs);
+
+  return {
+    hasUpdate,
+    publishedAt,
+    tagName: typeof data?.tag_name === 'string' ? data.tag_name : null,
+    apkDownloadUrl: GITHUB_APK_DOWNLOAD_URL,
+  };
+}
+
+export async function applyGithubReleaseUpdate(publishedAt?: string | null): Promise<void> {
+  if (Capacitor.isNativePlatform()) {
+    window.location.assign(GITHUB_APK_DOWNLOAD_URL);
+    return;
+  }
+
+  try {
+    if (publishedAt && typeof window !== 'undefined') {
+      window.localStorage.setItem(INSTALLED_RELEASE_AT_KEY, publishedAt);
+    }
+  } catch {
+    // Ignore storage error
+  }
+
+  await forceAppUpdateReload(null);
 }

@@ -302,37 +302,16 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const { user, isPro, isAdmin } = useAuthSession();
   const adminLicenseSession = useAdminLicenseSession();
   const hasAdminAccess = Boolean(adminLicenseSession) || (ENABLE_SUBSCRIPTION_GATE && isAdmin);
-  const [activeMenu, setActiveMenu] = useState<SettingsSubMenu>(initialMenu);
+  const [activeMenu, setActiveMenu] = useState<SettingsSubMenu>(
+    initialMenu === 'account' ? 'system' : initialMenu
+  );
   const [localDeviceLicense, setLocalDeviceLicense] = useState<DeviceLicenseStatus>(() =>
     getCachedLicenseStatusSync()
   );
   const [localCheckingLicense, setLocalCheckingLicense] = useState(false);
-  const [copiedDeviceId, setCopiedDeviceId] = useState(false);
 
   const effectiveDeviceLicense = externalDeviceLicense ?? localDeviceLicense;
   const effectiveCheckingLicense = externalCheckingDeviceLicense ?? localCheckingLicense;
-
-  const handleCopyDeviceId = async () => {
-    const id = effectiveDeviceLicense.identity.deviceId;
-    try {
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        await navigator.clipboard.writeText(id);
-      } else {
-        const ta = document.createElement('textarea');
-        ta.value = id;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      }
-      setCopiedDeviceId(true);
-      window.setTimeout(() => setCopiedDeviceId(false), 2000);
-    } catch {
-      // Ignore clipboard failure
-    }
-  };
 
   const handleRecheckDeviceLicense = async () => {
     if (onRecheckDeviceLicense) {
@@ -349,12 +328,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   };
 
   useEffect(() => {
-    setActiveMenu(initialMenu);
+    setActiveMenu(initialMenu === 'account' ? 'system' : initialMenu);
   }, [initialMenu]);
 
   const navigateMenu = (menu: SettingsSubMenu) => {
-    setActiveMenu(menu);
-    onMenuChange?.(menu);
+    const normalized = menu === 'account' ? 'system' : menu;
+    setActiveMenu(normalized);
+    onMenuChange?.(normalized);
   };
 
   // Roadbooks management state
@@ -614,6 +594,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [bondedBtList, setBondedBtList] = useState<BondedBluetoothDevice[]>([]);
   const [loadingBtList, setLoadingBtList] = useState(false);
   const [copiedPilotLink, setCopiedPilotLink] = useState(false);
+  const [copiedDeviceId, setCopiedDeviceId] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const wakeLockSentinelRef = useRef<{ release: () => Promise<void> } | null>(null);
 
@@ -876,6 +857,17 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       window.setTimeout(() => setCopiedPilotLink(false), 2000);
     } catch {
       setBtStatusMsg(`Link do Piloto: ${url}`);
+    }
+  };
+
+  const handleCopyDeviceId = async () => {
+    const devId = effectiveDeviceLicense.identity.deviceId;
+    try {
+      await navigator.clipboard.writeText(devId);
+      setCopiedDeviceId(true);
+      window.setTimeout(() => setCopiedDeviceId(false), 2000);
+    } catch {
+      // Ignore clipboard failure
     }
   };
 
@@ -1222,8 +1214,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
   const menuTitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
     modality: 'Modalidade',
-    velocity: 'Velocidade & GPS',
-    account: 'Conta & Licença',
+    velocity: 'Layout & GPS',
+    account: 'Sistema & Licença',
     theme: 'Temas Visuais',
     collector: 'Coletor GPS',
     roadbooks: 'Planilhas & Livros de Bordo',
@@ -1234,13 +1226,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     alerts: 'Alertas & Atalhos',
     gopro: 'Câmeras GoPro (BLE)',
     backup: 'Backup & Dados Offline',
-    system: 'Sistema & Permissões',
+    system: 'Sistema & Licença',
   };
 
   const menuSubtitleMap: Record<Exclude<SettingsSubMenu, 'hub'>, string> = {
     modality: 'Alterne entre Rally de Regularidade e Rally de Velocidade.',
     velocity: 'Layout do cockpit ao vivo, receptor GPS, HDOP e força G (IMU).',
-    account: 'Gerencie perfil, plano e liberações de recursos avançados.',
+    account: 'Licença do aparelho, atualizações, GPS, bateria e permissões.',
     theme: 'Paletas escuras, diurnas de alto contraste e fontes XL ampliadas.',
     collector: 'Colete passagens de PCs por GPS e envie à apuração.',
     roadbooks: 'Importe, inspecione e ative livros de bordo (.NBP / .TXT / .ZIP).',
@@ -1251,8 +1243,185 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     alerts: 'Bipes, avisos de voz, rolagem de planilha e teclas físicas.',
     gopro: 'Pareie e controle múltiplas câmeras GoPro via Bluetooth BLE.',
     backup: 'Exporte ou restaure configurações, pistas e livros de bordo.',
-    system: 'Status do GPS, bateria, orientação da tela e permissões.',
+    system: 'Licença do aparelho, atualizações, GPS, bateria e permissões.',
   };
+
+  const isSystemHeader = activeMenu === 'system' || activeMenu === 'account';
+
+  type HubMenuItem = {
+    id: Exclude<SettingsSubMenu, 'hub' | 'account'>;
+    accentColor: string;
+    title: string;
+    subtitle: string;
+    swatches?: string[];
+    badge?: string;
+  };
+
+  const modalityHubItem: HubMenuItem = {
+    id: 'modality',
+    accentColor: '#FF2A2A',
+    title: 'MODALIDADE',
+    subtitle: rallyMode === 'velocidade' ? 'Rally Velocidade' : 'Rally Regularidade',
+  };
+
+  const velocityHubItems: HubMenuItem[] = [
+    {
+      id: 'velocity',
+      accentColor: '#E10600',
+      title: 'LAYOUT & GPS',
+      subtitle: 'Cockpit · GPS & IMU',
+    },
+  ];
+
+  const regularityHubItems: HubMenuItem[] = [
+    {
+      id: 'roadbooks',
+      accentColor: '#10B981',
+      title: 'PLANILHAS',
+      subtitle:
+        savedRoadbooks.length > 0
+          ? `${savedRoadbooks.length} Livros de Bordo`
+          : 'Livros de Bordo',
+    },
+    {
+      id: 'pilot',
+      accentColor: '#A3E635',
+      title: 'TELA PILOTO',
+      subtitle: 'HUD & Layout',
+    },
+    {
+      id: 'calibration',
+      accentColor: '#E10600',
+      title: 'CALIBRAÇÃO',
+      subtitle: 'Odômetro / Sensores',
+    },
+    {
+      id: 'alerts',
+      accentColor: '#F59E0B',
+      title: 'ALERTAS',
+      subtitle: 'Bips & Limites',
+    },
+    {
+      id: 'pairing',
+      accentColor: '#0EA5E9',
+      title: 'PAREAMENTO',
+      subtitle: settings.pairing.enabled
+        ? `Sala ${settings.pairing.roomCode}`
+        : 'Sala PS-XXXX',
+    },
+    {
+      id: 'collector',
+      accentColor: '#F97316',
+      title: 'COLETOR GPS',
+      subtitle:
+        pendingQueue.length > 0 ? `${pendingQueue.length} na fila` : 'Envio Admin',
+    },
+  ];
+
+  const commonSystemItems: HubMenuItem[] = [
+    {
+      id: 'theme',
+      accentColor: '#00E5FF',
+      title: 'TEMAS VISUAIS',
+      subtitle: `${APP_THEME_OPTIONS.length} Visuais`,
+      swatches: [
+        activeThemeMeta.bg,
+        activeThemeMeta.surface,
+        activeThemeMeta.accent,
+        activeThemeMeta.accent2,
+      ],
+    },
+    {
+      id: 'clock',
+      accentColor: '#FBBF24',
+      title: 'HORA & GPS',
+      subtitle: 'Sinc. Oficial',
+    },
+    {
+      id: 'gopro',
+      accentColor: '#FF2A2A',
+      title: 'GOPRO BLE',
+      subtitle: 'Câmeras',
+    },
+    {
+      id: 'backup',
+      accentColor: '#22C55E',
+      title: 'BACKUP',
+      subtitle: 'Exportar Dados',
+    },
+    {
+      id: 'system',
+      accentColor: '#38BDF8',
+      title: 'SISTEMA & LICENÇA',
+      subtitle: hasAdminAccess ? 'Admin · Licença & GPS' : 'Licença, Atualiz. & GPS',
+      badge: hasAdminAccess
+        ? 'ADMIN'
+        : effectiveDeviceLicense.status === 'allowed'
+          ? 'ATIVO'
+          : 'BLOQ.',
+    },
+  ];
+
+  const activeHubItems: HubMenuItem[] =
+    rallyMode === 'regularidade'
+      ? [modalityHubItem, ...regularityHubItems, ...commonSystemItems]
+      : [modalityHubItem, ...velocityHubItems, ...commonSystemItems];
+
+  const renderHubCard = (item: HubMenuItem) => (
+    <button
+      key={item.id}
+      type="button"
+      onClick={() => navigateMenu(item.id)}
+      className="group relative flex h-[88px] items-center justify-end overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 py-2 text-right transition-all hover:border-[var(--ps-accent)] active:scale-[0.98] sm:px-3.5"
+    >
+      <SettingsWireframeArt menuId={item.id} color={item.accentColor} />
+
+      <div className="relative z-10 flex min-w-0 w-full flex-col items-end justify-center pl-[62px] text-right sm:pl-[80px]">
+        {item.badge && (
+          <span
+            className={`mb-0.5 rounded px-1.5 py-0.5 font-mono text-[10px] font-black leading-none uppercase ${
+              item.badge === 'ADMIN'
+                ? 'bg-cyan-500/20 text-[var(--ps-accent)]'
+                : item.badge === 'ATIVO' || item.badge === 'PRO'
+                  ? 'bg-emerald-500/20 text-[var(--ps-emerald)]'
+                  : 'bg-amber-500/20 text-[var(--ps-amber)]'
+            }`}
+          >
+            {item.badge}
+          </span>
+        )}
+        <span className="max-w-full text-[12px] font-black tracking-tight text-[var(--ps-text)] uppercase leading-tight sm:text-[14px] sm:tracking-wide">
+          {item.title}
+        </span>
+
+        <div className="mt-0.5 max-w-full truncate text-[11px] font-medium text-[var(--ps-muted)] leading-tight sm:text-[13px]">
+          {item.subtitle}
+        </div>
+
+        {item.swatches && (
+          <div className="mt-1 flex items-center justify-end gap-1">
+            {item.swatches.map((hex, i) => (
+              <span
+                key={i}
+                className="h-2.5 w-2.5 rounded-full border border-[var(--ps-border-strong)]"
+                style={{ backgroundColor: hex }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Barra de LED fina iluminada na base inferior */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px]"
+        style={{
+          backgroundColor: item.accentColor,
+          boxShadow: `0 0 8px ${item.accentColor}`,
+        }}
+      />
+    </button>
+  );
 
   return (
     <div className="mx-auto max-w-4xl space-y-3 text-[var(--ps-text)]">
@@ -1270,203 +1439,48 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-[10px] font-bold tracking-[0.16em] text-[var(--ps-accent)] uppercase">
+            <p className="font-mono text-xs font-bold tracking-[0.16em] text-[var(--ps-accent)] uppercase">
               Configurações
             </p>
-            <h1 className="truncate font-['Barlow_Condensed'] text-xl font-black tracking-wide text-[var(--ps-text)] uppercase leading-tight sm:text-2xl">
+            <h1
+              className={`font-['Barlow_Condensed'] text-2xl font-black tracking-wide text-[var(--ps-text)] uppercase leading-tight sm:text-[26px] ${
+                isSystemHeader ? 'whitespace-nowrap' : 'truncate'
+              }`}
+            >
               {activeMenu === 'hub' ? 'Central de Ajustes' : menuTitleMap[activeMenu]}
             </h1>
-            <p className="truncate text-[11px] text-[var(--ps-muted)]">
+            <p className="text-[13px] text-[var(--ps-muted)] leading-snug">
               {activeMenu === 'hub'
                 ? 'Modalidade, temas visuais, GPS, planilhas e ajustes do veículo.'
                 : menuSubtitleMap[activeMenu]}
             </p>
           </div>
         </div>
-        <span className="shrink-0 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1 font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
-          {formatClockOnly(nowMs + settings.clockOffsetMs)}
-        </span>
+        {!isSystemHeader && activeMenu !== 'hub' && (
+          <span className="shrink-0 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-1.5 font-mono text-[13px] font-bold text-[var(--ps-muted)] tabular-nums">
+            {formatClockOnly(nowMs + settings.clockOffsetMs)}
+          </span>
+        )}
       </div>
 
-      {/* MENU HUB (Estilo FuelTech FT700: 2 colunas compactas, wireframe vibrante à esquerda, título à direita + LED inferior) */}
+      {/* MENU HUB: Grade única uniforme 2 colunas automática conforme modalidade */}
       {activeMenu === 'hub' && (
         <div className="grid grid-cols-2 gap-2">
-          {[
-            {
-              id: 'modality' as const,
-              accentColor: '#FF2A2A',
-              title: 'MODALIDADE',
-              subtitle:
-                rallyMode === 'velocidade' ? 'Rally Velocidade' : 'Rally Regularidade',
-            },
-            {
-              id: 'theme' as const,
-              accentColor: '#00E5FF',
-              title: 'TEMAS VISUAIS',
-              subtitle: `${APP_THEME_OPTIONS.length} Visuais`,
-              swatches: [
-                activeThemeMeta.bg,
-                activeThemeMeta.surface,
-                activeThemeMeta.accent,
-                activeThemeMeta.accent2,
-              ],
-            },
-            {
-              id: 'velocity' as const,
-              accentColor: '#E10600',
-              title: 'VELOCIDADE & GPS',
-              subtitle: 'Cockpit · GPS & IMU',
-            },
-            {
-              id: 'roadbooks' as const,
-              accentColor: '#10B981',
-              title: 'PLANILHAS',
-              subtitle:
-                savedRoadbooks.length > 0
-                  ? `${savedRoadbooks.length} Livros de Bordo`
-                  : 'Livros de Bordo',
-            },
-            {
-              id: 'clock' as const,
-              accentColor: '#FBBF24',
-              title: 'HORA & GPS',
-              subtitle: 'Sinc. Oficial',
-            },
-            {
-              id: 'calibration' as const,
-              accentColor: '#E10600',
-              title: 'CALIBRAÇÃO',
-              subtitle: 'Odômetro / Sensores',
-            },
-            {
-              id: 'pilot' as const,
-              accentColor: '#A3E635',
-              title: 'TELA PILOTO',
-              subtitle: 'HUD & Layout',
-            },
-            {
-              id: 'alerts' as const,
-              accentColor: '#F59E0B',
-              title: 'ALERTAS',
-              subtitle: 'Bips & Limites',
-            },
-            {
-              id: 'pairing' as const,
-              accentColor: '#0EA5E9',
-              title: 'PAREAMENTO',
-              subtitle: settings.pairing.enabled
-                ? `Sala ${settings.pairing.roomCode}`
-                : 'Sala PS-XXXX',
-            },
-            {
-              id: 'gopro' as const,
-              accentColor: '#FF2A2A',
-              title: 'GOPRO BLE',
-              subtitle: 'Câmeras',
-            },
-            {
-              id: 'collector' as const,
-              accentColor: '#F97316',
-              title: 'COLETOR GPS',
-              subtitle:
-                pendingQueue.length > 0
-                  ? `${pendingQueue.length} na fila`
-                  : 'Envio Admin',
-            },
-            {
-              id: 'account' as const,
-              accentColor: '#38BDF8',
-              title: 'CONTA & LICENÇA',
-              subtitle: hasAdminAccess
-                ? 'Admin · Dispositivos'
-                : 'Login & Acesso',
-              badge: hasAdminAccess
-                ? 'ADMIN'
-                : effectiveDeviceLicense.status === 'allowed'
-                  ? 'ATIVO'
-                  : 'BLOQ.',
-            },
-            {
-              id: 'backup' as const,
-              accentColor: '#22C55E',
-              title: 'BACKUP',
-              subtitle: 'Exportar Dados',
-            },
-            {
-              id: 'system' as const,
-              accentColor: '#A855F7',
-              title: 'SISTEMA',
-              subtitle: 'Versão & Reset',
-            },
-          ].map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => navigateMenu(item.id)}
-              className="group relative flex h-[76px] items-center justify-end overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2.5 py-2 text-right transition-all hover:border-[var(--ps-accent)] active:scale-[0.98] sm:px-3"
-            >
-              <SettingsWireframeArt menuId={item.id} color={item.accentColor} />
-
-              <div className="relative z-10 flex min-w-0 w-full flex-col items-end justify-center pl-6 text-right sm:pl-10">
-                {'badge' in item && item.badge && (
-                  <span
-                    className={`mb-0.5 rounded px-1.5 py-0.5 font-mono text-[8px] font-black leading-none uppercase ${
-                      item.badge === 'ADMIN'
-                        ? 'bg-cyan-500/20 text-[var(--ps-accent)]'
-                        : item.badge === 'ATIVO' || item.badge === 'PRO'
-                          ? 'bg-emerald-500/20 text-[var(--ps-emerald)]'
-                          : 'bg-amber-500/20 text-[var(--ps-amber)]'
-                    }`}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-                <span className="whitespace-nowrap text-[11px] font-black tracking-tight text-[var(--ps-text)] uppercase leading-tight sm:text-xs sm:tracking-wide">
-                  {item.title}
-                </span>
-
-                <div className="mt-0.5 max-w-full truncate text-[10px] font-medium text-[var(--ps-muted)] leading-tight">
-                  {item.subtitle}
-                </div>
-
-                {'swatches' in item && item.swatches && (
-                  <div className="mt-1 flex items-center justify-end gap-1">
-                    {item.swatches.map((hex, i) => (
-                      <span
-                        key={i}
-                        className="h-2 w-2 rounded-full border border-[var(--ps-border-strong)]"
-                        style={{ backgroundColor: hex }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Barra de LED fina iluminada na base inferior */}
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px]"
-                style={{
-                  backgroundColor: item.accentColor,
-                  boxShadow: `0 0 8px ${item.accentColor}`,
-                }}
-              />
-            </button>
-          ))}
+          {activeHubItems.map((item) => renderHubCard(item))}
         </div>
       )}
 
       {activeMenu === 'hub' && (
-        <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2 text-[11px] text-[var(--ps-muted)]">
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 py-2.5 text-[13px] text-[var(--ps-muted)]">
           <div className="flex min-w-0 items-center gap-2">
-            <Smartphone className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
+            <Smartphone className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
             <span className="truncate">
               ID do Aparelho:{' '}
-              <strong className="font-mono font-extrabold tracking-wider text-[var(--ps-text)] tabular-nums select-all">
+              <strong className="font-mono text-sm font-extrabold tracking-wider text-[var(--ps-text)] tabular-nums select-all">
                 {effectiveDeviceLicense.identity.deviceId}
               </strong>
             </span>
-            <span className="hidden font-mono text-[10px] opacity-75 sm:inline">
+            <span className="hidden font-mono text-xs opacity-80 sm:inline">
               · {effectiveDeviceLicense.identity.appVersion}
             </span>
           </div>
@@ -1475,16 +1489,16 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             onClick={() => {
               void handleCopyDeviceId();
             }}
-            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2 font-mono text-[10px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 font-mono text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
           >
             {copiedDeviceId ? (
               <>
-                <Check className="h-3 w-3 text-[var(--ps-emerald)]" />
+                <Check className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
                 <span className="text-[var(--ps-emerald)]">Copiado</span>
               </>
             ) : (
               <>
-                <Copy className="h-3 w-3" />
+                <Copy className="h-3.5 w-3.5" />
                 <span>Copiar</span>
               </>
             )}
@@ -1961,16 +1975,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
           </section>
         </div>
-      )}
-
-      {/* SUBMENU 00: CONTA & ASSINATURA + ADMIN */}
-      {activeMenu === 'account' && (
-        <AccountSubscriptionPanel
-          deviceLicense={effectiveDeviceLicense}
-          onRecheckDeviceLicense={() => {
-            void handleRecheckDeviceLicense();
-          }}
-        />
       )}
 
       {/* SUBMENU 0: TEMAS & VISUAL DO PAINEL */}
@@ -3493,15 +3497,24 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SUBMENU: CÂMERAS GOPRO (OPEN GOPRO BLE) */}
       {activeMenu === 'gopro' && <GoProBlePanel />}
 
-      {/* SUBMENU: SISTEMA, TELA, GPS, PERMISSÕES & APURAÇÃO */}
-      {activeMenu === 'system' && (
-        <div className="space-y-4">
-          <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Satellite className="h-4 w-4 text-[var(--ps-accent)]" />
-                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
+      {/* SUBMENU: SISTEMA & LICENÇA */}
+      {(activeMenu === 'system' || activeMenu === 'account') && (
+        <div className="space-y-3">
+          <AccountSubscriptionPanel
+            deviceLicense={effectiveDeviceLicense}
+            checkingDeviceLicense={effectiveCheckingLicense}
+            onRecheckDeviceLicense={() => {
+              void handleRecheckDeviceLicense();
+            }}
+          />
+
+          {/* Linha compacta de 2 colunas: Sinal do GPS + Bateria (Telemetry Pro discreto) */}
+          <section className="grid grid-cols-2 gap-2.5">
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 flex flex-col justify-between gap-2">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Satellite className="h-4 w-4 shrink-0 text-[var(--ps-muted)]" />
+                  <h2 className="font-['Barlow_Condensed'] text-[15px] font-bold tracking-wide text-[var(--ps-text)] uppercase">
                     Sinal do GPS
                   </h2>
                 </div>
@@ -3509,154 +3522,62 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   type="button"
                   onClick={readSingleGpsFix}
                   disabled={refreshingGps}
-                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-[#C0C4C9]/50 whitespace-nowrap shrink-0"
+                  aria-label="Atualizar sinal GPS"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)] shrink-0"
                 >
-                  <RefreshCw className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${refreshingGps ? 'animate-spin' : ''}`} />
-                  <span>Atualizar</span>
+                  <RefreshCw className={`h-3.5 w-3.5 ${refreshingGps ? 'animate-spin' : ''}`} />
                 </button>
               </div>
 
-              <div className="mt-3 flex items-baseline justify-between gap-2">
-                <div>
-                  <span className={`font-['Barlow_Condensed'] text-2xl font-extrabold italic ${gpsQuality.toneClass}`}>
-                    {gps.status === 'active' ? gpsQuality.label : gps.status === 'denied' ? 'Bloqueado' : 'Buscando...'}
+              <div className="flex items-baseline justify-between gap-1.5">
+                <span className="inline-flex items-center gap-1.5 font-['Barlow_Condensed'] text-xl font-extrabold leading-none text-[var(--ps-text)]">
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      gps.status === 'active'
+                        ? 'bg-emerald-400'
+                        : gps.status === 'denied'
+                          ? 'bg-red-500'
+                          : 'bg-amber-400'
+                    }`}
+                  />
+                  <span>
+                    {gps.status === 'active'
+                      ? gpsQuality.label
+                      : gps.status === 'denied'
+                        ? 'Bloqueado'
+                        : 'Buscando'}
                   </span>
-                  <span className="ml-2 font-mono text-xs text-[var(--ps-muted)] tabular-nums">
-                    {gps.accuracyM !== null ? `±${gps.accuracyM} m` : '--'}
-                  </span>
-                </div>
-                <div className="flex items-end gap-1" aria-hidden="true">
-                  {[1, 2, 3, 4, 5].map((b) => (
-                    <span
-                      key={b}
-                      className={`w-1.5 rounded-xs ${b <= gpsQuality.bars ? gpsQuality.barClass : 'bg-[var(--ps-border)]'}`}
-                      style={{ height: `${b * 4 + 4}px` }}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[var(--ps-border)] pt-2.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
-                <span className="truncate">Lat: {gps.lat !== null ? gps.lat.toFixed(6) : '--'}</span>
-                <span className="truncate text-right">Lon: {gps.lon !== null ? gps.lon.toFixed(6) : '--'}</span>
-              </div>
-              {gps.message && <p className="mt-2 text-xs text-[var(--ps-amber)]">{gps.message}</p>}
-            </div>
-
-            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 flex flex-col justify-between">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  {renderBatteryIcon()}
-                  <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                    Bateria do Aparelho
-                  </h2>
-                </div>
-                <span className="font-mono text-[11px] font-semibold text-[var(--ps-muted)]">
-                  {battery.charging ? 'Carregando' : battery.supported ? 'Em bateria' : 'N/D'}
+                </span>
+                <span className="font-mono text-[13px] text-[var(--ps-muted)] tabular-nums">
+                  {gps.accuracyM !== null ? `±${gps.accuracyM}m` : '--'}
                 </span>
               </div>
 
-              <div className="mt-3 flex items-baseline justify-between">
-                <span className="font-mono text-3xl font-extrabold text-[var(--ps-text)] tabular-nums">
+              {gps.message && <p className="text-xs text-[var(--ps-muted)] leading-snug">{gps.message}</p>}
+            </div>
+
+            <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3.5 flex flex-col justify-between gap-2">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  {renderBatteryIcon()}
+                  <h2 className="font-['Barlow_Condensed'] text-[15px] font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                    Bateria
+                  </h2>
+                </div>
+                <span className="font-mono text-xs font-semibold text-[var(--ps-muted)] shrink-0">
+                  {battery.charging ? 'Carregando' : battery.supported ? 'Interna' : 'N/D'}
+                </span>
+              </div>
+
+              <div className="flex items-baseline justify-between gap-1.5">
+                <span className="font-mono text-2xl font-extrabold text-[var(--ps-text)] tabular-nums leading-none">
                   {battery.supported && battery.levelPct !== null ? `${battery.levelPct}%` : '--'}
                 </span>
                 <span className="text-xs text-[var(--ps-muted)]">
                   {battery.levelPct !== null && battery.levelPct <= 25
-                    ? 'Recomendado ligar carregador veicular'
-                    : 'Carga estável para etapa'}
+                    ? 'Ligar carregador'
+                    : 'Estável'}
                 </span>
-              </div>
-
-              <div className="mt-3 h-2 w-full overflow-hidden rounded-sm border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
-                <div
-                  className={`h-full transition-all ${
-                    (battery.levelPct ?? 0) <= 20
-                      ? 'bg-[#E10600]'
-                      : (battery.levelPct ?? 0) <= 50
-                        ? 'bg-amber-400'
-                        : 'bg-emerald-500'
-                  }`}
-                  style={{ width: `${battery.levelPct ?? 0}%` }}
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Smartphone className="h-4 w-4 text-[var(--ps-accent)]" />
-                <h2 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                  Identificação &amp; Licença do Aparelho
-                </h2>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleCopyDeviceId();
-                  }}
-                  className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-[11px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
-                >
-                  {copiedDeviceId ? (
-                    <>
-                      <Check className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
-                      <span className="text-[var(--ps-emerald)]">Copiado</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3.5 w-3.5" />
-                      <span>Copiar ID</span>
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleRecheckDeviceLicense();
-                  }}
-                  disabled={effectiveCheckingLicense}
-                  className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-[11px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-emerald)]"
-                >
-                  <RefreshCw
-                    className={`h-3.5 w-3.5 ${effectiveCheckingLicense ? 'animate-spin' : ''}`}
-                  />
-                  <span>Verificar</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-2 font-mono text-[11px] sm:grid-cols-3">
-              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
-                <p className="text-[10px] text-[var(--ps-muted)] uppercase">Device ID</p>
-                <p className="mt-0.5 text-sm font-black tracking-wider text-[var(--ps-amber)] tabular-nums select-all">
-                  {effectiveDeviceLicense.identity.deviceId}
-                </p>
-              </div>
-              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
-                <p className="text-[10px] text-[var(--ps-muted)] uppercase">Modelo / Versão</p>
-                <p className="mt-0.5 truncate font-bold text-[var(--ps-text)]">
-                  {effectiveDeviceLicense.identity.deviceModel} · {effectiveDeviceLicense.identity.appVersion}
-                </p>
-              </div>
-              <div className="rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2">
-                <p className="text-[10px] text-[var(--ps-muted)] uppercase">Status</p>
-                <p
-                  className={`mt-0.5 font-extrabold ${
-                    effectiveDeviceLicense.status === 'allowed'
-                      ? 'text-[var(--ps-emerald)]'
-                      : 'text-[#FF2A2A]'
-                  }`}
-                >
-                  {effectiveDeviceLicense.status === 'allowed'
-                    ? effectiveDeviceLicense.offlineGrace
-                      ? 'Liberado (Cache Offline)'
-                      : 'Liberado (Online)'
-                    : 'Bloqueado'}
-                  {effectiveDeviceLicense.expiresAt
-                    ? ` · até ${new Date(effectiveDeviceLicense.expiresAt).toLocaleDateString('pt-BR')}`
-                    : ''}
-                </p>
               </div>
             </div>
           </section>
@@ -3670,7 +3591,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   Orientação &amp; Trava de Tela
                 </h2>
               </div>
-              <p className="text-xs text-[var(--ps-muted)]">
+              <p className="text-[13px] text-[var(--ps-muted)]">
                 Trave a rotação no painel do carro (Retrato / Paisagem) ou deixe automática conforme o sensor do aparelho.
               </p>
               <div className="grid grid-cols-3 gap-1.5">
@@ -3685,7 +3606,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     key={id}
                     type="button"
                     onClick={() => updateSettings({ screenOrientation: id })}
-                    className={`min-h-[40px] rounded-lg text-xs font-bold ${
+                    className={`min-h-[42px] rounded-lg text-[13px] font-bold ${
                       settings.screenOrientation === id
                         ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
                         : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -3709,12 +3630,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   type="button"
                   onClick={handleRequestDevicePermissions}
                   disabled={requestingPerms}
-                  className="pitstop-btn-red rounded-lg px-3 py-1.5 text-xs font-bold whitespace-nowrap"
+                  className="pitstop-btn-red rounded-lg px-3 py-1.5 text-[13px] font-bold whitespace-nowrap"
                 >
                   {requestingPerms ? 'Solicitando...' : 'Solicitar Acessos'}
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-1.5 font-mono text-[11px]">
+              <div className="grid grid-cols-2 gap-1.5 font-mono text-[13px]">
                 {(
                   [
                     ['Localização GPS', permSnapshot?.location],
@@ -3725,7 +3646,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 ).map(([label, status]) => (
                   <div
                     key={label}
-                    className="flex items-center justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5"
+                    className="flex items-center justify-between rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-2"
                   >
                     <span className="truncate text-[var(--ps-muted)]">{label}</span>
                     <span

@@ -86,7 +86,9 @@ import {
   bearingBetweenDeg,
   computeOptimalStage,
   computePredictiveDeltaSec,
+  computeSafeAverageSpeedKmh,
   computeSampleGForces,
+  convertDetectedPointsToSplitTraps,
   createDemoSpecialStage,
   createGpsKalmanProcessor,
   detectTrapCrossing,
@@ -99,6 +101,7 @@ import {
   formatDeltaSeconds,
   formatImportedTrackNamesList,
   formatStageDuration,
+  generateEqualSplitTraps,
   getCapacitorGpsWatchOptions,
   getOrderedTrackTraps,
   haversineMetersVel,
@@ -106,6 +109,7 @@ import {
   parseTrackFileToGeoResult,
   recalculateRunsForTrack,
   WEB_GPS_WATCH_OPTIONS,
+  type GeoWaypoint,
   type OptimalStageSummary,
   type TrackMode,
   type TrapKind,
@@ -246,6 +250,51 @@ function estimateSatellites(accuracyM: number | null, gpsActive: boolean): numbe
   if (accuracyM <= 25) return 7;
   return 4;
 }
+
+interface FinishSummaryModalData {
+  trackName: string;
+  runNumber: number;
+  totalMs: number;
+  deltaVsBestMs: number | null;
+  isFaster: boolean;
+  splits: Array<{
+    id: string;
+    label: string;
+    timeMs: number | null;
+    deltaMs: number | null;
+  }>;
+  maxSpeedKmh: number;
+  avgSpeedKmh: number;
+}
+
+function formatFinishDeltaMs(deltaMs: number | null): string {
+  if (deltaMs === null || !Number.isFinite(deltaMs)) return 'REFERÊNCIA';
+  const sign = deltaMs <= 0 ? '-' : '+';
+  return `${sign}${(Math.abs(deltaMs) / 1000).toFixed(2)}s`;
+}
+
+const OfficialGpsClockPill: React.FC<{ clockOffsetMs: number }> = ({ clockOffsetMs }) => {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <div
+      aria-label="Hora Oficial sincronizada com GPS"
+      className="inline-flex flex-col items-center justify-center rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)]/95 px-5 py-2 shadow-sm"
+    >
+      <span className="font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--ps-muted)] uppercase leading-none">
+        HORA OFICIAL / GPS
+      </span>
+      <span className="mt-1 font-mono text-xl font-black tracking-[0.1em] text-[var(--ps-text)] tabular-nums leading-none sm:text-2xl">
+        {formatClockTime(nowMs + clockOffsetMs)}
+      </span>
+    </div>
+  );
+};
 
 const VelocityGaugeClockCards: React.FC<{
   showOfficialClock: boolean;
@@ -406,6 +455,12 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [editingTrackName, setEditingTrackName] = useState('');
   const [pendingDeleteTrack, setPendingDeleteTrack] = useState<VelocityTrack | null>(null);
+  const [pendingImportDecision, setPendingImportDecision] = useState<{
+    readyTracks: VelocityTrack[];
+    decisionQueue: VelocityTrack[];
+    waypoints: GeoWaypoint[];
+    totalCount: number;
+  } | null>(null);
   const [mapTrackNameDraft, setMapTrackNameDraft] = useState('');
   const [justSavedTrack, setJustSavedTrack] = useState(false);
   const [gpsMappingOpen, setGpsMappingOpen] = useState(false);
@@ -440,6 +495,27 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
   const [showLiveMap, setShowLiveMap] = useState(false);
   const [liveHeadingUp, setLiveHeadingUp] = useState(true);
   const [liveHeatmapMode, setLiveHeatmapMode] = useState<'accel' | 'speed'>('accel');
+  const [finishSummaryModal, setFinishSummaryModal] = useState<FinishSummaryModalData | null>(
+    null
+  );
+  const [finishCountdownMs, setFinishCountdownMs] = useState(15000);
+  const [finishCountdownPaused, setFinishCountdownPaused] = useState(false);
+  const [finishGoProStopped, setFinishGoProStopped] = useState(false);
+
+  useEffect(() => {
+    if (!finishSummaryModal || finishCountdownPaused) return;
+    const id = window.setInterval(() => {
+      setFinishCountdownMs((prev) => {
+        if (prev <= 100) {
+          window.clearInterval(id);
+          setFinishSummaryModal(null);
+          return 0;
+        }
+        return prev - 100;
+      });
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [finishSummaryModal, finishCountdownPaused]);
 
   const tracksRef = useRef<VelocityTrack[]>(tracks);
   tracksRef.current = tracks;
@@ -693,17 +769,38 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
       continueNextLap = false,
       rearmAfterFinish = false,
       samplesOverride?: VelocitySample[],
-      distKmOverride?: number
+      distKmOverride?: number,
+      openFinishModal = false
     ) => {
       const startMs = stageStartMsRef.current;
       if (!startMs) return;
       const elapsedTotal = Math.max(100, finishedAtMs - startMs);
       const samples = ensureTraceGForces(samplesOverride ?? [...liveSamplesRef.current]);
       const distKm = distKmOverride ?? totalDistRef.current;
-      const avgSpeed = elapsedTotal > 0 ? distKm / (elapsedTotal / 3600000) : 0;
+      const sampleMaxSpeed = samples.reduce(
+        (m, s) => Math.max(m, Number.isFinite(s.speedKmh) ? s.speedKmh : 0),
+        0
+      );
+      const resolvedMaxSpeed = Math.max(
+        Math.round(maxSpeedRef.current),
+        Math.round(sampleMaxSpeed)
+      );
+      const resolvedAvgSpeed = computeSafeAverageSpeedKmh({
+        distanceKm: distKm,
+        totalMs: elapsedTotal,
+        maxSpeedKmh: resolvedMaxSpeed,
+        samples,
+      });
 
       const targetTrackId = activeTrack?.id || 'free_stage';
-      const nextNum = runs.filter((r) => r.trackId === targetTrackId).length + 1;
+      const priorRuns = runs.filter((r) => r.trackId === targetTrackId);
+      const nextNum = priorRuns.length + 1;
+      const bestBefore = priorRuns.reduce<VelocityRun | null>((best, r) => {
+        if (r.totalMs <= 0) return best;
+        if (!best || r.totalMs < best.totalMs) return r;
+        return best;
+      }, null);
+      const resolvedSplits = splitsOverride ?? currentSplitTimesRef.current;
 
       const newRun: VelocityRun = {
         id: `run_${Date.now()}_${nextNum}`,
@@ -712,13 +809,50 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
         startedAtMs: startMs,
         finishedAtMs,
         totalMs: elapsedTotal,
-        splitTimesMs: splitsOverride ?? currentSplitTimesRef.current,
-        maxSpeedKmh: Math.round(maxSpeedRef.current),
-        avgSpeedKmh: Math.round(avgSpeed),
+        splitTimesMs: resolvedSplits,
+        maxSpeedKmh: resolvedMaxSpeed,
+        avgSpeedKmh: resolvedAvgSpeed,
         distanceKm: Number(distKm.toFixed(3)),
         samples,
       };
       setRuns((prev) => [newRun, ...prev]);
+
+      if (openFinishModal) {
+        const deltaVsBestMs = bestBefore ? elapsedTotal - bestBefore.totalMs : null;
+        const isFaster = deltaVsBestMs === null ? true : deltaVsBestMs <= 0;
+        const splitTraps = activeTrack
+          ? getOrderedTrackTraps(activeTrack).filter((t) => t.kind === 'split')
+          : [];
+        const splitCards = splitTraps.map((trap, idx) => {
+          const curSplit =
+            typeof resolvedSplits[trap.id] === 'number' ? resolvedSplits[trap.id] : null;
+          const bestSplit =
+            bestBefore && typeof bestBefore.splitTimesMs?.[trap.id] === 'number'
+              ? bestBefore.splitTimesMs[trap.id]
+              : null;
+          return {
+            id: trap.id,
+            label: `P${idx + 1}`,
+            timeMs: curSplit,
+            deltaMs:
+              curSplit !== null && bestSplit !== null ? curSplit - bestSplit : null,
+          };
+        });
+
+        setFinishSummaryModal({
+          trackName: formatCleanTrackName(activeTrack?.name || 'Especial Livre'),
+          runNumber: nextNum,
+          totalMs: elapsedTotal,
+          deltaVsBestMs,
+          isFaster,
+          splits: splitCards,
+          maxSpeedKmh: resolvedMaxSpeed,
+          avgSpeedKmh: resolvedAvgSpeed,
+        });
+        setFinishCountdownMs(15000);
+        setFinishCountdownPaused(false);
+        setFinishGoProStopped(false);
+      }
 
       if (activeTrack) {
         setTracks((prev) =>
@@ -1124,7 +1258,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   true,
                   false,
                   lapSamples,
-                  finishDistKm
+                  finishDistKm,
+                  true
                 );
 
                 // Inicia próxima volta a partir do ponto exato do cruzamento da linha
@@ -1189,7 +1324,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                   false,
                   true,
                   finSamples,
-                  finishDistKm
+                  finishDistKm,
+                  true
                 );
                 nextStageState = 'armed';
                 activeStartMs = null;
@@ -2411,6 +2547,86 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
     showToast(`Nome atualizado para "${clean}"`);
   };
 
+  const finalizeImportedTracks = (
+    finalTracks: VelocityTrack[],
+    waypoints: GeoWaypoint[]
+  ) => {
+    if (finalTracks.length === 0) return;
+    const cleanedTracks: VelocityTrack[] = finalTracks.map((trk) => {
+      const { detectedSplitPoints: _unused, ...rest } = trk;
+      return rest;
+    });
+
+    setTracks((prev) => [...cleanedTracks, ...prev]);
+    setActiveTrackId(cleanedTracks[0].id);
+    setUserPickedTrackManually(true);
+    finishGateArmedRef.current = false;
+    stageStateRef.current = 'idle';
+    stageStartMsRef.current = null;
+    setStageState('idle');
+    setStageStartMs(null);
+    setLastFinishedMs(null);
+    setCurrentSplitTimesMs({});
+
+    if (cleanedTracks.length >= 2) {
+      const namesList = formatImportedTrackNamesList(
+        cleanedTracks.map((t) => formatCleanTrackName(t.name))
+      );
+      const wpSuffix =
+        waypoints.length > 0
+          ? ` · ${waypoints.length} ponto${waypoints.length > 1 ? 's' : ''} no mapa`
+          : '';
+      setScreen('tracks');
+      showToast(`${cleanedTracks.length} especiais importadas: ${namesList}${wpSuffix}`);
+    } else {
+      const single = cleanedTracks[0];
+      setScreen('track-editor');
+      showToast(
+        `Especial "${formatCleanTrackName(single.name)}" importada (${single.referenceDistanceKm.toFixed(2)} km · ${single.traps.length} marcos)!`
+      );
+    }
+  };
+
+  const resolvePendingImportDecision = (mode: 'use-kml' | 'create-auto' | 'keep-lc') => {
+    if (!pendingImportDecision || pendingImportDecision.decisionQueue.length === 0) return;
+    const [current, ...remainingQueue] = pendingImportDecision.decisionQueue;
+
+    const starts = current.traps.filter(
+      (t) => t.kind === 'start' || t.kind === 'start_finish'
+    );
+    const finishes = current.traps.filter((t) => t.kind === 'finish');
+
+    let chosenSplits: VelocityTrap[] = [];
+    if (mode === 'use-kml') {
+      chosenSplits = convertDetectedPointsToSplitTraps(
+        current,
+        current.detectedSplitPoints ?? []
+      );
+    } else if (mode === 'create-auto') {
+      chosenSplits = generateEqualSplitTraps(current, [0.2, 0.4, 0.6, 0.8]);
+    }
+
+    const resolvedTrack: VelocityTrack = {
+      ...current,
+      traps: [...starts, ...chosenSplits, ...finishes],
+      detectedSplitPoints: undefined,
+    };
+
+    const nextReady = [...pendingImportDecision.readyTracks, resolvedTrack];
+    if (remainingQueue.length > 0) {
+      setPendingImportDecision({
+        readyTracks: nextReady,
+        decisionQueue: remainingQueue,
+        waypoints: pendingImportDecision.waypoints,
+        totalCount: pendingImportDecision.totalCount,
+      });
+    } else {
+      const wps = pendingImportDecision.waypoints;
+      setPendingImportDecision(null);
+      finalizeImportedTracks(nextReady, wps);
+    }
+  };
+
   const handleImportGeoFile = async (file: File) => {
     try {
       const geoResult = await parseTrackFileToGeoResult(file);
@@ -2434,34 +2650,31 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           : withTraps;
       });
 
-      setTracks((prev) => [...importedTracks, ...prev]);
-      setActiveTrackId(importedTracks[0].id);
-      setUserPickedTrackManually(true);
-      finishGateArmedRef.current = false;
-      stageStateRef.current = 'idle';
-      stageStartMsRef.current = null;
-      setStageState('idle');
-      setStageStartMs(null);
-      setLastFinishedMs(null);
-      setCurrentSplitTimesMs({});
+      const readyTracks: VelocityTrack[] = [];
+      const decisionQueue: VelocityTrack[] = [];
 
-      if (importedTracks.length >= 2) {
-        const namesList = formatImportedTrackNamesList(
-          importedTracks.map((t) => formatCleanTrackName(t.name))
-        );
-        const wpSuffix =
-          geoResult.waypoints.length > 0
-            ? ` · ${geoResult.waypoints.length} ponto${geoResult.waypoints.length > 1 ? 's' : ''} no mapa`
-            : '';
-        setScreen('tracks');
-        showToast(`${importedTracks.length} especiais importadas: ${namesList}${wpSuffix}`);
-      } else {
-        const single = importedTracks[0];
-        setScreen('track-editor');
-        showToast(
-          `Especial "${formatCleanTrackName(single.name)}" importada (${single.referenceDistanceKm.toFixed(2)} km · ${single.traps.length} marcos)!`
-        );
+      for (const trk of importedTracks) {
+        const hasExplicitSplits = trk.traps.some((t) => t.kind === 'split');
+        const hasDetectedCandidates = (trk.detectedSplitPoints?.length ?? 0) > 0;
+        const isLongEnough = trk.referenceDistanceKm > 0.5;
+        if (!hasExplicitSplits && (hasDetectedCandidates || isLongEnough)) {
+          decisionQueue.push(trk);
+        } else {
+          readyTracks.push(trk);
+        }
       }
+
+      if (decisionQueue.length > 0) {
+        setPendingImportDecision({
+          readyTracks,
+          decisionQueue,
+          waypoints: geoResult.waypoints,
+          totalCount: importedTracks.length,
+        });
+        return;
+      }
+
+      finalizeImportedTracks(readyTracks, geoResult.waypoints);
     } catch (err) {
       const detail = err instanceof Error ? err.message : '';
       showToast(
@@ -3641,64 +3854,56 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
           </section>
       )}
 
-      {/* SCREEN: HOME (Clean RaceChrono + Rally Hub — No Map clutter) */}
+      {/* SCREEN: HOME (Clean RaceChrono + Rally Hub — Full-height vertical ergonomics) */}
       {screen === 'home' && (
-        <section className="space-y-4">
-          {/* Active Track / Especial Selector */}
-          <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)]">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
-                Especial / Pista Ativa
-              </span>
-              {autoDetectedNotice && (
-                <span className="font-mono text-[10px] font-bold text-[var(--ps-emerald)]">
-                  {autoDetectedNotice}
-                </span>
-              )}
-            </div>
-            <div className="mt-1.5 flex items-center gap-2">
+        <section className="flex min-h-[calc(100dvh-110px)] flex-col justify-between gap-3">
+          {/* Top: Unified Clean Active Track Bar (h-14 siblings, no outer wrapper box, no trap counts) */}
+          <div className="relative text-[var(--ps-text)]">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 aria-expanded={showTrackPickerDropdown}
                 aria-label="Selecionar pista para cronometragem"
                 onClick={() => setShowTrackPickerDropdown((v) => !v)}
-                className={`flex min-h-[48px] min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border bg-[var(--ps-card-deep)] px-3 py-1.5 text-left transition-colors ${
+                className={`flex h-14 min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border bg-[var(--ps-surface)] px-3.5 text-left transition-colors ${
                   showTrackPickerDropdown
                     ? 'border-[var(--ps-accent)]'
-                    : 'border-[var(--ps-border-strong)] hover:border-[var(--ps-accent)]'
+                    : 'border-[var(--ps-border)] hover:border-[var(--ps-accent)]'
                 }`}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-extrabold leading-tight text-[var(--ps-text)]">
-                    {activeTrack ? formatCleanTrackName(activeTrack.name) : 'Especial Livre'}
-                  </p>
-                  <p className="mt-0.5 truncate font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
+                      Pista Ativa
+                    </span>
+                    {autoDetectedNotice && (
+                      <span className="truncate font-mono text-[10px] font-bold text-[var(--ps-emerald)]">
+                        {autoDetectedNotice}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 truncate text-sm font-extrabold leading-tight text-[var(--ps-text)]">
                     {activeTrack
-                      ? activeTrack.mode === 'circuit'
-                        ? 'Circuito'
-                        : activeTrack.referenceDistanceKm > 0
-                          ? `Especial · ${activeTrack.referenceDistanceKm.toFixed(1)} km`
-                          : 'Especial'
-                      : 'Sem traps fixos'}
+                      ? `${formatCleanTrackName(activeTrack.name)}${
+                          activeTrack.referenceDistanceKm > 0
+                            ? ` • ${activeTrack.referenceDistanceKm.toFixed(1)} km`
+                            : ''
+                        }`
+                      : 'Especial Livre'}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <span className="rounded-md border border-[var(--ps-border)] bg-[var(--ps-surface)] px-2 py-0.5 font-mono text-[10px] font-extrabold text-[var(--ps-accent)] uppercase">
-                    {activeTrack ? `${activeTrack.traps.length} traps` : 'Livre'}
-                  </span>
-                  <ChevronDown
-                    className={`h-4 w-4 text-[var(--ps-muted)] transition-transform ${
-                      showTrackPickerDropdown ? 'rotate-180 text-[var(--ps-accent)]' : ''
-                    }`}
-                  />
-                </div>
+                <ChevronDown
+                  className={`h-4 w-4 shrink-0 text-[var(--ps-muted)] transition-transform ${
+                    showTrackPickerDropdown ? 'rotate-180 text-[var(--ps-accent)]' : ''
+                  }`}
+                />
               </button>
 
               {activeTrack ? (
                 <button
                   type="button"
                   onClick={() => setScreen('track-editor')}
-                  className="inline-flex h-[48px] items-center gap-1.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] shrink-0"
+                  className="inline-flex h-14 shrink-0 items-center gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] transition-colors"
                   title="Editar Marcos no Mapa"
                 >
                   <MapIcon className="h-4 w-4 text-[var(--ps-accent)]" />
@@ -3708,7 +3913,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 <button
                   type="button"
                   onClick={() => setShowNewTrackModal(true)}
-                  className="inline-flex h-[48px] items-center gap-1.5 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] shrink-0"
+                  className="inline-flex h-14 shrink-0 items-center gap-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3.5 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] transition-colors"
                   title="Criar Nova Pista"
                 >
                   <Plus className="h-4 w-4 text-[var(--ps-accent)]" />
@@ -3718,7 +3923,7 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </div>
 
             {showTrackPickerDropdown && (
-              <div className="mt-2 max-h-60 space-y-1 overflow-y-auto rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] p-1.5 shadow-xl">
+              <div className="mt-2 max-h-60 space-y-1 overflow-y-auto rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-1.5 shadow-xl">
                 <button
                   type="button"
                   onClick={() => {
@@ -3734,26 +3939,16 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                     setCurrentSplitTimesMs({});
                     setShowTrackPickerDropdown(false);
                   }}
-                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2.5 text-left transition-colors ${
                     !activeTrackId
                       ? 'border border-[var(--ps-accent)] bg-[var(--ps-accent-soft)]'
-                      : 'border border-transparent hover:bg-[var(--ps-surface)]'
+                      : 'border border-transparent hover:bg-[var(--ps-card-deep)]'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-extrabold text-[var(--ps-text)]">
-                      Especial Livre
-                    </p>
-                    <p className="font-mono text-[10px] text-[var(--ps-muted)] uppercase">
-                      Sem traps fixos
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <span className="rounded border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-muted)]">
-                      Livre
-                    </span>
-                    {!activeTrackId && <Check className="h-3.5 w-3.5 text-[var(--ps-accent)]" />}
-                  </div>
+                  <p className="truncate text-xs font-extrabold text-[var(--ps-text)]">
+                    Especial Livre
+                  </p>
+                  {!activeTrackId && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />}
                 </button>
 
                 {tracks.map((t) => {
@@ -3780,30 +3975,21 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                         setCurrentSplitTimesMs({});
                         setShowTrackPickerDropdown(false);
                       }}
-                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2.5 text-left transition-colors ${
                         isSelected
                           ? 'border border-[var(--ps-accent)] bg-[var(--ps-accent-soft)]'
-                          : 'border border-transparent hover:bg-[var(--ps-surface)]'
+                          : 'border border-transparent hover:bg-[var(--ps-card-deep)]'
                       }`}
                     >
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-extrabold leading-tight text-[var(--ps-text)]">
-                          {formatCleanTrackName(t.name)}
-                        </p>
-                        <p className="font-mono text-[10px] text-[var(--ps-muted)] uppercase">
-                          {t.mode === 'circuit'
-                            ? 'Circuito'
-                            : t.referenceDistanceKm > 0
-                              ? `Especial · ${t.referenceDistanceKm.toFixed(1)} km`
-                              : 'Especial'}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <span className="rounded border border-[var(--ps-border)] bg-[var(--ps-surface)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-accent)]">
-                          {t.traps.length} traps
-                        </span>
-                        {isSelected && <Check className="h-3.5 w-3.5 text-[var(--ps-accent)]" />}
-                      </div>
+                      <p className="min-w-0 flex-1 truncate text-xs font-extrabold leading-tight text-[var(--ps-text)]">
+                        {formatCleanTrackName(t.name)}
+                        {t.referenceDistanceKm > 0 && (
+                          <span className="ml-1.5 font-mono text-[11px] font-bold text-[var(--ps-muted)]">
+                            • {t.referenceDistanceKm.toFixed(1)} km
+                          </span>
+                        )}
+                      </p>
+                      {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />}
                     </button>
                   );
                 })}
@@ -3811,20 +3997,26 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             )}
           </div>
 
-          {/* Centerpiece Circular Tachometer Launch Button */}
-          <VelocityStartTachButton
-            onConfirm={handleStartOrArmStage}
-            sweepTrigger={tachSweepTrigger}
-            isPro={isPro}
-            subtitle={activeTrack ? 'ARMAR ESPECIAL' : 'ESPECIAL LIVRE'}
-            gpsSignalOk={
-              source === 'simulator' ||
-              (gpsActive && (gpsAccuracyM === null || gpsAccuracyM <= 25))
-            }
-          />
+          {/* Centerpiece Circular Tachometer Launch Button + Official GPS Clock */}
+          <div className="my-auto flex flex-col items-center justify-center gap-3 py-1">
+            <VelocityStartTachButton
+              onConfirm={handleStartOrArmStage}
+              sweepTrigger={tachSweepTrigger}
+              isPro={isPro}
+              subtitle={activeTrack ? 'ARMAR ESPECIAL' : 'ESPECIAL LIVRE'}
+              gpsSignalOk={
+                source === 'simulator' ||
+                (gpsActive && (gpsAccuracyM === null || gpsAccuracyM <= 25))
+              }
+            />
 
-          {/* Primary 2 Buttons matching RaceChrono: Sessões & Pistas */}
-          <div className="grid grid-cols-2 gap-3">
+            <OfficialGpsClockPill clockOffsetMs={navSettings.clockOffsetMs} />
+          </div>
+
+          {/* Bottom Thumb Zone: 5 Primary Actions + GoPro Quick Bar */}
+          <div className="space-y-2.5">
+            {/* Primary 2 Buttons matching RaceChrono: Sessões & Pistas */}
+            <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
               onClick={() => {
@@ -3921,7 +4113,8 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
             </button>
           </div>
 
-          {goproQuickBar}
+            {goproQuickBar}
+          </div>
         </section>
       )}
 
@@ -5775,6 +5968,309 @@ export const VelocityCockpit: React.FC<VelocityCockpitProps> = ({ isActive = tru
                 >
                   Sim, Excluir
                 </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {pendingImportDecision &&
+        pendingImportDecision.decisionQueue.length > 0 &&
+        (() => {
+          const currentTrk = pendingImportDecision.decisionQueue[0];
+          const detectedPts = currentTrk.detectedSplitPoints ?? [];
+          const hasDetected = detectedPts.length > 0;
+          const totalInModal =
+            pendingImportDecision.readyTracks.length +
+            pendingImportDecision.decisionQueue.length;
+          const currentStepNum = pendingImportDecision.readyTracks.length + 1;
+          const previewNames = detectedPts
+            .slice(0, 3)
+            .map((p) => p.originalName)
+            .join(', ');
+          const extraCount = detectedPts.length - 3;
+
+          return createPortal(
+            <div className="fixed inset-0 z-[1010] flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs">
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="import-splits-modal-title"
+                className="w-full max-w-sm rounded-2xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-5 text-[var(--ps-text)] shadow-2xl space-y-4"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--ps-accent)]/40 bg-[var(--ps-accent-soft)] text-[var(--ps-accent)]">
+                    <Flag className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <h2
+                        id="import-splits-modal-title"
+                        className="text-sm font-extrabold text-[var(--ps-text)] leading-snug"
+                      >
+                        {hasDetected
+                          ? 'Pontos Detectados na Pista'
+                          : 'Nenhuma Parcial Encontrada'}
+                      </h2>
+                      {pendingImportDecision.decisionQueue.length > 1 && (
+                        <span className="shrink-0 rounded-md border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-muted)]">
+                          {currentStepNum}/{totalInModal}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="truncate font-mono text-[11px] font-bold text-[var(--ps-amber)]">
+                      {formatCleanTrackName(currentTrk.name)} •{' '}
+                      {currentTrk.referenceDistanceKm.toFixed(2)} km
+                    </p>
+
+                    <p className="pt-0.5 text-xs text-[var(--ps-muted)] leading-relaxed">
+                      {hasDetected ? (
+                        <>
+                          Encontramos{' '}
+                          <span className="font-bold text-[var(--ps-text)]">
+                            {detectedPts.length} ponto{detectedPts.length > 1 ? 's' : ''}
+                          </span>{' '}
+                          no arquivo ({previewNames}
+                          {extraCount > 0 ? ` +${extraCount}` : ''}). Como deseja configurar as
+                          parciais?
+                        </>
+                      ) : (
+                        <>
+                          Nenhuma parcial ou ponto encontrado nesta pista. Deseja gerar 4
+                          parciais automaticamente?
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {hasDetected ? (
+                  <div className="space-y-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => resolvePendingImportDecision('use-kml')}
+                      className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-[var(--ps-accent)] px-3 text-xs font-extrabold uppercase tracking-wide text-[var(--ps-accent-text)] shadow-lg transition hover:opacity-95 active:scale-[0.98]"
+                    >
+                      Usar Pontos do KML ({detectedPts.length})
+                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => resolvePendingImportDecision('create-auto')}
+                        className="min-h-[42px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-2.5 text-xs font-extrabold uppercase tracking-wide text-[var(--ps-text)] hover:border-[var(--ps-accent)] active:scale-[0.98]"
+                      >
+                        Criar Parciais
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => resolvePendingImportDecision('keep-lc')}
+                        className="min-h-[42px] rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 text-xs font-bold uppercase tracking-wide text-[var(--ps-muted)] hover:text-[var(--ps-text)] active:scale-[0.98]"
+                      >
+                        Sem Parciais
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => resolvePendingImportDecision('keep-lc')}
+                      className="min-h-[44px] rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card)] px-3 text-xs font-bold uppercase tracking-wide text-[var(--ps-muted)] hover:text-[var(--ps-text)] active:scale-[0.98]"
+                    >
+                      Manter Só L e C
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resolvePendingImportDecision('create-auto')}
+                      className="min-h-[44px] rounded-xl bg-[var(--ps-accent)] px-3 text-xs font-extrabold uppercase tracking-wide text-[var(--ps-accent-text)] shadow-lg transition hover:opacity-95 active:scale-[0.98]"
+                    >
+                      Criar Parciais
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>,
+            document.body
+          );
+        })()}
+
+      {finishSummaryModal &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Resumo da Chegada"
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/65 p-3 backdrop-blur-md sm:p-5"
+          >
+            <div
+              className={`relative flex max-h-[calc(100dvh-24px)] w-full max-w-2xl flex-col justify-between gap-3 overflow-y-auto rounded-3xl border-2 p-4 text-white backdrop-blur-md sm:p-6 ${
+                finishSummaryModal.isFaster
+                  ? 'border-emerald-200/80 finish-modal-pulse-green'
+                  : 'border-red-200/80 finish-modal-pulse-red'
+              }`}
+              style={{
+                backgroundColor: finishSummaryModal.isFaster
+                  ? 'rgba(0, 230, 118, 0.90)'
+                  : 'rgba(225, 6, 0, 0.90)',
+              }}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 rounded-xl bg-black/75 px-3.5 py-2 backdrop-blur-sm">
+                  <p className="truncate font-['Barlow_Condensed'] text-base font-extrabold tracking-wide uppercase">
+                    {finishSummaryModal.trackName} · Volta #{finishSummaryModal.runNumber}
+                  </p>
+                  <p className="font-mono text-[11px] font-bold text-white/80 tabular-nums">
+                    {finishCountdownPaused
+                      ? 'Contagem pausada'
+                      : `Fechando em ${Math.ceil(finishCountdownMs / 1000)}s`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFinishSummaryModal(null)}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-black/80 px-4 text-xs font-extrabold tracking-wider text-white uppercase shadow-lg active:scale-95"
+                >
+                  <X className="h-4 w-4" />
+                  <span>Fechar</span>
+                </button>
+              </div>
+
+              {/* Central clickable data area (pauses 15s auto-close on tap) */}
+              <div
+                onClick={() => setFinishCountdownPaused(true)}
+                className="flex w-full flex-col items-center justify-center gap-3 py-1 cursor-pointer select-none"
+                title="Toque para pausar o fechamento automático"
+              >
+                <div className="w-full rounded-3xl border border-white/25 bg-black/80 px-4 py-4 text-center shadow-2xl backdrop-blur-sm">
+                  <p className="font-mono text-xs font-extrabold tracking-widest text-white/75 uppercase">
+                    Tempo Total da Prova
+                  </p>
+                  <p className="mt-1 font-mono text-5xl font-black leading-none tracking-tight text-white tabular-nums sm:text-6xl">
+                    {formatStageDuration(finishSummaryModal.totalMs)}
+                  </p>
+                  <div className="mt-3 flex items-center justify-center">
+                    <span
+                      className={`inline-flex items-center rounded-xl px-4 py-1.5 font-mono text-xl font-black tabular-nums sm:text-2xl ${
+                        finishSummaryModal.isFaster
+                          ? 'bg-[#00E676]/20 text-[#00E676]'
+                          : 'bg-[#E10600]/25 text-[#FF5252]'
+                      }`}
+                    >
+                      {finishSummaryModal.deltaVsBestMs === null
+                        ? 'VOLTA DE REFERÊNCIA'
+                        : `${formatFinishDeltaMs(finishSummaryModal.deltaVsBestMs)} ${
+                            finishSummaryModal.isFaster ? 'MAIS RÁPIDO' : 'MAIS LENTO'
+                          }`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Split Cards */}
+                {finishSummaryModal.splits.length > 0 && (
+                  <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4">
+                    {finishSummaryModal.splits.map((sp) => {
+                      const splitFaster = sp.deltaMs === null ? true : sp.deltaMs <= 0;
+                      return (
+                        <div
+                          key={sp.id}
+                          className={`rounded-2xl border-2 bg-black/80 px-3 py-2.5 text-center shadow-lg ${
+                            sp.deltaMs === null
+                              ? 'border-white/30'
+                              : splitFaster
+                                ? 'border-[#00E676]'
+                                : 'border-[#E10600]'
+                          }`}
+                        >
+                          <p className="font-mono text-[11px] font-extrabold text-white/75 uppercase">
+                            {sp.label}
+                          </p>
+                          <p className="mt-0.5 font-mono text-base font-black text-white tabular-nums">
+                            {sp.timeMs !== null ? formatStageDuration(sp.timeMs) : '--:--.--'}
+                          </p>
+                          <p
+                            className={`mt-0.5 font-mono text-xs font-black tabular-nums ${
+                              sp.deltaMs === null
+                                ? 'text-white/60'
+                                : splitFaster
+                                  ? 'text-[#00E676]'
+                                  : 'text-[#FF5252]'
+                            }`}
+                          >
+                            {sp.deltaMs !== null ? formatFinishDeltaMs(sp.deltaMs) : 'REF'}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Max Speed & Avg Speed */}
+                <div className="grid w-full grid-cols-2 gap-2.5">
+                  <div className="rounded-2xl border border-white/20 bg-black/80 px-4 py-3 text-center shadow-lg">
+                    <p className="font-mono text-[11px] font-bold tracking-wider text-white/75 uppercase">
+                      Velocidade Máxima
+                    </p>
+                    <p className="mt-1 font-mono text-2xl font-black text-white tabular-nums sm:text-3xl">
+                      {finishSummaryModal.maxSpeedKmh}{' '}
+                      <span className="text-xs font-bold text-white/70">km/h</span>
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-white/20 bg-black/80 px-4 py-3 text-center shadow-lg">
+                    <p className="font-mono text-[11px] font-bold tracking-wider text-white/75 uppercase">
+                      Velocidade Média
+                    </p>
+                    <p className="mt-1 font-mono text-2xl font-black text-white tabular-nums sm:text-3xl">
+                      {finishSummaryModal.avgSpeedKmh}{' '}
+                      <span className="text-xs font-bold text-white/70">km/h</span>
+                    </p>
+                  </div>
+                </div>
+
+                {!finishCountdownPaused && (
+                  <p className="rounded-full bg-black/60 px-3 py-1 font-mono text-[11px] font-bold text-white/85">
+                    Toque nos dados acima para pausar o fechamento automático
+                  </p>
+                )}
+              </div>
+
+              {/* Bottom Actions & 15s Progress Bar */}
+              <div className="w-full space-y-2.5">
+                {goproFleet.cameras.some((c) => c.connected || c.recording) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void shutterAllGoPro(false);
+                      setFinishGoProStopped(true);
+                    }}
+                    className="flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl border-2 border-white bg-black/85 px-4 text-sm font-black tracking-wider text-white uppercase shadow-2xl active:scale-[0.98]"
+                  >
+                    <Square className="h-4 w-4 fill-current text-[#E10600]" />
+                    <span>
+                      {finishGoProStopped
+                        ? 'Gravação GoPro Interrompida'
+                        : 'Parar Gravação GoPro'}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setFinishSummaryModal(null)}
+                  className="flex min-h-[48px] w-full items-center justify-center rounded-2xl bg-black/85 px-4 text-sm font-extrabold tracking-wider text-white uppercase shadow-xl active:scale-[0.98]"
+                >
+                  Continuar
+                </button>
+
+                <div className="h-2.5 w-full overflow-hidden rounded-full bg-black/50">
+                  <div
+                    className="h-full bg-white transition-all duration-100"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, (finishCountdownMs / 15000) * 100))}%`,
+                    }}
+                  />
+                </div>
               </div>
             </div>
           </div>,

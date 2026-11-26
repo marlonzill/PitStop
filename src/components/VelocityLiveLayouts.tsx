@@ -362,6 +362,96 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
     return splitTrapItems.slice(startIdx, startIdx + 4);
   }, [splitTrapItems]);
 
+  const progressSplitMarkers = useMemo(() => {
+    const splitTraps = orderedTraps.filter((t) => t.kind === 'split');
+    if (splitTraps.length === 0) return [];
+
+    const refTrace =
+      guideTrace && guideTrace.length >= 2
+        ? guideTrace
+        : bestRun && bestRun.samples.length >= 2
+          ? bestRun.samples
+          : fallbackRuns.find((r) => r.samples.length >= 2)?.samples ?? null;
+
+    if (refTrace && refTrace.length >= 2) {
+      const lastDistKm = refTrace[refTrace.length - 1].distKm;
+      const cumMeters: number[] = [0];
+      const useStoredDist = Number.isFinite(lastDistKm) && lastDistKm > 0.05;
+      if (useStoredDist) {
+        for (let i = 1; i < refTrace.length; i += 1) {
+          cumMeters.push(Math.max(cumMeters[i - 1], refTrace[i].distKm * 1000));
+        }
+      } else {
+        for (let i = 1; i < refTrace.length; i += 1) {
+          const stepM = haversineMetersVel(
+            refTrace[i - 1].lat,
+            refTrace[i - 1].lon,
+            refTrace[i].lat,
+            refTrace[i].lon
+          );
+          cumMeters.push(cumMeters[i - 1] + stepM);
+        }
+      }
+      const totalM = cumMeters[cumMeters.length - 1];
+      if (totalM > 50) {
+        return splitTraps.map((trap, idx) => {
+          let bestIdx = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < refTrace.length; i += 1) {
+            const d = haversineMetersVel(refTrace[i].lat, refTrace[i].lon, trap.lat, trap.lon);
+            if (d < bestD) {
+              bestD = d;
+              bestIdx = i;
+            }
+          }
+          const rawPct = (cumMeters[bestIdx] / totalM) * 100;
+          return {
+            id: trap.id,
+            code: `P${idx + 1}`,
+            pct: Math.max(4, Math.min(96, rawPct)),
+            crossed: currentSplitTimesMs[trap.id] !== undefined,
+          };
+        });
+      }
+    }
+
+    if (orderedTraps.length >= 3) {
+      const trapCumM: number[] = [0];
+      for (let i = 1; i < orderedTraps.length; i += 1) {
+        const d = haversineMetersVel(
+          orderedTraps[i - 1].lat,
+          orderedTraps[i - 1].lon,
+          orderedTraps[i].lat,
+          orderedTraps[i].lon
+        );
+        trapCumM.push(trapCumM[i - 1] + d);
+      }
+      const totalM = trapCumM[trapCumM.length - 1];
+      if (totalM > 50) {
+        let splitCounter = 0;
+        return orderedTraps
+          .map((trap, i) => ({ trap, distM: trapCumM[i] }))
+          .filter((entry) => entry.trap.kind === 'split')
+          .map((entry) => {
+            splitCounter += 1;
+            return {
+              id: entry.trap.id,
+              code: `P${splitCounter}`,
+              pct: Math.max(4, Math.min(96, (entry.distM / totalM) * 100)),
+              crossed: currentSplitTimesMs[entry.trap.id] !== undefined,
+            };
+          });
+      }
+    }
+
+    return splitTraps.map((trap, idx) => ({
+      id: trap.id,
+      code: `P${idx + 1}`,
+      pct: Math.round(((idx + 1) / (splitTraps.length + 1)) * 100),
+      crossed: currentSplitTimesMs[trap.id] !== undefined,
+    }));
+  }, [orderedTraps, guideTrace, bestRun, fallbackRuns, currentSplitTimesMs]);
+
   const isFaster = predictiveDeltaSec !== null && predictiveDeltaSec < -0.05;
   const isSlower = predictiveDeltaSec !== null && predictiveDeltaSec > 0.05;
   const deltaClampedPct =
@@ -564,43 +654,80 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       </div>
     );
 
-  const renderProgressBar = () => (
-    <div className="flex items-center gap-2 px-0.5">
-      <div
-        className={`relative h-1.5 flex-1 overflow-hidden rounded-full border ${
-          isNightMode
-            ? 'border-white/10 bg-[#07080B]'
-            : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)]'
-        }`}
-      >
-        <div
-          className={`h-full rounded-full transition-all duration-200 ${
-            liveIsFinishFlash
-              ? 'animate-pulse bg-[#00E5FF] shadow-[0_0_8px_#00E5FF]'
-              : 'bg-gradient-to-r from-[#10B981] via-[#F59E0B] to-[#FF2A2A]'
-          }`}
-          style={{ width: `${liveProgressPct}%` }}
-        />
+  const renderProgressBar = () => {
+    const clampedPct = Math.max(0, Math.min(100, liveProgressPct));
+    const remainingLabel =
+      liveHasRefDist && liveRemainingDistM !== null
+        ? liveRemainingDistM < 1000
+          ? `${clampedPct}% · ${Math.round(liveRemainingDistM) <= 0 ? '0 m' : `-${Math.round(liveRemainingDistM)} m`}`
+          : `${clampedPct}% · -${(liveRemainingDistM / 1000).toFixed(1)} km`
+        : `${Math.round(speedKmh)} km/h`;
+
+    return (
+      <div className="px-0.5 pt-0.5">
+        <div className="flex items-center gap-2.5">
+          <div className="relative flex-1">
+            <div className="relative h-[7px] w-full overflow-hidden rounded-full border border-white/15 bg-[#1A1D21]">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-[#94A3B8] to-[#E2E8F0] transition-all duration-200"
+                style={{ width: `${clampedPct}%` }}
+              />
+
+              {progressSplitMarkers.map((marker) => (
+                <span
+                  key={marker.id}
+                  aria-hidden="true"
+                  title={marker.code}
+                  style={{ left: `${marker.pct}%` }}
+                  className={`pointer-events-none absolute inset-y-0 z-10 w-[2px] -translate-x-1/2 ${
+                    marker.crossed || clampedPct >= marker.pct
+                      ? 'bg-[#1A1D21]/85'
+                      : 'bg-white/60'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <span
+            className={`shrink-0 font-mono text-[11px] font-extrabold leading-none tabular-nums sm:text-xs ${
+              isNightMode ? 'text-slate-100' : 'text-[var(--ps-text)]'
+            }`}
+          >
+            {remainingLabel}
+          </span>
+        </div>
+
+        {progressSplitMarkers.length > 0 && (
+          <div className="mt-0.5 flex items-center gap-2.5">
+            <div className="relative h-2.5 flex-1">
+              {progressSplitMarkers.map((marker) => (
+                <span
+                  key={`${marker.id}-lbl`}
+                  style={{ left: `${marker.pct}%` }}
+                  className={`absolute top-0 -translate-x-1/2 font-mono text-[8px] font-extrabold leading-none tabular-nums ${
+                    marker.crossed || clampedPct >= marker.pct
+                      ? 'text-[#00E676]'
+                      : isNightMode
+                        ? 'text-slate-400'
+                        : 'text-[var(--ps-muted)]'
+                  }`}
+                >
+                  {marker.code}
+                </span>
+              ))}
+            </div>
+            <span
+              aria-hidden="true"
+              className="invisible shrink-0 font-mono text-[11px] font-extrabold leading-none tabular-nums sm:text-xs"
+            >
+              {remainingLabel}
+            </span>
+          </div>
+        )}
       </div>
-      <span
-        className={`shrink-0 font-mono text-[9px] font-extrabold tabular-nums ${
-          liveIsFinishFlash
-            ? 'text-[#00E5FF]'
-            : liveProgressPct >= 85
-              ? 'text-[var(--ps-danger)]'
-              : 'text-[var(--ps-muted)]'
-        }`}
-      >
-        {liveHasRefDist
-          ? liveRemainingDistM !== null &&
-            liveRemainingDistM <= 300 &&
-            stageState === 'running'
-            ? `-${Math.round(liveRemainingDistM)}m`
-            : `${liveProgressPct}%`
-          : `${Math.round(speedKmh)} km/h`}
-      </span>
-    </div>
-  );
+    );
+  };
 
   const renderSplitsGrid = (compact = false) => {
     if (visibleSplitItems.length === 0) return null;
@@ -747,7 +874,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
             {/* Barra superior de Delta em tempo real */}
             <div className="shrink-0">
               <div className="flex items-center justify-between font-mono text-[10px] sm:text-xs tabular-nums">
-                <span className="font-bold text-[var(--ps-emerald)]">RÁPIDO (-s)</span>
+                <span className="font-bold text-[var(--ps-danger)]">LENTO (+s)</span>
                 <span
                   className={`inline-flex items-center gap-1 text-xs font-black sm:text-sm ${
                     isFaster
@@ -769,20 +896,20 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                     </span>
                   )}
                 </span>
-                <span className="font-bold text-[var(--ps-danger)]">LENTO (+s)</span>
+                <span className="font-bold text-[var(--ps-emerald)]">RÁPIDO (-s)</span>
               </div>
 
               <div className="relative mt-1 h-2 w-full overflow-hidden rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)]">
                 <div className="absolute inset-y-0 left-1/2 z-10 w-[2px] -translate-x-1/2 bg-[var(--ps-muted)]/70" />
-                {isFaster && (
+                {isSlower && (
                   <div
-                    className="absolute inset-y-0 right-1/2 bg-[#10B981] transition-all duration-150"
+                    className="absolute inset-y-0 right-1/2 bg-[#E10600] transition-all duration-150"
                     style={{ width: `${deltaClampedPct}%` }}
                   />
                 )}
-                {isSlower && (
+                {isFaster && (
                   <div
-                    className="absolute inset-y-0 left-1/2 bg-[#E10600] transition-all duration-150"
+                    className="absolute inset-y-0 left-1/2 bg-[#10B981] transition-all duration-150"
                     style={{ width: `${deltaClampedPct}%` }}
                   />
                 )}
@@ -1976,15 +2103,15 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                       {widget.size !== 'P' && (
                         <div className="relative mb-1 h-1.5 w-full overflow-hidden rounded border border-white/10 bg-black/40">
                           <div className="absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 bg-white/40" />
-                          {isFaster && (
+                          {isSlower && (
                             <div
-                              className="absolute inset-y-0 right-1/2 bg-[#10B981]"
+                              className="absolute inset-y-0 right-1/2 bg-[#E10600]"
                               style={{ width: `${deltaClampedPct}%` }}
                             />
                           )}
-                          {isSlower && (
+                          {isFaster && (
                             <div
-                              className="absolute inset-y-0 left-1/2 bg-[#E10600]"
+                              className="absolute inset-y-0 left-1/2 bg-[#10B981]"
                               style={{ width: `${deltaClampedPct}%` }}
                             />
                           )}

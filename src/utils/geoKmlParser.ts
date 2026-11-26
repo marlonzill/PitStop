@@ -38,6 +38,16 @@ export interface GeoParsedSample {
   accelLatG?: number | null;
 }
 
+export interface GeoDetectedSplitPoint {
+  id: string;
+  originalName: string;
+  lat: number;
+  lon: number;
+  bearingDeg: number;
+  distKm: number;
+  distToTraceM: number;
+}
+
 export interface GeoParsedTrack {
   id: string;
   name: string;
@@ -46,6 +56,7 @@ export interface GeoParsedTrack {
   waypoints?: GeoWaypoint[];
   mode: GeoTrackMode;
   traps: GeoParsedTrap[];
+  detectedSplitPoints?: GeoDetectedSplitPoint[];
   createdAtMs: number;
   referenceDistanceKm: number;
   baseTrace?: GeoParsedSample[];
@@ -275,35 +286,68 @@ function buildTraceFromCoords(
   return trace;
 }
 
-function minDistanceToTraceM(
+function projectPointOntoTrace(
   lat: number,
   lon: number,
   trace: GeoParsedSample[]
-): { distM: number; closestIdx: number } {
-  if (trace.length === 0) return { distM: Infinity, closestIdx: 0 };
-  let bestDist = Infinity;
-  let bestIdx = 0;
-  for (let i = 0; i < trace.length; i += 1) {
-    const d = haversineMetersGeo(lat, lon, trace[i].lat, trace[i].lon);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = i;
+): {
+  lat: number;
+  lon: number;
+  distKm: number;
+  distToTraceM: number;
+  bearingDeg: number;
+} {
+  if (trace.length === 0) {
+    return { lat, lon, distKm: 0, distToTraceM: Infinity, bearingDeg: 0 };
+  }
+  if (trace.length === 1) {
+    return {
+      lat: trace[0].lat,
+      lon: trace[0].lon,
+      distKm: trace[0].distKm,
+      distToTraceM: haversineMetersGeo(lat, lon, trace[0].lat, trace[0].lon),
+      bearingDeg: 0,
+    };
+  }
+
+  const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  const metersPerDegLat = 111320;
+  const metersPerDegLon = 111320 * cosLat;
+
+  let bestDistM = Infinity;
+  let bestLat = trace[0].lat;
+  let bestLon = trace[0].lon;
+  let bestDistKm = 0;
+  let bestSegIdx = 0;
+
+  for (let i = 0; i < trace.length - 1; i += 1) {
+    const a = trace[i];
+    const b = trace[i + 1];
+    const ax = (a.lon - lon) * metersPerDegLon;
+    const ay = (a.lat - lat) * metersPerDegLat;
+    const bx = (b.lon - lon) * metersPerDegLon;
+    const by = (b.lat - lat) * metersPerDegLat;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    let t = 0;
+    if (lenSq > 1e-6) {
+      t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lenSq));
+    }
+    const px = ax + t * dx;
+    const py = ay + t * dy;
+    const dM = Math.hypot(px, py);
+    if (dM < bestDistM) {
+      bestDistM = dM;
+      bestLat = a.lat + t * (b.lat - a.lat);
+      bestLon = a.lon + t * (b.lon - a.lon);
+      bestDistKm = a.distKm + t * Math.max(0, b.distKm - a.distKm);
+      bestSegIdx = i;
     }
   }
-  return { distM: bestDist, closestIdx: bestIdx };
-}
 
-function inferBearingNearTrace(
-  lat: number,
-  lon: number,
-  trace: GeoParsedSample[],
-  fallbackDeg = 0
-): number {
-  if (trace.length < 2) return fallbackDeg;
-  const { closestIdx } = minDistanceToTraceM(lat, lon, trace);
-  let i0 = Math.max(0, closestIdx === trace.length - 1 ? closestIdx - 1 : closestIdx);
+  let i0 = bestSegIdx;
   let i1 = Math.min(trace.length - 1, i0 + 1);
-  // Look slightly ahead/behind if adjacent vertices are nearly identical (< 4m)
   while (
     i1 < trace.length - 1 &&
     haversineMetersGeo(trace[i0].lat, trace[i0].lon, trace[i1].lat, trace[i1].lon) < 4
@@ -316,8 +360,16 @@ function inferBearingNearTrace(
   ) {
     i0 -= 1;
   }
-  if (i0 === i1) return fallbackDeg;
-  return bearingDegGeo(trace[i0].lat, trace[i0].lon, trace[i1].lat, trace[i1].lon);
+  const bearingDeg =
+    i0 !== i1 ? bearingDegGeo(trace[i0].lat, trace[i0].lon, trace[i1].lat, trace[i1].lon) : 0;
+
+  return {
+    lat: bestLat,
+    lon: bestLon,
+    distKm: bestDistKm,
+    distToTraceM: bestDistM,
+    bearingDeg,
+  };
 }
 
 function computeEndpointBearing(
@@ -355,26 +407,55 @@ function isGenericPlacemarkName(name: string): boolean {
   );
 }
 
+function normalizeAsciiLower(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
 const POI_KEYWORD_RE =
-  /\b(parque\s*(?:de\s*)?servi[cç]os?|service\s*park|paddock|apoio|abastec\w*|posto|box|hospital|hotel|resgate|organiza[cç][aã]o|secretaria|briefing|premia[cç][aã]o|vistoria|parque\s*fechado)\b/i;
+  /\b(parque\s*(?:de\s*)?servicos?|service\s*park|paddock|apoio|abastec\w*|posto|box|hospital|hotel|resgate|organizacao|secretaria|briefing|premiacao|vistoria|parque\s*fechado)\b/i;
 
-const START_KEYWORD_RE = /\b(largada|start|ini|inicio|início|partida)\b/i;
+const START_KEYWORD_RE = /\b(largada|start|ini|inicio|partida)\b/i;
 const FINISH_KEYWORD_RE = /\b(chegada|finish|fim|meta)\b/i;
-const SPLIT_KEYWORD_RE = /\b(parcial|split|pc|controle|sector|setor|p\d+)\b/i;
+const OFFICIAL_SPLIT_KEYWORD_RE =
+  /\b(z\.?p\.?|zona\s*(?:de\s*)?publico|ponto\s*(?:de\s*)?publico|publico|ponto\s*(?:de\s*)?radio|radio|p\.?r\.?|p\.?c\.?|parcial|split|controle|sector|setor|p\d+)\b/i;
 
-function classifyPointKind(name: string): {
+function classifyPointKind(
+  name: string,
+  folderName?: string
+): {
   explicitKind: GeoTrapKind | null;
   isPoiKeyword: boolean;
+  isOfficialSplitKeyword: boolean;
 } {
-  const isPoiKeyword = POI_KEYWORD_RE.test(name);
-  if (isPoiKeyword) return { explicitKind: null, isPoiKeyword: true };
-  const hasStart = START_KEYWORD_RE.test(name) || /^l(?:\s*[-:]|\s*\d|$)/i.test(name.trim());
-  const hasFinish = FINISH_KEYWORD_RE.test(name) || /^c(?:\s*[-:]|\s*\d|$)/i.test(name.trim());
-  if (hasStart && hasFinish) return { explicitKind: 'start_finish', isPoiKeyword: false };
-  if (hasStart) return { explicitKind: 'start', isPoiKeyword: false };
-  if (hasFinish) return { explicitKind: 'finish', isPoiKeyword: false };
-  if (SPLIT_KEYWORD_RE.test(name)) return { explicitKind: 'split', isPoiKeyword: false };
-  return { explicitKind: null, isPoiKeyword: false };
+  const normName = normalizeAsciiLower(name);
+  const normFolder = folderName ? normalizeAsciiLower(folderName) : '';
+  const hasOfficialSplit =
+    OFFICIAL_SPLIT_KEYWORD_RE.test(normName) ||
+    (normFolder.length > 0 && OFFICIAL_SPLIT_KEYWORD_RE.test(normFolder));
+
+  const isPoiKeyword = POI_KEYWORD_RE.test(normName) && !hasOfficialSplit;
+  if (isPoiKeyword) {
+    return { explicitKind: null, isPoiKeyword: true, isOfficialSplitKeyword: false };
+  }
+  const hasStart = START_KEYWORD_RE.test(normName) || /^l(?:\s*[-:]|\s*\d|$)/i.test(normName);
+  const hasFinish = FINISH_KEYWORD_RE.test(normName) || /^c(?:\s*[-:]|\s*\d|$)/i.test(normName);
+  if (hasStart && hasFinish) {
+    return { explicitKind: 'start_finish', isPoiKeyword: false, isOfficialSplitKeyword: false };
+  }
+  if (hasStart) {
+    return { explicitKind: 'start', isPoiKeyword: false, isOfficialSplitKeyword: false };
+  }
+  if (hasFinish) {
+    return { explicitKind: 'finish', isPoiKeyword: false, isOfficialSplitKeyword: false };
+  }
+  if (hasOfficialSplit) {
+    return { explicitKind: 'split', isPoiKeyword: false, isOfficialSplitKeyword: true };
+  }
+  return { explicitKind: null, isPoiKeyword: false, isOfficialSplitKeyword: false };
 }
 
 interface RawKmlStyleLookup {
@@ -762,6 +843,7 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
     line: ExtractedLineItem;
     baseTrace: GeoParsedSample[];
     traps: GeoParsedTrap[];
+    detectedSplitPoints: GeoDetectedSplitPoint[];
   }> = lines.map((line, idx) => ({
     line: {
       ...line,
@@ -769,17 +851,21 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
     },
     baseTrace: buildTraceFromCoords(line.coords, now + idx * 10000),
     traps: [],
+    detectedSplitPoints: [],
   }));
 
   const waypoints: GeoWaypoint[] = [];
 
-  // Assign each Point Placemark either as a Track Trap (L, C, P1...) or a standalone Waypoint (POI)
+  // Assign each Point Placemark either as Start/Finish trap, Official Intermediate Candidate, or POI Waypoint
   points.forEach((pt, ptIdx) => {
-    const { explicitKind, isPoiKeyword } = classifyPointKind(pt.name);
+    const { explicitKind, isPoiKeyword, isOfficialSplitKeyword } = classifyPointKind(
+      pt.name,
+      pt.folderName
+    );
     const sameFolderLines = linesByFolder.get(pt.folderId) ?? [];
 
     // 1. If clearly a POI (e.g. "Parque Serviços"), always treat as Waypoint, never as a trap
-    if (isPoiKeyword) {
+    if (isPoiKeyword || builtTracks.length === 0) {
       waypoints.push({
         id: pt.id,
         name: pt.name,
@@ -792,87 +878,70 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
       return;
     }
 
-    // 2. If inside a folder that has LineString(s), find matching track in that folder
-    if (sameFolderLines.length > 0 && builtTracks.length > 0) {
-      let bestTarget = builtTracks.find((bt) => bt.line.id === sameFolderLines[0].id)!;
-      let bestDistM = minDistanceToTraceM(pt.lat, pt.lon, bestTarget.baseTrace).distM;
+    // 2. Find best matching track (prioritizing same folder when available)
+    const candidatePool =
+      sameFolderLines.length > 0
+        ? builtTracks.filter((bt) => sameFolderLines.some((l) => l.id === bt.line.id))
+        : builtTracks;
 
-      for (const candidateLine of sameFolderLines.slice(1)) {
-        const candidateBt = builtTracks.find((bt) => bt.line.id === candidateLine.id)!;
-        const d = minDistanceToTraceM(pt.lat, pt.lon, candidateBt.baseTrace).distM;
-        if (d < bestDistM) {
-          bestDistM = d;
-          bestTarget = candidateBt;
-        }
+    let bestTarget = candidatePool[0] ?? builtTracks[0];
+    let bestProj = projectPointOntoTrace(pt.lat, pt.lon, bestTarget.baseTrace);
+    for (const candidateBt of candidatePool.slice(1)) {
+      const proj = projectPointOntoTrace(pt.lat, pt.lon, candidateBt.baseTrace);
+      if (proj.distToTraceM < bestProj.distToTraceM) {
+        bestProj = proj;
+        bestTarget = candidateBt;
       }
+    }
 
-      // If it's an explicit L/C/Parcial OR reasonably close to the track (<= 500m), make it a trap on that track
-      if (explicitKind !== null || bestDistM <= 500) {
-        const kind: GeoTrapKind = explicitKind ?? 'split';
-        const fallbackBearing =
-          kind === 'start'
-            ? computeEndpointBearing(bestTarget.baseTrace, true)
-            : kind === 'finish'
-              ? computeEndpointBearing(bestTarget.baseTrace, false)
-              : 0;
-        bestTarget.traps.push({
-          id: `trap_kml_${ptIdx + 1}_${now}`,
-          name: pt.name,
-          kind,
-          lat: pt.lat,
-          lon: pt.lon,
-          bearingDeg: inferBearingNearTrace(pt.lat, pt.lon, bestTarget.baseTrace, fallbackBearing),
-          widthM: 40,
-          unidirectional: true,
-        });
-        return;
-      }
+    const totalKm =
+      bestTarget.baseTrace.length > 0
+        ? bestTarget.baseTrace[bestTarget.baseTrace.length - 1].distKm
+        : 0;
+    const isNearEndpoint =
+      bestProj.distKm <= 0.05 || (totalKm > 0.15 && totalKm - bestProj.distKm <= 0.05);
 
-      // Otherwise inside same folder but far off-route -> POI Waypoint
-      waypoints.push({
-        id: pt.id,
+    // Explicit Largada (L) / Chegada (C) / Larg-Cheg
+    if (
+      (explicitKind === 'start' || explicitKind === 'finish' || explicitKind === 'start_finish') &&
+      bestProj.distToTraceM <= 1500
+    ) {
+      const fallbackBearing =
+        explicitKind === 'start' || explicitKind === 'start_finish'
+          ? computeEndpointBearing(bestTarget.baseTrace, true)
+          : computeEndpointBearing(bestTarget.baseTrace, false);
+      bestTarget.traps.push({
+        id: `trap_kml_${ptIdx + 1}_${now}`,
         name: pt.name,
-        description: pt.description,
+        kind: explicitKind,
         lat: pt.lat,
         lon: pt.lon,
-        color: pt.color || '#F59E0B',
-        folderName: pt.folderName,
+        bearingDeg:
+          bestTarget.baseTrace.length >= 2 ? bestProj.bearingDeg : fallbackBearing,
+        widthM: 40,
+        unidirectional: true,
       });
       return;
     }
 
-    // 3. Point-only Folder or Root Document Point:
-    // Attach to closest track ONLY if it's an explicit trap or very close to a track (<= 220m)
-    if (builtTracks.length > 0) {
-      let bestBt = builtTracks[0];
-      let bestDistM = Infinity;
-      for (const bt of builtTracks) {
-        const d = minDistanceToTraceM(pt.lat, pt.lon, bt.baseTrace).distM;
-        if (d < bestDistM) {
-          bestDistM = d;
-          bestBt = bt;
-        }
-      }
-      if (
-        (explicitKind !== null && bestDistM <= 1500) ||
-        (bestDistM <= 220 && !pt.folderName)
-      ) {
-        const kind: GeoTrapKind = explicitKind ?? 'split';
-        bestBt.traps.push({
-          id: `trap_kml_${ptIdx + 1}_${now}`,
-          name: pt.name,
-          kind,
-          lat: pt.lat,
-          lon: pt.lon,
-          bearingDeg: inferBearingNearTrace(pt.lat, pt.lon, bestBt.baseTrace, 0),
-          widthM: 40,
-          unidirectional: true,
-        });
-        return;
-      }
+    // Official intermediate points (Público, ZP, Rádio, PR, PC, Parcial...) OR intermediate waypoints <= 150m
+    const qualifiesByKeyword = isOfficialSplitKeyword && bestProj.distToTraceM <= 500;
+    const qualifiesByProximity = !isNearEndpoint && bestProj.distToTraceM <= 150;
+
+    if (qualifiesByKeyword || qualifiesByProximity) {
+      bestTarget.detectedSplitPoints.push({
+        id: `kml_cand_${ptIdx + 1}_${now}`,
+        originalName: pt.name,
+        lat: bestProj.lat,
+        lon: bestProj.lon,
+        bearingDeg: bestProj.bearingDeg,
+        distKm: bestProj.distKm,
+        distToTraceM: Math.round(bestProj.distToTraceM),
+      });
+      return;
     }
 
-    // 4. Standalone Point-only folder (ex: "Parque Serviços") -> Waypoint / POI (NEVER an empty track)
+    // Otherwise -> standalone Waypoint / POI
     waypoints.push({
       id: pt.id,
       name: pt.name,
@@ -884,18 +953,12 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
     });
   });
 
-  // Finalize traps for every track: sort splits along trace and auto-add missing L / C traps from LineString endpoints
+  // Finalize tracks: add L/C traps and sort detectedSplitPoints by cumulative distance from L
   const tracks: GeoParsedTrack[] = builtTracks.map((bt, idx) => {
-    const { line, baseTrace, traps } = bt;
+    const { line, baseTrace, traps, detectedSplitPoints } = bt;
     const starts = traps.filter((t) => t.kind === 'start' || t.kind === 'start_finish');
     const finishes = traps.filter((t) => t.kind === 'finish');
-    const splits = traps
-      .filter((t) => t.kind === 'split')
-      .sort((a, b) => {
-        const idxA = minDistanceToTraceM(a.lat, a.lon, baseTrace).closestIdx;
-        const idxB = minDistanceToTraceM(b.lat, b.lon, baseTrace).closestIdx;
-        return idxA - idxB;
-      });
+    const sortedCandidates = [...detectedSplitPoints].sort((a, b) => a.distKm - b.distKm);
 
     const finalizedTraps: GeoParsedTrap[] = [];
 
@@ -914,8 +977,6 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
         unidirectional: true,
       });
     }
-
-    finalizedTraps.push(...splits);
 
     if (finishes.length > 0) {
       finalizedTraps.push(...finishes);
@@ -943,6 +1004,7 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
       waypoints: waypoints.length > 0 ? waypoints : undefined,
       mode: finalizedTraps.some((t) => t.kind === 'start_finish') ? 'circuit' : 'point-to-point',
       traps: finalizedTraps,
+      detectedSplitPoints: sortedCandidates.length > 0 ? sortedCandidates : undefined,
       createdAtMs: now + idx,
       referenceDistanceKm: totalDistKm,
       baseTrace: baseTrace.length > 0 ? baseTrace : undefined,
@@ -1070,7 +1132,7 @@ export function parseGpxOrGeoJsonToGeoResult(
 
     const waypoints: GeoWaypoint[] = [];
     pointFeatures.forEach((pt, idx) => {
-      const { explicitKind, isPoiKeyword } = classifyPointKind(pt.name);
+      const { explicitKind, isPoiKeyword, isOfficialSplitKeyword } = classifyPointKind(pt.name);
       const resolvedKind = pt.kind ?? explicitKind;
 
       if (isPoiKeyword || tracks.length === 0) {
@@ -1086,31 +1148,48 @@ export function parseGpxOrGeoJsonToGeoResult(
       }
 
       let bestTrack = tracks[0];
-      let bestDist = Infinity;
-      for (const trk of tracks) {
+      let bestProj = bestTrack.baseTrace
+        ? projectPointOntoTrace(pt.lat, pt.lon, bestTrack.baseTrace)
+        : { lat: pt.lat, lon: pt.lon, distKm: 0, distToTraceM: Infinity, bearingDeg: 0 };
+      for (const trk of tracks.slice(1)) {
         if (!trk.baseTrace) continue;
-        const d = minDistanceToTraceM(pt.lat, pt.lon, trk.baseTrace).distM;
-        if (d < bestDist) {
-          bestDist = d;
+        const proj = projectPointOntoTrace(pt.lat, pt.lon, trk.baseTrace);
+        if (proj.distToTraceM < bestProj.distToTraceM) {
+          bestProj = proj;
           bestTrack = trk;
         }
       }
 
-      if (resolvedKind || bestDist <= 300) {
-        const kind = resolvedKind ?? 'split';
+      const totalKm = bestTrack.referenceDistanceKm;
+      const isNearEndpoint =
+        bestProj.distKm <= 0.05 || (totalKm > 0.15 && totalKm - bestProj.distKm <= 0.05);
+
+      // PitStop's own GeoJSON export carries explicit props.trapKind
+      if (pt.kind || resolvedKind === 'start' || resolvedKind === 'finish' || resolvedKind === 'start_finish') {
+        const kind = pt.kind ?? resolvedKind ?? 'split';
         bestTrack.traps.push({
           id: pt.id || `trap_json_${idx + 1}_${now}`,
           name: pt.name,
           kind,
           lat: pt.lat,
           lon: pt.lon,
-          bearingDeg:
-            pt.bearingDeg ??
-            (bestTrack.baseTrace
-              ? inferBearingNearTrace(pt.lat, pt.lon, bestTrack.baseTrace, 0)
-              : 0),
+          bearingDeg: pt.bearingDeg ?? bestProj.bearingDeg,
           widthM: pt.widthM ?? 40,
           unidirectional: pt.unidirectional !== false,
+        });
+      } else if (
+        (isOfficialSplitKeyword && bestProj.distToTraceM <= 500) ||
+        (!isNearEndpoint && bestProj.distToTraceM <= 150)
+      ) {
+        bestTrack.detectedSplitPoints = bestTrack.detectedSplitPoints ?? [];
+        bestTrack.detectedSplitPoints.push({
+          id: pt.id || `json_cand_${idx + 1}_${now}`,
+          originalName: pt.name,
+          lat: bestProj.lat,
+          lon: bestProj.lon,
+          bearingDeg: bestProj.bearingDeg,
+          distKm: bestProj.distKm,
+          distToTraceM: Math.round(bestProj.distToTraceM),
         });
       } else {
         waypoints.push({
@@ -1124,8 +1203,11 @@ export function parseGpxOrGeoJsonToGeoResult(
       }
     });
 
-    // Ensure auto L/C traps on GeoJSON tracks
+    // Ensure auto L/C traps on GeoJSON tracks & sort candidates
     tracks.forEach((trk, idx) => {
+      if (trk.detectedSplitPoints) {
+        trk.detectedSplitPoints.sort((a, b) => a.distKm - b.distKm);
+      }
       if (waypoints.length > 0) trk.waypoints = waypoints;
       if (trk.traps.some((t) => t.kind === 'start_finish')) {
         trk.mode = 'circuit';
@@ -1280,7 +1362,7 @@ export function parseGpxOrGeoJsonToGeoResult(
     });
   });
 
-  // Parse <wpt> elements -> attach traps to nearest track OR keep as Waypoint POI
+  // Parse <wpt> elements -> attach Start/Finish traps, collect official split candidates, or keep as Waypoint POI
   const waypoints: GeoWaypoint[] = [];
   const wpts = Array.from(doc.querySelectorAll('wpt'));
   wpts.forEach((wpt, idx) => {
@@ -1298,8 +1380,7 @@ export function parseGpxOrGeoJsonToGeoResult(
         ? rawKind
         : null;
 
-    const { explicitKind, isPoiKeyword } = classifyPointKind(name);
-    const kindFromNameOrType = explicitTypeKind ?? explicitKind;
+    const { explicitKind, isPoiKeyword, isOfficialSplitKeyword } = classifyPointKind(name);
 
     if (isPoiKeyword || tracks.length === 0) {
       waypoints.push({
@@ -1314,30 +1395,51 @@ export function parseGpxOrGeoJsonToGeoResult(
     }
 
     let bestTrack = tracks[0];
-    let bestDist = Infinity;
-    for (const trk of tracks) {
+    let bestProj = bestTrack.baseTrace
+      ? projectPointOntoTrace(lat, lon, bestTrack.baseTrace)
+      : { lat, lon, distKm: 0, distToTraceM: Infinity, bearingDeg: 0 };
+    for (const trk of tracks.slice(1)) {
       if (!trk.baseTrace) continue;
-      const d = minDistanceToTraceM(lat, lon, trk.baseTrace).distM;
-      if (d < bestDist) {
-        bestDist = d;
+      const proj = projectPointOntoTrace(lat, lon, trk.baseTrace);
+      if (proj.distToTraceM < bestProj.distToTraceM) {
+        bestProj = proj;
         bestTrack = trk;
       }
     }
 
-    if (kindFromNameOrType || bestDist <= 300) {
+    const totalKm = bestTrack.referenceDistanceKm;
+    const isNearEndpoint =
+      bestProj.distKm <= 0.05 || (totalKm > 0.15 && totalKm - bestProj.distKm <= 0.05);
+
+    if (
+      explicitTypeKind !== null ||
+      ((explicitKind === 'start' || explicitKind === 'finish' || explicitKind === 'start_finish') &&
+        bestProj.distToTraceM <= 1500)
+    ) {
+      const kind = explicitTypeKind ?? explicitKind ?? 'split';
       bestTrack.traps.push({
         id: `trap_gpx_${idx + 1}_${now}`,
         name,
-        kind: kindFromNameOrType ?? 'split',
+        kind,
         lat,
         lon,
-        bearingDeg:
-          Number(typeParts[1]) ||
-          (bestTrack.baseTrace
-            ? inferBearingNearTrace(lat, lon, bestTrack.baseTrace, 0)
-            : 0),
+        bearingDeg: Number(typeParts[1]) || bestProj.bearingDeg,
         widthM: Number(typeParts[2]) || 40,
         unidirectional: typeParts[3] !== '0',
+      });
+    } else if (
+      (isOfficialSplitKeyword && bestProj.distToTraceM <= 500) ||
+      (!isNearEndpoint && bestProj.distToTraceM <= 150)
+    ) {
+      bestTrack.detectedSplitPoints = bestTrack.detectedSplitPoints ?? [];
+      bestTrack.detectedSplitPoints.push({
+        id: `gpx_cand_${idx + 1}_${now}`,
+        originalName: name,
+        lat: bestProj.lat,
+        lon: bestProj.lon,
+        bearingDeg: bestProj.bearingDeg,
+        distKm: bestProj.distKm,
+        distToTraceM: Math.round(bestProj.distToTraceM),
       });
     } else {
       waypoints.push({
@@ -1351,8 +1453,11 @@ export function parseGpxOrGeoJsonToGeoResult(
     }
   });
 
-  // Auto-add Start / Finish traps if missing on GPX tracks
+  // Auto-add Start / Finish traps if missing on GPX tracks & sort split candidates
   tracks.forEach((trk, idx) => {
+    if (trk.detectedSplitPoints) {
+      trk.detectedSplitPoints.sort((a, b) => a.distKm - b.distKm);
+    }
     if (waypoints.length > 0) trk.waypoints = waypoints;
     if (trk.traps.some((t) => t.kind === 'start_finish')) {
       trk.mode = 'circuit';
