@@ -28,9 +28,11 @@ import {
   FileSearch,
   FileText,
   Flag,
+  Globe,
   HardDrive,
   Keyboard,
   Link2,
+  Loader2,
   Lock,
   MapPin,
   Navigation,
@@ -40,6 +42,7 @@ import {
   Route,
   Ruler,
   Satellite,
+  Search,
   Server,
   Share2,
   ShieldAlert,
@@ -125,7 +128,9 @@ import {
 } from '../utils/velocityStorage';
 import {
   DEFAULT_TRACK_PALETTE,
+  ensureAutoTrapsFromBaseTrace,
   formatImportedTrackNamesList,
+  type GeoWaypoint,
   type VelocitySample,
   type VelocityTrack,
 } from '../utils/velocityEngine';
@@ -146,6 +151,16 @@ import {
   useAdminLicenseSession,
   verifyDeviceLicense,
 } from '../services/deviceLicenseService';
+import {
+  fetchApprovedCloudTracks,
+  importCloudTracksOffline,
+  isCloudTrackAlreadyDownloaded,
+  isMissingCloudTracksTableError,
+  type PistaNuvemRecord,
+  PISTAS_NUVEM_SETUP_SQL,
+  uploadAllTracksToCloud,
+  uploadTrackToCloudLibrary,
+} from '../services/cloudTracksService';
 
 interface SettingsTabProps {
   initialMenu?: SettingsSubMenu;
@@ -355,13 +370,34 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [copiedReport, setCopiedReport] = useState(false);
   const [previewMapRoadbookId, setPreviewMapRoadbookId] = useState<string | null>(null);
 
-  // Backup & Offline storage summary state
+  // Backup & Offline storage summary + Biblioteca Online de Pistas state
   const [velocityStats, setVelocityStats] = useState<{ tracksCount: number; runsCount: number }>({
     tracksCount: 0,
     runsCount: 0,
   });
   const [backupFeedback, setBackupFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   const [confirmResetDefaults, setConfirmResetDefaults] = useState(false);
+
+  const [cloudLibOpen, setCloudLibOpen] = useState(false);
+  const [cloudLibTab, setCloudLibTab] = useState<'explore' | 'upload'>('explore');
+  const [cloudLibTracks, setCloudLibTracks] = useState<PistaNuvemRecord[]>([]);
+  const [localTracksSnapshot, setLocalTracksSnapshot] = useState<VelocityTrack[]>([]);
+  const [cloudLibLoading, setCloudLibLoading] = useState(false);
+  const [cloudLibError, setCloudLibError] = useState<string | null>(null);
+  const [cloudLibMissingTable, setCloudLibMissingTable] = useState(false);
+  const [copiedCloudSql, setCopiedCloudSql] = useState(false);
+  const [cloudLibSearch, setCloudLibSearch] = useState('');
+  const [downloadingCloudKey, setDownloadingCloudKey] = useState<string | null>(null);
+  const [downloadingAllCloud, setDownloadingAllCloud] = useState(false);
+  const [cloudLibFeedback, setCloudLibFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Enviar Minhas Pistas state
+  const [uploadTrackId, setUploadTrackId] = useState<string>('');
+  const [uploadTitle, setUploadTitle] = useState<string>('');
+  const [uploadCityState, setUploadCityState] = useState<string>('');
+  const [uploadSurface, setUploadSurface] = useState<'Terra' | 'Asfalto' | 'Misto'>('Terra');
+  const [uploadAuthor, setUploadAuthor] = useState<string>('');
+  const [uploadingToCloud, setUploadingToCloud] = useState(false);
 
   const refreshSavedRoadbooks = useCallback(async () => {
     const [list, velDb] = await Promise.all([
@@ -1094,15 +1130,27 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     setBackupFeedback(null);
     try {
       const velDb = await loadVelocityDatabase();
+      let rallyWaypoints: GeoWaypoint[] = [];
+      try {
+        const rawWp = localStorage.getItem('pitstop_velocity_waypoints_v1');
+        if (rawWp) {
+          const parsedWp = JSON.parse(rawWp);
+          if (Array.isArray(parsedWp)) rallyWaypoints = parsedWp;
+        }
+      } catch {
+        // ignore waypoints parse error
+      }
+      // Sincroniza pistas locais na nuvem em segundo plano sem bloquear a exportação offline
+      void uploadAllTracksToCloud(velDb.tracks);
       const payload = {
         app: 'PitStop-Sports',
+        backupType: 'tracks_only',
         exportedAt: new Date().toISOString(),
-        settings,
         velocityTracks: velDb.tracks,
-        roadbookIds: savedRoadbooks.map((r) => ({ id: r.id, eventName: r.eventName, fileName: r.fileName })),
+        rallyWaypoints,
       };
       const json = JSON.stringify(payload, null, 2);
-      const fileName = `pitstop_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      const fileName = `pitstop_pistas_${new Date().toISOString().slice(0, 10)}.json`;
 
       if (Capacitor.isNativePlatform()) {
         try {
@@ -1114,7 +1162,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           });
           setBackupFeedback({
             ok: true,
-            message: `Backup salvo na pasta Documentos como ${fileName}.`,
+            message: `Backup das pistas salvo em Documentos como ${fileName}.`,
           });
           return;
         } catch {
@@ -1133,10 +1181,157 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       URL.revokeObjectURL(url);
       setBackupFeedback({
         ok: true,
-        message: `Backup exportado (${velDb.tracks.length} pista(s) e ajustes de navegação).`,
+        message: `Backup exportado com sucesso (${velDb.tracks.length} pista(s) / especiais).`,
       });
     } catch {
-      setBackupFeedback({ ok: false, message: 'Não foi possível gerar o backup.' });
+      setBackupFeedback({ ok: false, message: 'Não foi possível gerar o backup de pistas.' });
+    }
+  };
+
+  const loadOnlineTrackLibrary = useCallback(async () => {
+    setCloudLibLoading(true);
+    setCloudLibError(null);
+    setCloudLibMissingTable(false);
+    try {
+      const velDb = await loadVelocityDatabase().catch(() => ({ tracks: [], runs: [] }));
+      setLocalTracksSnapshot(velDb.tracks);
+      if (velDb.tracks.length > 0) {
+        setUploadTrackId((prev) => {
+          const exists = velDb.tracks.some((t) => t.id === prev);
+          const chosen = exists ? velDb.tracks.find((t) => t.id === prev)! : velDb.tracks[0];
+          setUploadTitle((cur) => cur || chosen.name);
+          return chosen.id;
+        });
+      }
+      const approved = await fetchApprovedCloudTracks();
+      setCloudLibTracks(approved);
+    } catch (err) {
+      if (isMissingCloudTracksTableError(err)) {
+        setCloudLibMissingTable(true);
+        setCloudLibError(null);
+      } else {
+        setCloudLibError(
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível conectar à Biblioteca Online de Pistas.'
+        );
+      }
+    } finally {
+      setCloudLibLoading(false);
+    }
+  }, []);
+
+  const handleOpenOnlineLibrary = () => {
+    const next = !cloudLibOpen;
+    setCloudLibOpen(next);
+    if (next) {
+      setCloudLibFeedback(null);
+      void loadOnlineTrackLibrary();
+    }
+  };
+
+  const handleCopyCloudSetupSql = async () => {
+    try {
+      await navigator.clipboard.writeText(PISTAS_NUVEM_SETUP_SQL);
+      setCopiedCloudSql(true);
+      window.setTimeout(() => setCopiedCloudSql(false), 2200);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  const handleUploadSelectedTrackToCloud = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetTrack = localTracksSnapshot.find((t) => t.id === uploadTrackId);
+    if (!targetTrack) {
+      setCloudLibFeedback({ ok: false, message: 'Selecione uma pista local para enviar.' });
+      return;
+    }
+    setUploadingToCloud(true);
+    setCloudLibFeedback(null);
+    setCloudLibMissingTable(false);
+    try {
+      const res = await uploadTrackToCloudLibrary(targetTrack, {
+        title: uploadTitle.trim() || targetTrack.name,
+        cidadeEstado: uploadCityState.trim(),
+        piso: uploadSurface,
+        autor: uploadAuthor.trim(),
+        pastaNome: targetTrack.folderName,
+        aprovada: true,
+      });
+      if (!res.ok) {
+        if (res.missingTable) {
+          setCloudLibMissingTable(true);
+          setCloudLibFeedback({
+            ok: false,
+            message: 'Tabela pistas_nuvem ausente no Supabase. Copie e execute o SQL abaixo.',
+          });
+        } else {
+          setCloudLibFeedback({
+            ok: false,
+            message: res.error || 'Falha ao enviar pista para a biblioteca.',
+          });
+        }
+        return;
+      }
+      setCloudLibFeedback({
+        ok: true,
+        message: `Pista "${uploadTitle.trim() || targetTrack.name}" enviada para a Biblioteca Online!`,
+      });
+      await loadOnlineTrackLibrary();
+    } finally {
+      setUploadingToCloud(false);
+    }
+  };
+
+  const handleDownloadSingleCloudTrack = async (row: PistaNuvemRecord, key: string) => {
+    setDownloadingCloudKey(key);
+    setCloudLibFeedback(null);
+    try {
+      const res = await importCloudTracksOffline([row]);
+      const velDb = await loadVelocityDatabase();
+      setLocalTracksSnapshot(velDb.tracks);
+      setVelocityStats({ tracksCount: velDb.tracks.length, runsCount: velDb.runs.length });
+      setCloudLibFeedback({
+        ok: true,
+        message:
+          res.added > 0
+            ? `Pista "${row.nome}" salva offline no aparelho!`
+            : `Pista "${row.nome}" já está disponível offline.`,
+      });
+    } catch (err) {
+      setCloudLibFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Falha ao baixar pista.',
+      });
+    } finally {
+      setDownloadingCloudKey(null);
+    }
+  };
+
+  const handleDownloadAllCloudTracks = async () => {
+    if (cloudLibTracks.length === 0) return;
+    setDownloadingAllCloud(true);
+    setCloudLibFeedback(null);
+    try {
+      const res = await importCloudTracksOffline(cloudLibTracks);
+      const velDb = await loadVelocityDatabase();
+      setLocalTracksSnapshot(velDb.tracks);
+      setVelocityStats({ tracksCount: velDb.tracks.length, runsCount: velDb.runs.length });
+      setCloudLibFeedback({
+        ok: true,
+        message:
+          res.added > 0
+            ? `${res.added} pista(s) baixada(s) e salva(s) offline!`
+            : 'Todas as pistas da biblioteca já estão salvas offline.',
+      });
+    } catch (err) {
+      setCloudLibFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Falha ao baixar biblioteca.',
+      });
+    } finally {
+      setDownloadingAllCloud(false);
     }
   };
 
@@ -1145,32 +1340,52 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as {
-        settings?: Partial<PitStopNavSettings>;
         velocityTracks?: VelocityTrack[];
+        rallyWaypoints?: GeoWaypoint[];
       };
-      let restoredParts = 0;
-      if (parsed.settings && typeof parsed.settings === 'object') {
-        updateSettings(parsed.settings);
-        restoredParts += 1;
-      }
+      let addedTracks = 0;
       if (Array.isArray(parsed.velocityTracks)) {
         const existing = await loadVelocityDatabase();
         const existingIds = new Set(existing.tracks.map((t) => t.id));
-        const merged = [
-          ...existing.tracks,
-          ...parsed.velocityTracks.filter((t) => t && t.id && !existingIds.has(t.id)),
-        ];
+        const incoming = parsed.velocityTracks
+          .filter((t) => t && t.id && !existingIds.has(t.id))
+          .map((t) => ensureAutoTrapsFromBaseTrace(t));
+        addedTracks = incoming.length;
+        const merged = [...incoming, ...existing.tracks];
         await persistVelocityTracks(merged);
+        setLocalTracksSnapshot(merged);
         window.dispatchEvent(new CustomEvent('pitstop:velocity-db-updated'));
-        restoredParts += 1;
+      }
+      if (Array.isArray(parsed.rallyWaypoints) && parsed.rallyWaypoints.length > 0) {
+        try {
+          const rawWp = localStorage.getItem('pitstop_velocity_waypoints_v1');
+          const curWp: GeoWaypoint[] = rawWp ? JSON.parse(rawWp) : [];
+          const byName = new Map<string, GeoWaypoint>();
+          for (const w of Array.isArray(curWp) ? curWp : []) {
+            if (w?.name) byName.set(w.name.trim().toLowerCase(), w);
+          }
+          for (const w of parsed.rallyWaypoints) {
+            if (w?.name) byName.set(w.name.trim().toLowerCase(), w);
+          }
+          localStorage.setItem(
+            'pitstop_velocity_waypoints_v1',
+            JSON.stringify(Array.from(byName.values()))
+          );
+          window.dispatchEvent(new CustomEvent('pitstop:velocity-db-updated'));
+        } catch {
+          // ignore waypoint restore error
+        }
       }
       await refreshSavedRoadbooks();
-      if (restoredParts === 0) {
-        throw new Error('Arquivo JSON sem ajustes ou pistas válidas.');
+      if (!Array.isArray(parsed.velocityTracks)) {
+        throw new Error('Arquivo JSON sem pistas válidas (selecione um backup de pistas).');
       }
       setBackupFeedback({
         ok: true,
-        message: 'Backup restaurado com sucesso!',
+        message:
+          addedTracks > 0
+            ? `${addedTracks} pista(s) restaurada(s) com sucesso!`
+            : 'Todas as pistas do backup já estavam salvas no aparelho.',
       });
     } catch (err) {
       setBackupFeedback({
@@ -1225,7 +1440,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     calibration: 'Aferição do Hodômetro',
     alerts: 'Alertas & Atalhos',
     gopro: 'Câmeras GoPro (BLE)',
-    backup: 'Backup & Dados Offline',
+    backup: 'Backup & Dados',
     system: 'Sistema & Licença',
   };
 
@@ -1242,11 +1457,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     calibration: 'Calibre o fator W Fino e o erro percentual do hodômetro.',
     alerts: 'Bipes, avisos de voz, rolagem de planilha e teclas físicas.',
     gopro: 'Pareie e controle múltiplas câmeras GoPro via Bluetooth BLE.',
-    backup: 'Exporte ou restaure configurações, pistas e livros de bordo.',
+    backup: 'Biblioteca online de pistas, envio para nuvem e backup de pistas.',
     system: 'Licença do aparelho, atualizações, GPS, bateria e permissões.',
   };
-
-  const isSystemHeader = activeMenu === 'system' || activeMenu === 'account';
 
   type HubMenuItem = {
     id: Exclude<SettingsSubMenu, 'hub' | 'account'>;
@@ -1442,11 +1655,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             <p className="font-mono text-xs font-bold tracking-[0.16em] text-[var(--ps-accent)] uppercase">
               Configurações
             </p>
-            <h1
-              className={`font-['Barlow_Condensed'] text-2xl font-black tracking-wide text-[var(--ps-text)] uppercase leading-tight sm:text-[26px] ${
-                isSystemHeader ? 'whitespace-nowrap' : 'truncate'
-              }`}
-            >
+            <h1 className="truncate font-['Barlow_Condensed'] text-2xl font-black tracking-wide text-[var(--ps-text)] uppercase leading-tight sm:text-[26px]">
               {activeMenu === 'hub' ? 'Central de Ajustes' : menuTitleMap[activeMenu]}
             </h1>
             <p className="text-[13px] text-[var(--ps-muted)] leading-snug">
@@ -1456,11 +1665,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </p>
           </div>
         </div>
-        {!isSystemHeader && activeMenu !== 'hub' && (
-          <span className="shrink-0 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-1.5 font-mono text-[13px] font-bold text-[var(--ps-muted)] tabular-nums">
-            {formatClockOnly(nowMs + settings.clockOffsetMs)}
-          </span>
-        )}
       </div>
 
       {/* MENU HUB: Grade única uniforme 2 colunas automática conforme modalidade */}
@@ -1559,67 +1763,146 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
 
             <div className="space-y-3">
-              <div className="space-y-3 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-xs font-bold text-[var(--ps-text)]">Fonte de Telemetria</p>
-                    <p className="text-[11px] text-[var(--ps-muted)]">
-                      GPS Interno (1 Hz), Receptor BLE 10Hz/25Hz ou Simulador
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="inline-flex flex-wrap rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
-                      <button
-                        type="button"
-                        onClick={() => updateVelEngine({ source: 'gps' })}
-                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
-                          velEngine.source === 'gps' ? 'pitstop-btn-red' : 'text-[var(--ps-muted)]'
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-mono text-[11px] font-extrabold tracking-wider text-[var(--ps-muted)] uppercase">
+                    Fonte de Telemetria
+                  </p>
+                  <span className="font-mono text-[10px] font-bold text-[var(--ps-accent)] uppercase">
+                    {velEngine.source === 'gps'
+                      ? 'GPS Interno Ativo'
+                      : velEngine.source === 'ble_gps'
+                        ? 'Receptor BLE Ativo'
+                        : `Simulador ${velEngine.simMultiplier}x Ativo`}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                  {/* Card 1: GPS Interno */}
+                  <button
+                    type="button"
+                    onClick={() => updateVelEngine({ source: 'gps' })}
+                    className={`flex min-h-[96px] flex-col justify-between rounded-xl border p-3.5 text-left transition-all active:scale-[0.98] ${
+                      velEngine.source === 'gps'
+                        ? 'border-[#EF233C] bg-[#EF233C]/12 shadow-[0_0_20px_rgba(239,35,60,0.22)]'
+                        : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-accent)]/60'
+                    }`}
+                  >
+                    <div className="flex w-full items-center justify-between gap-2">
+                      <span
+                        className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border ${
+                          velEngine.source === 'gps'
+                            ? 'border-[#EF233C]/60 bg-[#EF233C]/20 text-[#EF233C]'
+                            : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
                         }`}
                       >
-                        GPS Interno
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateVelEngine({ source: 'ble_gps' })}
-                        className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold ${
-                          velEngine.source === 'ble_gps'
-                            ? 'pitstop-btn-red'
-                            : 'text-[var(--ps-muted)]'
-                        }`}
-                      >
-                        <Bluetooth className="h-3 w-3 shrink-0" />
-                        <span>GPS Externo Bluetooth (10Hz / 25Hz)</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateVelEngine({ source: 'simulator' })}
-                        className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${
-                          velEngine.source === 'simulator'
-                            ? 'pitstop-btn-red'
-                            : 'text-[var(--ps-muted)]'
-                        }`}
-                      >
-                        Simulador
-                      </button>
+                        <Smartphone className="h-4.5 w-4.5" />
+                      </span>
+                      <span className="rounded-md border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-0.5 font-mono text-[10px] font-extrabold text-[var(--ps-text)]">
+                        1Hz–5Hz
+                      </span>
                     </div>
-                    {velEngine.source === 'simulator' && (
-                      <div className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5">
+                    <div className="mt-2.5">
+                      <p className="font-['Barlow_Condensed'] text-base font-black tracking-wide text-[var(--ps-text)] uppercase">
+                        GPS Interno
+                      </p>
+                      <p className="text-[11px] text-[var(--ps-muted)]">
+                        Antena nativa do celular
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* Card 2: GPS Externo Bluetooth */}
+                  <button
+                    type="button"
+                    onClick={() => updateVelEngine({ source: 'ble_gps' })}
+                    className={`flex min-h-[96px] flex-col justify-between rounded-xl border p-3.5 text-left transition-all active:scale-[0.98] ${
+                      velEngine.source === 'ble_gps'
+                        ? 'border-[#EF233C] bg-[#EF233C]/12 shadow-[0_0_20px_rgba(239,35,60,0.22)]'
+                        : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-accent)]/60'
+                    }`}
+                  >
+                    <div className="flex w-full items-center justify-between gap-2">
+                      <span
+                        className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border ${
+                          velEngine.source === 'ble_gps'
+                            ? 'border-[#EF233C]/60 bg-[#EF233C]/20 text-[#EF233C]'
+                            : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
+                        }`}
+                      >
+                        <Bluetooth className="h-4.5 w-4.5" />
+                      </span>
+                      <span className="rounded-md border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 font-mono text-[10px] font-extrabold text-sky-300">
+                        10Hz / 25Hz
+                      </span>
+                    </div>
+                    <div className="mt-2.5">
+                      <p className="font-['Barlow_Condensed'] text-base font-black tracking-wide text-[var(--ps-text)] uppercase">
+                        GPS Externo Bluetooth
+                      </p>
+                      <p className="text-[11px] text-[var(--ps-muted)]">
+                        RaceBox · Dual · Garmin
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* Card 3: Modo Simulador */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => updateVelEngine({ source: 'simulator' })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        updateVelEngine({ source: 'simulator' });
+                      }
+                    }}
+                    className={`flex min-h-[96px] cursor-pointer flex-col justify-between rounded-xl border p-3.5 text-left transition-all ${
+                      velEngine.source === 'simulator'
+                        ? 'border-[#EF233C] bg-[#EF233C]/12 shadow-[0_0_20px_rgba(239,35,60,0.22)]'
+                        : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] hover:border-[var(--ps-accent)]/60'
+                    }`}
+                  >
+                    <div className="flex w-full items-center justify-between gap-2">
+                      <span
+                        className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border ${
+                          velEngine.source === 'simulator'
+                            ? 'border-[#EF233C]/60 bg-[#EF233C]/20 text-[#EF233C]'
+                            : 'border-[var(--ps-border)] bg-[var(--ps-surface)] text-[var(--ps-muted)]'
+                        }`}
+                      >
+                        <Radio className="h-4.5 w-4.5" />
+                      </span>
+                      <div
+                        className="inline-flex items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         {([1, 2, 4] as const).map((x) => (
                           <button
                             key={x}
                             type="button"
-                            onClick={() => updateVelEngine({ simMultiplier: x })}
-                            className={`rounded px-2 py-1 font-mono text-[10px] font-bold ${
-                              velEngine.simMultiplier === x
-                                ? 'pitstop-btn-red'
-                                : 'text-[var(--ps-muted)]'
+                            onClick={() =>
+                              updateVelEngine({ source: 'simulator', simMultiplier: x })
+                            }
+                            className={`min-h-[26px] rounded px-2 font-mono text-[10px] font-black transition-colors ${
+                              velEngine.source === 'simulator' && velEngine.simMultiplier === x
+                                ? 'bg-[#EF233C] text-white'
+                                : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
                             }`}
                           >
                             {x}x
                           </button>
                         ))}
                       </div>
-                    )}
+                    </div>
+                    <div className="mt-2.5">
+                      <p className="font-['Barlow_Condensed'] text-base font-black tracking-wide text-[var(--ps-text)] uppercase">
+                        Modo Simulador
+                      </p>
+                      <p className="text-[11px] text-[var(--ps-muted)]">
+                        Teste em bancada ({velEngine.simMultiplier}x)
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -3803,33 +4086,395 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </div>
       )}
 
-      {/* SUBMENU 10: BACKUP & DADOS OFFLINE */}
+      {/* SUBMENU 10: BIBLIOTECA ONLINE DE PISTAS + BACKUP EXCLUSIVO DE PISTAS */}
       {activeMenu === 'backup' && (
         <div className="space-y-4">
-          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <HardDrive className="h-4 w-4 text-[var(--ps-accent)]" />
-              <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
-                Resumo de Armazenamento Offline
-              </h2>
+          {/* Card Destaque: Biblioteca Online de Pistas (Explorar & Enviar) */}
+          <section className="rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 shrink-0 text-[var(--ps-emerald)]" />
+                  <h2 className="font-['Barlow_Condensed'] text-xl font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                    Biblioteca Online de Pistas
+                  </h2>
+                </div>
+                <p className="text-xs text-[var(--ps-muted)] leading-snug">
+                  Explore e baixe especiais para uso offline ou compartilhe suas pistas com a comunidade.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenOnlineLibrary}
+                className={`inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl px-3.5 text-xs font-extrabold uppercase tracking-wide transition-colors ${
+                  cloudLibOpen
+                    ? 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)]'
+                    : 'pitstop-btn-red'
+                }`}
+              >
+                <Globe className="h-4 w-4 shrink-0" />
+                <span>{cloudLibOpen ? 'Fechar Biblioteca' : 'Abrir Biblioteca'}</span>
+              </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 font-mono tabular-nums">
-              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
-                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Planilhas</p>
-                <p className="mt-1 text-2xl font-black text-[var(--ps-text)]">{savedRoadbooks.length}</p>
+            {cloudLibOpen && (
+              <div className="space-y-3 border-t border-[var(--ps-border)] pt-3">
+                {/* Sub-abas: Explorar & Baixar | Enviar Minhas Pistas */}
+                <div className="grid grid-cols-2 gap-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-1 font-mono text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCloudLibTab('explore');
+                      setCloudLibFeedback(null);
+                    }}
+                    className={`min-h-[38px] rounded-lg px-2 font-extrabold transition-colors ${
+                      cloudLibTab === 'explore'
+                        ? 'bg-[#EF233C] text-white'
+                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                    }`}
+                  >
+                    Explorar &amp; Baixar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCloudLibTab('upload');
+                      setCloudLibFeedback(null);
+                    }}
+                    className={`min-h-[38px] rounded-lg px-2 font-extrabold transition-colors ${
+                      cloudLibTab === 'upload'
+                        ? 'bg-[#EF233C] text-white'
+                        : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                    }`}
+                  >
+                    Enviar Minhas Pistas
+                  </button>
+                </div>
+
+                {cloudLibFeedback && (
+                  <div
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${
+                      cloudLibFeedback.ok
+                        ? 'border-emerald-500/40 bg-emerald-500/12 text-[var(--ps-emerald)]'
+                        : 'border-red-500/40 bg-red-500/12 text-red-400'
+                    }`}
+                  >
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>{cloudLibFeedback.message}</span>
+                  </div>
+                )}
+
+                {cloudLibMissingTable && (
+                  <div className="rounded-xl border border-amber-500/40 bg-[#141619] p-3 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <p className="text-xs font-extrabold text-amber-300 uppercase">
+                          Tabela pistas_nuvem não configurada no Supabase
+                        </p>
+                        <p className="text-[11px] text-[var(--ps-muted)]">
+                          Crie a tabela no SQL Editor do Supabase e toque em Atualizar.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyCloudSetupSql()}
+                        className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-amber-400/40 bg-amber-500/15 px-3 text-xs font-extrabold text-amber-200 hover:bg-amber-500/25"
+                      >
+                        {copiedCloudSql ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                        <span>{copiedCloudSql ? 'SQL Copiado' : 'Copiar SQL'}</span>
+                      </button>
+                    </div>
+                    <pre className="max-h-36 overflow-auto rounded-lg border border-[var(--ps-border)] bg-black/60 p-2 font-mono text-[10px] leading-relaxed text-zinc-300 select-all">
+                      {PISTAS_NUVEM_SETUP_SQL}
+                    </pre>
+                  </div>
+                )}
+
+                {cloudLibTab === 'explore' ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative min-w-[180px] flex-1">
+                        <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--ps-muted)]" />
+                        <input
+                          type="text"
+                          value={cloudLibSearch}
+                          onChange={(e) => setCloudLibSearch(e.target.value)}
+                          placeholder="Buscar pista, cidade ou pasta..."
+                          className="min-h-[40px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] pr-3 pl-9 text-xs font-medium text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={cloudLibLoading}
+                        onClick={() => void loadOnlineTrackLibrary()}
+                        className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)] disabled:opacity-50"
+                      >
+                        <RefreshCw
+                          className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${cloudLibLoading ? 'animate-spin' : ''}`}
+                        />
+                        <span>Atualizar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={downloadingAllCloud || cloudLibTracks.length === 0}
+                        onClick={() => void handleDownloadAllCloudTracks()}
+                        className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-3 text-xs font-extrabold text-[var(--ps-emerald)] hover:bg-emerald-500/25 disabled:opacity-40"
+                      >
+                        {downloadingAllCloud ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Download className="h-3.5 w-3.5" />
+                        )}
+                        <span>Baixar Todas</span>
+                      </button>
+                    </div>
+
+                    {cloudLibError && !cloudLibMissingTable && (
+                      <div className="rounded-lg border border-red-500/35 bg-[var(--ps-card-deep)] px-3 py-2 text-xs text-red-300">
+                        {cloudLibError}
+                      </div>
+                    )}
+
+                    {cloudLibLoading && cloudLibTracks.length === 0 ? (
+                      <div className="flex items-center justify-center gap-2 py-6 text-xs text-[var(--ps-muted)]">
+                        <Loader2 className="h-4 w-4 animate-spin text-[var(--ps-emerald)]" />
+                        <span>Carregando pistas aprovadas da nuvem...</span>
+                      </div>
+                    ) : (
+                      (() => {
+                        const q = cloudLibSearch.trim().toLowerCase();
+                        const visibleTracks = q
+                          ? cloudLibTracks.filter(
+                              (t) =>
+                                t.nome.toLowerCase().includes(q) ||
+                                (t.cidade_estado ?? '').toLowerCase().includes(q) ||
+                                (t.pasta_nome ?? '').toLowerCase().includes(q) ||
+                                (t.piso ?? '').toLowerCase().includes(q)
+                            )
+                          : cloudLibTracks;
+
+                        if (visibleTracks.length === 0 && !cloudLibMissingTable) {
+                          return (
+                            <div className="py-6 text-center text-xs text-[var(--ps-muted)]">
+                              Nenhuma pista online encontrada.
+                            </div>
+                          );
+                        }
+                        if (visibleTracks.length === 0) return null;
+
+                        return (
+                          <div className="divide-y divide-[var(--ps-border)] rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] overflow-hidden">
+                            {visibleTracks.map((row, idx) => {
+                              const rowKey =
+                                row.id !== undefined && row.id !== null
+                                  ? String(row.id)
+                                  : `${row.device_id}_${row.nome}_${idx}`;
+                              const alreadyLocal = isCloudTrackAlreadyDownloaded(
+                                row,
+                                localTracksSnapshot
+                              );
+                              const isBusy = downloadingCloudKey === rowKey;
+                              const createdDate = row.criado_em
+                                ? new Date(row.criado_em).toLocaleDateString('pt-BR')
+                                : '';
+
+                              return (
+                                <div
+                                  key={rowKey}
+                                  className="flex flex-wrap items-center justify-between gap-2.5 px-3 py-3"
+                                >
+                                  <div className="min-w-0 flex-1 space-y-1">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <p className="truncate text-[13px] font-bold text-[var(--ps-text)]">
+                                        {row.nome}
+                                      </p>
+                                      {row.piso && (
+                                        <span className="rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--ps-amber)] uppercase">
+                                          {row.piso}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
+                                      <span className="font-bold text-[var(--ps-text)]">
+                                        {row.distancia.toFixed(2)} km
+                                      </span>
+                                      {row.cidade_estado && <span>{row.cidade_estado}</span>}
+                                      {row.pasta_nome && <span>Pasta: {row.pasta_nome}</span>}
+                                      <span>{row.parciais.length} marcos</span>
+                                      {row.autor && <span>Por {row.autor}</span>}
+                                      {createdDate && <span>{createdDate}</span>}
+                                    </div>
+                                  </div>
+
+                                  {alreadyLocal ? (
+                                    <span className="inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 font-mono text-[11px] font-bold text-[var(--ps-emerald)]">
+                                      <Check className="h-3.5 w-3.5" />
+                                      <span>Offline</span>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={isBusy || downloadingAllCloud}
+                                      onClick={() => void handleDownloadSingleCloudTrack(row, rowKey)}
+                                      className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-emerald)] disabled:opacity-50"
+                                    >
+                                      {isBusy ? (
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--ps-emerald)]" />
+                                      ) : (
+                                        <Download className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
+                                      )}
+                                      <span>Baixar Pista</span>
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()
+                    )}
+                  </>
+                ) : (
+                  <form onSubmit={handleUploadSelectedTrackToCloud} className="space-y-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3">
+                    {localTracksSnapshot.length === 0 ? (
+                      <p className="py-4 text-center text-xs text-[var(--ps-muted)]">
+                        Nenhuma pista local encontrada. Importe um KML/GPX ou crie uma pista no cockpit primeiro.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="space-y-1">
+                          <label className="block font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                            Pista / Especial Local
+                          </label>
+                          <select
+                            value={uploadTrackId}
+                            onChange={(e) => {
+                              const nextId = e.target.value;
+                              setUploadTrackId(nextId);
+                              const chosen = localTracksSnapshot.find((t) => t.id === nextId);
+                              if (chosen) setUploadTitle(chosen.name);
+                            }}
+                            className="min-h-[40px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-bold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
+                          >
+                            {localTracksSnapshot.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.folderName ? `[${t.folderName}] ` : ''}
+                                {t.name} ({t.referenceDistanceKm.toFixed(2)} km)
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="block font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                              Título na Biblioteca
+                            </label>
+                            <input
+                              type="text"
+                              value={uploadTitle}
+                              onChange={(e) => setUploadTitle(e.target.value)}
+                              placeholder="Ex: SS-01 Barra Grande"
+                              className="min-h-[38px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="block font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                              Cidade / Estado
+                            </label>
+                            <input
+                              type="text"
+                              value={uploadCityState}
+                              onChange={(e) => setUploadCityState(e.target.value)}
+                              placeholder="Ex: Erechim / RS"
+                              className="min-h-[38px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="block font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                              Tipo de Piso
+                            </label>
+                            <div className="grid grid-cols-3 gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-1">
+                              {(['Terra', 'Asfalto', 'Misto'] as const).map((surf) => (
+                                <button
+                                  key={surf}
+                                  type="button"
+                                  onClick={() => setUploadSurface(surf)}
+                                  className={`min-h-[32px] rounded-md text-xs font-extrabold transition-colors ${
+                                    uploadSurface === surf
+                                      ? 'bg-[#EF233C] text-white'
+                                      : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                                  }`}
+                                >
+                                  {surf}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="block font-mono text-[10px] font-bold text-[var(--ps-muted)] uppercase">
+                              Autor / Piloto
+                            </label>
+                            <input
+                              type="text"
+                              value={uploadAuthor}
+                              onChange={(e) => setUploadAuthor(e.target.value)}
+                              placeholder="Ex: Anderson Graeff"
+                              className="min-h-[38px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-xs font-semibold text-[var(--ps-text)] focus:border-[var(--ps-accent)] focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={uploadingToCloud}
+                          className="pitstop-btn-red inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl px-4 text-xs font-black uppercase tracking-wide disabled:opacity-50"
+                        >
+                          {uploadingToCloud ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <UploadCloud className="h-4 w-4" />
+                          )}
+                          <span>{uploadingToCloud ? 'Enviando...' : 'Publicar na Biblioteca Online'}</span>
+                        </button>
+                      </>
+                    )}
+                  </form>
+                )}
               </div>
+            )}
+          </section>
+
+          {/* Resumo Offline + Exportar / Restaurar Backup Exclusivo de Pistas (.JSON) */}
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <HardDrive className="h-4 w-4 text-[var(--ps-accent)]" />
+                <h2 className="font-['Barlow_Condensed'] text-xl font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                  Backup Exclusivo de Pistas (.JSON)
+                </h2>
+              </div>
+              <p className="text-xs text-[var(--ps-muted)]">
+                Exporta e restaura apenas suas pistas, especiais, pastas de rali e pontos de apoio, sem alterar configurações do app.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 font-mono tabular-nums">
               <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
-                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Pistas / SS</p>
+                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Pistas / SS Salvas</p>
                 <p className="mt-1 text-2xl font-black text-[var(--ps-text)]">{velocityStats.tracksCount}</p>
               </div>
               <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
-                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Passagens</p>
+                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Passagens Gravadas</p>
                 <p className="mt-1 text-2xl font-black text-[var(--ps-amber)]">{velocityStats.runsCount}</p>
-              </div>
-              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 text-center">
-                <p className="text-[10px] font-bold text-[var(--ps-muted)] uppercase">Fila Admin</p>
-                <p className="mt-1 text-2xl font-black text-[var(--ps-accent)]">{pendingQueue.length}</p>
               </div>
             </div>
 
@@ -3853,12 +4498,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 className="pitstop-btn-red inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold uppercase tracking-wide"
               >
                 <Download className="h-4 w-4" />
-                <span>Exportar Backup (.JSON)</span>
+                <span>Exportar Pistas (.JSON)</span>
               </button>
 
               <label className="pitstop-btn-metal inline-flex min-h-[46px] cursor-pointer items-center justify-center gap-2 rounded-xl px-4 text-xs font-bold uppercase tracking-wide">
                 <Upload className="h-4 w-4 text-[var(--ps-accent)]" />
-                <span>Restaurar Backup (.JSON)</span>
+                <span>Importar Pistas (.JSON)</span>
                 <input
                   type="file"
                   accept=".json,application/json"
@@ -3883,7 +4528,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 type="button"
                 onClick={handleClearVelocityRuns}
                 disabled={velocityStats.runsCount === 0}
-                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-amber-500/60 hover:text-[var(--ps-amber)] disabled:opacity-40"
+                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-amber-500/60 hover:text-[var(--ps-amber)] disabled:opacity-40"
               >
                 <Trash2 className="h-4 w-4" />
                 <span>Limpar Passagens de Velocidade</span>
@@ -3893,7 +4538,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <button
                   type="button"
                   onClick={() => setConfirmResetDefaults(true)}
-                  className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-red-500/60 hover:text-[var(--ps-danger)]"
+                  className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-red-500/60 hover:text-[var(--ps-danger)]"
                 >
                   <RotateCcw className="h-4 w-4" />
                   <span>Restaurar Ajustes Padrão</span>

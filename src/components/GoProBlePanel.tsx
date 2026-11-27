@@ -110,26 +110,28 @@ export const GoProBlePanel: React.FC = () => {
 
       {/* 1. Controle Mestre Manual (no topo quando houver câmeras pareadas/salvas) */}
       {hasAnyCamera && (
-        <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 space-y-2">
+        <section className="rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-3 space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <span className="font-mono text-[10px] font-black tracking-wider text-[var(--ps-muted)] uppercase">
-              Controle Mestre Manual
+              Controle Mestre GoPro
             </span>
-            <span className="font-mono text-[10px] font-bold text-[var(--ps-muted)] tabular-nums">
+            <span className="font-mono text-[11px] font-bold text-[var(--ps-muted)] tabular-nums">
               {readyCamerasCount}/{cameras.length + savedNotShown.length} pronta(s)
-              {recordingCount > 0 ? ` · ${recordingCount} REC` : ''}
+              {recordingCount > 0 && (
+                <span className="ml-1.5 font-black text-[#FF2A2A]">· {recordingCount} REC</span>
+              )}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2.5">
             <button
               type="button"
               onClick={() => {
                 void handleMasterRecordAll();
               }}
-              className="pitstop-btn-red inline-flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-black uppercase"
+              className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-[#EF233C] bg-[#EF233C] px-3 text-xs font-black tracking-wide text-white uppercase shadow-[0_0_20px_rgba(239,35,60,0.35)] transition-all hover:brightness-110 active:scale-[0.98]"
             >
-              <Play className="h-4 w-4 fill-current" />
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-white" />
               <span>GRAVAR TODAS</span>
             </button>
 
@@ -139,7 +141,7 @@ export const GoProBlePanel: React.FC = () => {
                 void shutterAllGoPro(false);
               }}
               disabled={recordingCount === 0}
-              className="pitstop-btn-metal inline-flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-black uppercase disabled:opacity-40"
+              className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[#1B1E24] px-3 text-xs font-black tracking-wide text-[var(--ps-text)] uppercase transition-all hover:border-white/30 active:scale-[0.98] disabled:opacity-40"
             >
               <Square className="h-3.5 w-3.5 fill-current text-[var(--ps-text)]" />
               <span>PARAR TODAS</span>
@@ -185,20 +187,27 @@ export const GoProBlePanel: React.FC = () => {
             return (
               <div
                 key={cam.id}
-                className={`rounded-xl border p-3 space-y-2 ${
+                className={`rounded-xl border p-3.5 space-y-3 ${
                   cam.recording
-                    ? 'border-[#E10600]/80 bg-red-950/20'
+                    ? 'border-[#EF233C]/85 bg-red-950/25 shadow-[0_0_20px_rgba(239,35,60,0.16)]'
                     : hasAlert
                       ? 'border-amber-500/60 bg-amber-500/10'
                       : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className={`font-mono text-[10px] font-black uppercase tabular-nums shrink-0 ${statusCls}`}>
-                        {statusText}
-                      </span>
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {cam.recording ? (
+                        <span className="inline-flex items-center gap-2 rounded-lg border border-[#EF233C]/70 bg-[#EF233C]/20 px-2.5 py-1 font-mono text-base font-black tracking-wider text-[#FF2A2A] tabular-nums">
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#FF2A2A] animate-pulse" />
+                          <span>REC {formatRecTimer(cam.encodingDurationSec)}</span>
+                        </span>
+                      ) : (
+                        <span className={`font-mono text-[11px] font-black uppercase tabular-nums shrink-0 ${statusCls}`}>
+                          {statusText}
+                        </span>
+                      )}
                     </div>
 
                     {isEditing ? (
@@ -225,8 +234,8 @@ export const GoProBlePanel: React.FC = () => {
                         </button>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1">
-                        <span className="truncate font-['Barlow_Condensed'] text-lg font-bold leading-tight text-[var(--ps-text)] uppercase">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-['Barlow_Condensed'] text-xl font-black leading-tight text-[var(--ps-text)] uppercase">
                           {displayName}
                         </span>
                         <button
@@ -293,11 +302,23 @@ export const GoProBlePanel: React.FC = () => {
                     onClick={() => {
                       void shutterSingleGoPro(cam, !cam.recording);
                     }}
-                    className={`min-h-[42px] rounded-xl px-2 text-[11px] font-black uppercase disabled:opacity-35 ${
-                      cam.recording ? 'pitstop-btn-metal' : 'pitstop-btn-red'
+                    className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2 text-[11px] font-black uppercase transition-all active:scale-[0.98] disabled:opacity-35 ${
+                      cam.recording
+                        ? 'border border-[var(--ps-border-strong)] bg-[#1B1E24] text-[var(--ps-text)] hover:border-white/30'
+                        : 'border border-[#EF233C] bg-[#EF233C] text-white'
                     }`}
                   >
-                    {cam.recording ? 'PARAR GRAVAÇÃO' : 'INICIAR GRAVAÇÃO'}
+                    {cam.recording ? (
+                      <>
+                        <Square className="h-3 w-3 fill-current" />
+                        <span>PARAR GRAVAÇÃO</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="h-2.5 w-2.5 rounded-full bg-white" />
+                        <span>GRAVAR</span>
+                      </>
+                    )}
                   </button>
 
                   <button
@@ -306,7 +327,7 @@ export const GoProBlePanel: React.FC = () => {
                     onClick={() => {
                       void toggleSingleGoProPower(cam);
                     }}
-                    className={`min-h-[42px] inline-flex items-center justify-center gap-1 rounded-xl border px-2 text-[11px] font-extrabold uppercase ${
+                    className={`min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-xl border px-2 text-[11px] font-extrabold uppercase transition-all active:scale-[0.98] ${
                       disconnectedOrSleeping
                         ? 'border-emerald-500/60 bg-emerald-500/15 text-[var(--ps-emerald)] hover:bg-emerald-500/25'
                         : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'

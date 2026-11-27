@@ -5,11 +5,14 @@ import {
   CheckCircle2,
   Download,
   Film,
+  Gauge,
   Loader2,
+  Lock,
+  Pause,
+  Play,
   RefreshCw,
-  RotateCcw,
-  Sparkles,
   Square,
+  Unlock,
   Upload,
   Video,
   Wifi,
@@ -39,25 +42,13 @@ interface VideoHudOverlayPanelProps {
   lap1Samples: VelocitySample[];
   lap2Samples?: VelocitySample[];
   lap3Samples?: VelocitySample[];
-  sessionRuns: VelocityRun[];
-  sessionOptimal: OptimalStageSummary;
+  sessionRuns?: VelocityRun[];
+  sessionOptimal?: OptimalStageSummary;
 }
 
 interface LoadedVideoMeta {
   source: 'gopro' | 'gallery';
   filename: string;
-  /** Exact epoch ms when recording started (from `cre` on GoPro or `lastModified - duration` on gallery). */
-  videoStartMs: number | null;
-  /** File lastModified ms (used once HTMLVideoElement metadata provides duration). */
-  fileLastModifiedMs?: number;
-}
-
-interface AutoSyncState {
-  active: boolean;
-  /** Seconds into the video where Start (L) occurs (positive = Start happens X seconds after video start). */
-  startSeekSec: number;
-  baseOffsetMs: number;
-  sourceLabel: string;
 }
 
 function formatFileSize(bytes: number): string {
@@ -78,58 +69,13 @@ function formatMediaDate(ms: number): string {
   });
 }
 
-function formatSignedSeconds(sec: number, decimals = 1): string {
-  const safe = Math.abs(sec) < 0.05 ? 0 : sec;
-  const sign = safe >= 0 ? '+' : '-';
-  return `${sign}${Math.abs(safe).toFixed(decimals)}s`;
-}
-
-/**
- * Resolve o melhor timestamp de início de gravação comparando o horário de criação do vídeo
- * com a largada da volta (compensando eventual fuso local gravado pela GoPro no campo `cre`).
- */
-function resolveAutoSyncOffset(
-  videoStartMs: number,
-  lap: VelocityRun,
-  source: 'gopro' | 'gallery',
-  videoDurationSec?: number
-): AutoSyncState {
-  const lapStartMs = lap.startedAtMs;
-  const lapDurationSec = Math.max(10, lap.totalMs / 1000);
-  const maxSeekWindow = Number.isFinite(videoDurationSec) && (videoDurationSec ?? 0) > 1
-    ? (videoDurationSec as number) + 120
-    : 7200;
-
-  let chosenVideoStartMs = videoStartMs;
-  let startSeekSec = (lapStartMs - chosenVideoStartMs) / 1000;
-
-  // GoPro firmware frequentemente grava `cre` como relógio local codificado em epoch UTC
-  if (source === 'gopro' && Math.abs(startSeekSec) > 1800) {
-    const tzShiftMs = new Date().getTimezoneOffset() * 60000;
-    const altCandidates = [videoStartMs + tzShiftMs, videoStartMs - tzShiftMs];
-    for (const candidateMs of altCandidates) {
-      const candidateSeek = (lapStartMs - candidateMs) / 1000;
-      if (
-        Math.abs(candidateSeek) < Math.abs(startSeekSec) &&
-        candidateSeek >= -lapDurationSec - 60 &&
-        candidateSeek <= maxSeekWindow
-      ) {
-        chosenVideoStartMs = candidateMs;
-        startSeekSec = candidateSeek;
-      }
-    }
-  }
-
-  const roundedSeekSec = Number(startSeekSec.toFixed(1));
-  // targetTelemetryMs = video.currentTime * 1000 + offsetMs => quando currentTime = startSeekSec, targetTelemetryMs = 0
-  const baseOffsetMs = -Math.round(roundedSeekSec * 1000);
-
-  return {
-    active: true,
-    startSeekSec: roundedSeekSec,
-    baseOffsetMs,
-    sourceLabel: source === 'gopro' ? 'GoPro Wi-Fi (cre)' : 'Galeria (lastModified)',
-  };
+function formatVideoClockSec(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '00:00.0';
+  const mins = Math.floor(sec / 60);
+  const rem = sec - mins * 60;
+  const whole = Math.floor(rem);
+  const tenths = Math.floor((rem - whole) * 10);
+  return `${String(mins).padStart(2, '0')}:${String(whole).padStart(2, '0')}.${tenths}`;
 }
 
 function getSpeedometerMax(samples: VelocitySample[]): number {
@@ -190,36 +136,27 @@ function drawHudOnCanvas(
     sample: VelocitySample;
     miniMapPts: Array<{ x: number; y: number }>;
     sampleIndex: number;
-    bestMs: number | null;
-    prevMs: number | null;
+    lapLabel: string;
     maxGaugeSpeed: number;
+    showGForce: boolean;
   }
 ) {
-  const { sample, miniMapPts, sampleIndex, bestMs, prevMs, maxGaugeSpeed } = params;
+  const { sample, miniMapPts, sampleIndex, lapLabel, maxGaugeSpeed, showGForce } = params;
   const s = w / 1280;
 
   ctx.save();
 
-  // 1. TOP-LEFT: Mini-Mapa do Traçado
+  // 1. TOP-LEFT: Traçado Transparente (Sem Caixa de Fundo)
   if (miniMapPts.length >= 2) {
     const mapX = 24 * s;
     const mapY = 20 * s;
-    const mapW = 168 * s;
-    const mapH = 128 * s;
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-    ctx.lineWidth = 1.5 * s;
-    ctx.beginPath();
-    ctx.roundRect(mapX, mapY, mapW, mapH, 12 * s);
-    ctx.fill();
-    ctx.stroke();
-
+    const mapW = 128 * s;
+    const mapH = 92 * s;
     const sx = mapW / 120;
     const sy = mapH / 92;
 
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-    ctx.lineWidth = 5 * s;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.72)';
+    ctx.lineWidth = 4.2 * s;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
@@ -231,8 +168,8 @@ function drawHudOnCanvas(
     });
     ctx.stroke();
 
-    ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 2.6 * s;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.94)';
+    ctx.lineWidth = 2 * s;
     ctx.beginPath();
     miniMapPts.forEach((p, idx) => {
       const px = mapX + p.x * sx;
@@ -246,116 +183,114 @@ function drawHudOnCanvas(
     if (pt) {
       const cx = mapX + pt.x * sx;
       const cy = mapY + pt.y * sy;
-      ctx.fillStyle = 'rgba(255, 42, 42, 0.35)';
+      ctx.fillStyle = 'rgba(255, 42, 42, 0.4)';
       ctx.beginPath();
-      ctx.arc(cx, cy, 9 * s, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 7.5 * s, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = '#FF2A2A';
       ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 2 * s;
+      ctx.lineWidth = 1.6 * s;
       ctx.beginPath();
-      ctx.arc(cx, cy, 5 * s, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 4.2 * s, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
   }
 
-  // 2. TOP-CENTER: Painel de Tempos (MELHOR | ANTERIOR | ATUAL)
-  const timerBoxW = 460 * s;
-  const timerBoxH = 66 * s;
-  const timerBoxX = (w - timerBoxW) / 2;
-  const timerBoxY = 20 * s;
+  // 2. TOP-RIGHT: Cronômetro limpo apenas da volta selecionada
+  const timerW = 186 * s;
+  const timerH = 48 * s;
+  const timerX = w - timerW - 24 * s;
+  const timerY = 20 * s;
 
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.52)';
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-  ctx.lineWidth = 1.5 * s;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+  ctx.lineWidth = 1.2 * s;
   ctx.beginPath();
-  ctx.roundRect(timerBoxX, timerBoxY, timerBoxW, timerBoxH, 12 * s);
+  ctx.roundRect(timerX, timerY, timerW, timerH, 10 * s);
   ctx.fill();
   ctx.stroke();
 
-  const cols = [
-    { label: 'MELHOR', value: formatStageDuration(bestMs), color: '#10B981' },
-    { label: 'ANTERIOR', value: formatStageDuration(prevMs), color: '#CBD5E1' },
-    { label: 'ATUAL', value: formatStageDuration(sample.stageElapsedMs), color: '#FFFFFF' },
-  ];
-  cols.forEach((col, i) => {
-    const cx = timerBoxX + (timerBoxW / 3) * (i + 0.5);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(226, 232, 240, 0.85)';
-    ctx.font = `700 ${Math.round(11 * s)}px monospace`;
-    ctx.fillText(col.label, cx, timerBoxY + 21 * s);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(226, 232, 240, 0.8)';
+  ctx.font = `700 ${Math.round(10 * s)}px monospace`;
+  ctx.fillText(lapLabel, timerX + timerW - 14 * s, timerY + 16 * s);
 
-    ctx.fillStyle = col.color;
-    ctx.font = `900 ${Math.round(23 * s)}px monospace`;
-    ctx.fillText(col.value, cx, timerBoxY + 50 * s);
-  });
-
-  // 3. BOTTOM-CENTER: Alvo Força G + Velocímetro Analógico
-  const baseCenterY = h - 104 * s;
-  const gCenterX = w / 2 - 108 * s;
-  const speedCenterX = w / 2 + 88 * s;
-
-  const gR = 64 * s;
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-  ctx.lineWidth = 2 * s;
-  ctx.beginPath();
-  ctx.arc(gCenterX, baseCenterY, gR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-  ctx.lineWidth = 1 * s;
-  ctx.beginPath();
-  ctx.arc(gCenterX, baseCenterY, gR * 0.5, 0, Math.PI * 2);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.moveTo(gCenterX - gR + 6 * s, baseCenterY);
-  ctx.lineTo(gCenterX + gR - 6 * s, baseCenterY);
-  ctx.moveTo(gCenterX, baseCenterY - gR + 6 * s);
-  ctx.lineTo(gCenterX, baseCenterY + gR - 6 * s);
-  ctx.stroke();
-
-  const latG = Math.max(-1.2, Math.min(1.2, sample.accelLatG ?? 0));
-  const longG = Math.max(-1.2, Math.min(1.2, sample.accelLongG ?? 0));
-  const totalG = Math.hypot(sample.accelLatG ?? 0, sample.accelLongG ?? 0);
-  const dotX = gCenterX + (latG / 1.2) * (gR - 10 * s);
-  const dotY = baseCenterY - (longG / 1.2) * (gR - 10 * s);
-
-  ctx.fillStyle = 'rgba(255, 42, 42, 0.35)';
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, 10 * s, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#FF2A2A';
-  ctx.strokeStyle = '#FFFFFF';
-  ctx.lineWidth = 2 * s;
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, 5.5 * s, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.textAlign = 'center';
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = `900 ${Math.round(14 * s)}px monospace`;
-  ctx.fillText(`${totalG.toFixed(2)} G`, gCenterX, baseCenterY + gR + 18 * s);
+  ctx.font = `900 ${Math.round(22 * s)}px monospace`;
+  ctx.fillText(
+    formatStageDuration(sample.stageElapsedMs),
+    timerX + timerW - 14 * s,
+    timerY + 39 * s
+  );
 
-  const spdR = 82 * s;
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.32)';
-  ctx.lineWidth = 2.5 * s;
+  // 3. BOTTOM-CENTER: Velocímetro Compacto + Alvo Força G Opcional (Estilo GoPro)
+  const baseCenterY = h - 78 * s;
+  const speedCenterX = showGForce ? w / 2 + 56 * s : w / 2;
+  const gCenterX = w / 2 - 68 * s;
+
+  if (showGForce) {
+    const gR = 39 * s;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.24)';
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.arc(gCenterX, baseCenterY, gR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+    ctx.lineWidth = 1 * s;
+    ctx.beginPath();
+    ctx.arc(gCenterX, baseCenterY, gR * 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(gCenterX - gR + 4 * s, baseCenterY);
+    ctx.lineTo(gCenterX + gR - 4 * s, baseCenterY);
+    ctx.moveTo(gCenterX, baseCenterY - gR + 4 * s);
+    ctx.lineTo(gCenterX, baseCenterY + gR - 4 * s);
+    ctx.stroke();
+
+    const latG = Math.max(-1.2, Math.min(1.2, sample.accelLatG ?? 0));
+    const longG = Math.max(-1.2, Math.min(1.2, sample.accelLongG ?? 0));
+    const totalG = Math.hypot(sample.accelLatG ?? 0, sample.accelLongG ?? 0);
+    const dotX = gCenterX + (latG / 1.2) * (gR - 7 * s);
+    const dotY = baseCenterY - (longG / 1.2) * (gR - 7 * s);
+
+    ctx.fillStyle = 'rgba(255, 42, 42, 0.35)';
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, 7 * s, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#FF2A2A';
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, 3.8 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.font = `800 ${Math.round(11 * s)}px monospace`;
+    ctx.fillText(`${totalG.toFixed(2)} G`, gCenterX, baseCenterY + gR + 14 * s);
+  }
+
+  const spdR = 52 * s;
+  const gaugeCy = baseCenterY - 2 * s;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.54)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.26)';
+  ctx.lineWidth = 1.8 * s;
   ctx.beginPath();
-  ctx.arc(speedCenterX, baseCenterY - 6 * s, spdR, 0, Math.PI * 2);
+  ctx.arc(speedCenterX, gaugeCy, spdR, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 
   const startAng = (135 * Math.PI) / 180;
   const endAng = (405 * Math.PI) / 180;
   const sweep = endAng - startAng;
-  const gaugeCy = baseCenterY - 6 * s;
 
   const majorStep = maxGaugeSpeed >= 220 ? 40 : 20;
   const minorStep = majorStep / 2;
@@ -363,19 +298,19 @@ function drawHudOnCanvas(
     const frac = v / maxGaugeSpeed;
     const ang = startAng + frac * sweep;
     const isMajor = v % majorStep === 0;
-    const rOuter = spdR - 7 * s;
-    const rInner = rOuter - (isMajor ? 10 * s : 5 * s);
-    ctx.strokeStyle = v >= maxGaugeSpeed * 0.8 ? '#FF2A2A' : '#E2E8F0';
-    ctx.lineWidth = isMajor ? 2.2 * s : 1.2 * s;
+    const rOuter = spdR - 5 * s;
+    const rInner = rOuter - (isMajor ? 7 * s : 3.5 * s);
+    ctx.strokeStyle = v >= maxGaugeSpeed * 0.8 ? '#FF2A2A' : 'rgba(226, 232, 240, 0.85)';
+    ctx.lineWidth = isMajor ? 1.6 * s : 1 * s;
     ctx.beginPath();
     ctx.moveTo(speedCenterX + Math.cos(ang) * rInner, gaugeCy + Math.sin(ang) * rInner);
     ctx.lineTo(speedCenterX + Math.cos(ang) * rOuter, gaugeCy + Math.sin(ang) * rOuter);
     ctx.stroke();
 
     if (isMajor) {
-      const rTxt = spdR - 25 * s;
+      const rTxt = spdR - 17 * s;
       ctx.fillStyle = 'rgba(226, 232, 240, 0.85)';
-      ctx.font = `700 ${Math.round(10 * s)}px monospace`;
+      ctx.font = `700 ${Math.round(7.5 * s)}px monospace`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(
@@ -390,28 +325,28 @@ function drawHudOnCanvas(
   const spdClamped = Math.max(0, Math.min(maxGaugeSpeed, sample.speedKmh || 0));
   const needleAng = startAng + (spdClamped / maxGaugeSpeed) * sweep;
   ctx.strokeStyle = '#FF2A2A';
-  ctx.lineWidth = 3.5 * s;
+  ctx.lineWidth = 2.4 * s;
   ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.moveTo(speedCenterX, gaugeCy);
   ctx.lineTo(
-    speedCenterX + Math.cos(needleAng) * (spdR - 14 * s),
-    gaugeCy + Math.sin(needleAng) * (spdR - 14 * s)
+    speedCenterX + Math.cos(needleAng) * (spdR - 10 * s),
+    gaugeCy + Math.sin(needleAng) * (spdR - 10 * s)
   );
   ctx.stroke();
 
   ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
   ctx.beginPath();
-  ctx.arc(speedCenterX, gaugeCy + 16 * s, 28 * s, 0, Math.PI * 2);
+  ctx.arc(speedCenterX, gaugeCy + 11 * s, 19 * s, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.textAlign = 'center';
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = `900 ${Math.round(28 * s)}px monospace`;
-  ctx.fillText(String(Math.round(sample.speedKmh || 0)), speedCenterX, gaugeCy + 22 * s);
+  ctx.font = `900 ${Math.round(20 * s)}px monospace`;
+  ctx.fillText(String(Math.round(sample.speedKmh || 0)), speedCenterX, gaugeCy + 15 * s);
   ctx.fillStyle = '#94A3B8';
-  ctx.font = `700 ${Math.round(9.5 * s)}px monospace`;
-  ctx.fillText('KM/H', speedCenterX, gaugeCy + 35 * s);
+  ctx.font = `700 ${Math.round(7.5 * s)}px monospace`;
+  ctx.fillText('KM/H', speedCenterX, gaugeCy + 25 * s);
 
   ctx.restore();
 }
@@ -423,8 +358,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
   lap1Samples,
   lap2Samples = [],
   lap3Samples = [],
-  sessionRuns,
-  sessionOptimal,
 }) => {
   const goproFleet = useGoProFleet();
   const hasPairedGoPro =
@@ -434,10 +367,21 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
   const [selectedLapSlot, setSelectedLapSlot] = useState<'v1' | 'v2' | 'v3'>('v1');
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [loadedVideoMeta, setLoadedVideoMeta] = useState<LoadedVideoMeta | null>(null);
-  const [autoSync, setAutoSync] = useState<AutoSyncState | null>(null);
-  const [fineOffsetMs, setFineOffsetMs] = useState(0);
-  const [previewSampleIdx, setPreviewSampleIdx] = useState(0);
+
+  // HUD clean options
+  const [showGForceHud, setShowGForceHud] = useState(true);
+
+  // 2-Step Manual Sync State (Video <-> Telemetry)
+  const [syncLocked, setSyncLocked] = useState(false);
+  const [lockedSyncOffsetMs, setLockedSyncOffsetMs] = useState(0);
+  const [manualTelemetryMs, setManualTelemetryMs] = useState(0);
+  const [telemetryPlaying, setTelemetryPlaying] = useState(false);
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [videoCurrentSec, setVideoCurrentSec] = useState(0);
+  const [videoDurationSec, setVideoDurationSec] = useState(0);
   const [activeElapsedMs, setActiveElapsedMs] = useState(0);
+
+  // Export state
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exportedBlobUrl, setExportedBlobUrl] = useState<string | null>(null);
@@ -453,7 +397,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
   const [downloadingMediaId, setDownloadingMediaId] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const pendingSeekSecRef = useRef<number | null>(null);
   const exportAbortRef = useRef(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const goproThumbsRef = useRef<Record<string, string>>({});
@@ -465,20 +408,35 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
     return lap1;
   }, [selectedLapSlot, lap1, lap2, lap3]);
 
+  const activeLapLabel =
+    selectedLapSlot === 'v2' ? 'VOLTA 2' : selectedLapSlot === 'v3' ? 'VOLTA 3' : 'VOLTA 1';
+
   const activeLapSamples = useMemo(() => {
     if (selectedLapSlot === 'v2' && lap2 && lap2Samples.length > 0) return lap2Samples;
     if (selectedLapSlot === 'v3' && lap3 && lap3Samples.length > 0) return lap3Samples;
     return lap1Samples;
   }, [selectedLapSlot, lap1Samples, lap2, lap2Samples, lap3, lap3Samples]);
 
-  // Reset slot to V1 if selected V2/V3 becomes unavailable
+  const lapTotalMs = useMemo(() => {
+    if (activeLapSamples.length > 0) {
+      const last = activeLapSamples[activeLapSamples.length - 1].stageElapsedMs;
+      if (last > 0) return last;
+    }
+    return Math.max(1000, activeLap?.totalMs ?? 10000);
+  }, [activeLapSamples, activeLap]);
+
   useEffect(() => {
     if (selectedLapSlot === 'v2' && !lap2) setSelectedLapSlot('v1');
     if (selectedLapSlot === 'v3' && !lap3) setSelectedLapSlot('v1');
   }, [selectedLapSlot, lap2, lap3]);
 
-  const totalOffsetMs = (autoSync?.baseOffsetMs ?? 0) + fineOffsetMs;
-  const effectiveStartSeekSec = -(totalOffsetMs / 1000);
+  // Reset manual telemetry & sync lock when switching laps
+  useEffect(() => {
+    setSyncLocked(false);
+    setTelemetryPlaying(false);
+    setManualTelemetryMs(0);
+    setActiveElapsedMs(0);
+  }, [activeLap?.id]);
 
   useEffect(() => {
     return () => {
@@ -500,50 +458,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
     };
   }, []);
 
-  const applyAutoSyncForVideo = useCallback(
-    (
-      videoStartMs: number,
-      lap: VelocityRun | null,
-      source: 'gopro' | 'gallery',
-      durationSec?: number
-    ) => {
-      if (!lap) return;
-      const computed = resolveAutoSyncOffset(videoStartMs, lap, source, durationSec);
-      setAutoSync(computed);
-      setFineOffsetMs(0);
-
-      const vid = videoRef.current;
-      const targetSeek = Math.max(0, computed.startSeekSec);
-      if (vid && Number.isFinite(vid.duration) && vid.duration > 0) {
-        const clampedSeek = Math.min(vid.duration, targetSeek);
-        vid.currentTime = clampedSeek;
-        setActiveElapsedMs(Math.max(0, clampedSeek * 1000 + computed.baseOffsetMs));
-        pendingSeekSecRef.current = null;
-      } else {
-        pendingSeekSecRef.current = targetSeek;
-      }
-    },
-    []
-  );
-
-  // Recalcula Auto-Sync automaticamente ao trocar de volta selecionada (V1 / V2 / V3)
-  useEffect(() => {
-    if (!loadedVideoMeta?.videoStartMs || !activeLap) return;
-    const vid = videoRef.current;
-    const dur = vid && Number.isFinite(vid.duration) ? vid.duration : undefined;
-    applyAutoSyncForVideo(loadedVideoMeta.videoStartMs, activeLap, loadedVideoMeta.source, dur);
-  }, [activeLap?.id, loadedVideoMeta?.videoStartMs, loadedVideoMeta?.source, applyAutoSyncForVideo, activeLap]);
-
-  // Previous lap time relative to activeLap
-  const previousRun = useMemo(() => {
-    if (!activeLap || sessionRuns.length < 2) return null;
-    const ordered = [...sessionRuns].sort((a, b) => a.startedAtMs - b.startedAtMs);
-    const idx = ordered.findIndex((r) => r.id === activeLap.id);
-    if (idx > 0) return ordered[idx - 1];
-    const fallback = ordered.find((r) => r.id !== activeLap.id);
-    return fallback ?? null;
-  }, [activeLap, sessionRuns]);
-
   const maxGaugeSpeed = useMemo(
     () => getSpeedometerMax(activeLapSamples),
     [activeLapSamples]
@@ -554,57 +468,161 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
     [activeLapSamples]
   );
 
-  // Sync HUD smoothly at 30fps during video playback
+  // Independent Telemetry Playback loop when unlocked
+  useEffect(() => {
+    if (syncLocked || !telemetryPlaying) return;
+    let rafId = 0;
+    let lastTs = performance.now();
+
+    const step = (now: number) => {
+      const dt = Math.max(0, Math.min(120, now - lastTs));
+      lastTs = now;
+      setManualTelemetryMs((prev) => {
+        const next = prev + dt;
+        if (next >= lapTotalMs) {
+          setTelemetryPlaying(false);
+          return lapTotalMs;
+        }
+        return next;
+      });
+      rafId = window.requestAnimationFrame(step);
+    };
+
+    rafId = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [syncLocked, telemetryPlaying, lapTotalMs]);
+
+  // Video playback & time listener
   useEffect(() => {
     const vid = videoRef.current;
-    if (!vid || !videoUrl) return;
+    if (!vid || !videoUrl) {
+      setVideoPlaying(false);
+      setVideoCurrentSec(0);
+      setVideoDurationSec(0);
+      return;
+    }
+
     let rafId = 0;
+
+    const syncFromVideo = () => {
+      const curSec = Number.isFinite(vid.currentTime) ? vid.currentTime : 0;
+      const durSec = Number.isFinite(vid.duration) ? vid.duration : 0;
+      setVideoCurrentSec(curSec);
+      if (durSec > 0) setVideoDurationSec(durSec);
+      if (syncLocked) {
+        setActiveElapsedMs(Math.max(0, Math.min(lapTotalMs, curSec * 1000 + lockedSyncOffsetMs)));
+      }
+    };
+
     const tick = () => {
-      const targetMs = Math.max(0, vid.currentTime * 1000 + totalOffsetMs);
-      setActiveElapsedMs(targetMs);
+      syncFromVideo();
       if (!vid.paused && !vid.ended) {
         rafId = window.requestAnimationFrame(tick);
       }
     };
+
     const onPlay = () => {
+      setVideoPlaying(true);
       rafId = window.requestAnimationFrame(tick);
     };
-    const onSeekOrUpdate = () => {
-      setActiveElapsedMs(Math.max(0, vid.currentTime * 1000 + totalOffsetMs));
+    const onPauseOrEnd = () => {
+      setVideoPlaying(false);
+      window.cancelAnimationFrame(rafId);
+      syncFromVideo();
     };
+
     vid.addEventListener('play', onPlay);
-    vid.addEventListener('timeupdate', onSeekOrUpdate);
-    vid.addEventListener('seeked', onSeekOrUpdate);
-    onSeekOrUpdate();
+    vid.addEventListener('pause', onPauseOrEnd);
+    vid.addEventListener('ended', onPauseOrEnd);
+    vid.addEventListener('timeupdate', syncFromVideo);
+    vid.addEventListener('seeked', syncFromVideo);
+    syncFromVideo();
+
     return () => {
       window.cancelAnimationFrame(rafId);
       vid.removeEventListener('play', onPlay);
-      vid.removeEventListener('timeupdate', onSeekOrUpdate);
-      vid.removeEventListener('seeked', onSeekOrUpdate);
+      vid.removeEventListener('pause', onPauseOrEnd);
+      vid.removeEventListener('ended', onPauseOrEnd);
+      vid.removeEventListener('timeupdate', syncFromVideo);
+      vid.removeEventListener('seeked', syncFromVideo);
     };
-  }, [videoUrl, totalOffsetMs]);
+  }, [videoUrl, syncLocked, lockedSyncOffsetMs, lapTotalMs]);
+
+  // Keep activeElapsedMs aligned when unlocked
+  useEffect(() => {
+    if (!syncLocked) {
+      setActiveElapsedMs(Math.max(0, Math.min(lapTotalMs, manualTelemetryMs)));
+    }
+  }, [syncLocked, manualTelemetryMs, lapTotalMs]);
+
+  const effectiveElapsedMs = syncLocked ? activeElapsedMs : manualTelemetryMs;
 
   const activeSampleData = useMemo(() => {
     if (activeLapSamples.length === 0) return { sample: null, idx: 0 };
-    if (!videoUrl) {
-      const idx = Math.max(0, Math.min(activeLapSamples.length - 1, previewSampleIdx));
-      return { sample: activeLapSamples[idx], idx };
-    }
-    const sample = interpolateSampleAtElapsedMs(activeLapSamples, activeElapsedMs);
+    const clampedMs = Math.max(0, Math.min(lapTotalMs, effectiveElapsedMs));
+    const sample = interpolateSampleAtElapsedMs(activeLapSamples, clampedMs);
     let closestIdx = 0;
     let bestDiff = Infinity;
     for (let i = 0; i < activeLapSamples.length; i += 1) {
-      const d = Math.abs(activeLapSamples[i].stageElapsedMs - activeElapsedMs);
+      const d = Math.abs(activeLapSamples[i].stageElapsedMs - clampedMs);
       if (d < bestDiff) {
         bestDiff = d;
         closestIdx = i;
       }
     }
     return { sample: sample ?? activeLapSamples[closestIdx], idx: closestIdx };
-  }, [activeLapSamples, videoUrl, previewSampleIdx, activeElapsedMs]);
+  }, [activeLapSamples, effectiveElapsedMs, lapTotalMs]);
 
   const activeSample = activeSampleData.sample;
   const activeMapPt = miniMap.pts[activeSampleData.idx] ?? miniMap.pts[0] ?? null;
+
+  const toggleVideoPlay = () => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    if (vid.paused || vid.ended) {
+      void vid.play().catch(() => {});
+    } else {
+      vid.pause();
+    }
+  };
+
+  const stepVideoSeconds = (deltaSec: number) => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    const dur = Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 999999;
+    const nextSec = Math.max(0, Math.min(dur, (vid.currentTime || 0) + deltaSec));
+    vid.currentTime = nextSec;
+    setVideoCurrentSec(nextSec);
+  };
+
+  const stepTelemetryMs = (deltaMs: number) => {
+    if (syncLocked) {
+      setLockedSyncOffsetMs((prev) => prev + deltaMs);
+      return;
+    }
+    setManualTelemetryMs((prev) => Math.max(0, Math.min(lapTotalMs, prev + deltaMs)));
+  };
+
+  const handleLockSyncHere = () => {
+    const vid = videoRef.current;
+    if (vid && !vid.paused) vid.pause();
+    setTelemetryPlaying(false);
+    const curVidSec = vid && Number.isFinite(vid.currentTime) ? vid.currentTime : 0;
+    const offset = Math.round(manualTelemetryMs - curVidSec * 1000);
+    setLockedSyncOffsetMs(offset);
+    setSyncLocked(true);
+    setActiveElapsedMs(Math.max(0, Math.min(lapTotalMs, curVidSec * 1000 + offset)));
+  };
+
+  const handleUnlockSync = () => {
+    const vid = videoRef.current;
+    if (vid && !vid.paused) vid.pause();
+    setTelemetryPlaying(false);
+    const curVidSec = vid && Number.isFinite(vid.currentTime) ? vid.currentTime : 0;
+    const curTelemetry = Math.max(0, Math.min(lapTotalMs, curVidSec * 1000 + lockedSyncOffsetMs));
+    setManualTelemetryMs(curTelemetry);
+    setSyncLocked(false);
+  };
 
   const loadGoProListAndThumbs = useCallback(async () => {
     setGoproMediaLoading(true);
@@ -615,7 +633,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
       if (items.length === 0) {
         setGoproMediaError('Nenhum vídeo MP4 encontrado no cartão SD da GoPro.');
       } else {
-        // Carrega miniaturas em paralelo sem bloquear a exibição da lista
         items.slice(0, 12).forEach((item) => {
           void fetchGoProMediaThumbnail(item.thumbUrl).then((src) => {
             if (!src) return;
@@ -669,18 +686,14 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
       if (videoUrl && videoUrl.startsWith('blob:')) URL.revokeObjectURL(videoUrl);
       setExportedBlobUrl(null);
       setExportStatus(null);
+      setSyncLocked(false);
+      setTelemetryPlaying(false);
+      setManualTelemetryMs(0);
       setVideoUrl(downloaded.url);
       setLoadedVideoMeta({
         source: 'gopro',
         filename: item.filename,
-        videoStartMs: item.createdAtMs || null,
       });
-      if (item.createdAtMs && activeLap) {
-        applyAutoSyncForVideo(item.createdAtMs, activeLap, 'gopro');
-      } else {
-        setAutoSync(null);
-        setFineOffsetMs(0);
-      }
       setGoproModalOpen(false);
     } catch (err) {
       setGoproMediaError(
@@ -696,30 +709,10 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
   const handleVideoLoadedMetadata = () => {
     const vid = videoRef.current;
     if (!vid) return;
-
-    if (
-      loadedVideoMeta?.source === 'gallery' &&
-      loadedVideoMeta.fileLastModifiedMs &&
-      Number.isFinite(vid.duration) &&
-      vid.duration > 0
-    ) {
-      const computedStartMs =
-        loadedVideoMeta.fileLastModifiedMs - Math.round(vid.duration * 1000);
-      setLoadedVideoMeta((prev) =>
-        prev ? { ...prev, videoStartMs: computedStartMs } : prev
-      );
-      if (activeLap) {
-        applyAutoSyncForVideo(computedStartMs, activeLap, 'gallery', vid.duration);
-        return;
-      }
+    if (Number.isFinite(vid.duration) && vid.duration > 0) {
+      setVideoDurationSec(vid.duration);
     }
-
-    if (pendingSeekSecRef.current !== null && Number.isFinite(vid.duration) && vid.duration > 0) {
-      const clamped = Math.max(0, Math.min(vid.duration, pendingSeekSecRef.current));
-      vid.currentTime = clamped;
-      setActiveElapsedMs(Math.max(0, clamped * 1000 + totalOffsetMs));
-      pendingSeekSecRef.current = null;
-    }
+    setVideoCurrentSec(vid.currentTime || 0);
   };
 
   const stopExportEarly = useCallback(() => {
@@ -814,8 +807,16 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
     recorder.start(250);
 
     if (vid && videoUrl) {
-      const startAt = autoSync ? Math.max(0, effectiveStartSeekSec) : 0;
-      vid.currentTime = Number.isFinite(vid.duration) ? Math.min(vid.duration, startAt) : 0;
+      const activeOffsetMs = syncLocked
+        ? lockedSyncOffsetMs
+        : Math.round(manualTelemetryMs - (vid.currentTime || 0) * 1000);
+      const startAtSec = syncLocked
+        ? Math.max(0, Math.min(vid.duration || Infinity, -activeOffsetMs / 1000))
+        : vid.currentTime || 0;
+
+      vid.currentTime = Number.isFinite(vid.duration)
+        ? Math.max(0, Math.min(vid.duration, startAtSec))
+        : 0;
       await vid.play().catch(() => {});
 
       const drawLoop = () => {
@@ -827,7 +828,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
 
-        const elapsedMs = Math.max(0, vid.currentTime * 1000 + totalOffsetMs);
+        const elapsedMs = Math.max(0, Math.min(lapTotalMs, vid.currentTime * 1000 + activeOffsetMs));
         const s =
           interpolateSampleAtElapsedMs(activeLapSamples, elapsedMs) ?? activeLapSamples[0];
         let cIdx = 0;
@@ -843,15 +844,14 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
           sample: s,
           miniMapPts: miniMap.pts,
           sampleIndex: cIdx,
-          bestMs: sessionOptimal.bestRunTotalMs,
-          prevMs: previousRun?.totalMs ?? null,
+          lapLabel: activeLapLabel,
           maxGaugeSpeed,
+          showGForce: showGForceHud,
         });
         window.requestAnimationFrame(drawLoop);
       };
       window.requestAnimationFrame(drawLoop);
     } else {
-      const lapTotalMs = activeLapSamples[activeLapSamples.length - 1].stageElapsedMs || 10000;
       const exportDurMs = Math.min(18000, Math.max(4000, lapTotalMs));
       const startWall = performance.now();
 
@@ -879,9 +879,9 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
           sample: s,
           miniMapPts: miniMap.pts,
           sampleIndex: cIdx,
-          bestMs: sessionOptimal.bestRunTotalMs,
-          prevMs: previousRun?.totalMs ?? null,
+          lapLabel: activeLapLabel,
           maxGaugeSpeed,
+          showGForce: showGForceHud,
         });
         window.requestAnimationFrame(drawTelemetryOnly);
       };
@@ -914,74 +914,85 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
 
   return (
     <div className="space-y-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-3 text-[var(--ps-text)]">
-      {/* Header + Import & Export Actions */}
-      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+      {/* Header + Lap Selector */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-['Barlow_Condensed'] text-lg font-bold uppercase">
               Vídeo &amp; Overlay HUD
             </h3>
-            {autoSync?.active && (
-              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-mono text-[10px] font-extrabold text-[var(--ps-emerald)] tabular-nums">
-                <Sparkles className="h-3 w-3 shrink-0" />
-                <span>
-                  AUTO-SYNC ATIVO ({formatSignedSeconds(effectiveStartSeekSec)})
-                </span>
+            {syncLocked && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-mono text-[10px] font-extrabold text-[var(--ps-emerald)]">
+                <Lock className="h-3 w-3 shrink-0" />
+                <span>SINCRONIA TRAVADA</span>
               </span>
             )}
           </div>
           <p className="text-[11px] text-[var(--ps-muted)] tabular-nums">
-            Sincronizado com{' '}
-            <strong className="text-[var(--ps-text)]">
-              {selectedLapSlot.toUpperCase()} #{activeLap?.runNumber ?? '-'}
-            </strong>{' '}
-            ({formatStageDuration(activeLap?.totalMs)})
-            {loadedVideoMeta ? ` · ${loadedVideoMeta.filename}` : ''}.
+            Exibindo{' '}
+            <strong className="text-[var(--ps-text)]">{activeLapLabel}</strong> (
+            {formatStageDuration(activeLap?.totalMs)})
+            {loadedVideoMeta ? ` · ${loadedVideoMeta.filename}` : ''}
           </p>
         </div>
 
-        {/* V1 / V2 / V3 quick switcher when comparison laps are active */}
-        {(lap2 || lap3) && (
-          <div className="inline-flex self-start rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5 font-mono text-[11px] tabular-nums">
-            <button
-              type="button"
-              onClick={() => setSelectedLapSlot('v1')}
-              className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
-                selectedLapSlot === 'v1'
-                  ? 'bg-emerald-600 text-white'
-                  : 'text-[var(--ps-emerald)] hover:bg-[var(--ps-card)]'
-              }`}
-            >
-              VOLTA 1
-            </button>
-            {lap2 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowGForceHud((v) => !v)}
+            aria-pressed={showGForceHud}
+            className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-bold transition-colors ${
+              showGForceHud
+                ? 'border-[var(--ps-accent)] bg-[var(--ps-accent-soft)] text-[var(--ps-text)]'
+                : 'border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
+            }`}
+          >
+            <Gauge className="h-3.5 w-3.5 shrink-0" />
+            <span>Força G: {showGForceHud ? 'ON' : 'OFF'}</span>
+          </button>
+
+          {(lap2 || lap3) && (
+            <div className="inline-flex rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5 font-mono text-[11px] tabular-nums">
               <button
                 type="button"
-                onClick={() => setSelectedLapSlot('v2')}
+                onClick={() => setSelectedLapSlot('v1')}
                 className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
-                  selectedLapSlot === 'v2'
-                    ? 'bg-red-600 text-white'
-                    : 'text-[var(--ps-danger)] hover:bg-[var(--ps-card)]'
+                  selectedLapSlot === 'v1'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-[var(--ps-emerald)] hover:bg-[var(--ps-card)]'
                 }`}
               >
-                VOLTA 2
+                VOLTA 1
               </button>
-            )}
-            {lap3 && (
-              <button
-                type="button"
-                onClick={() => setSelectedLapSlot('v3')}
-                className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
-                  selectedLapSlot === 'v3'
-                    ? 'bg-sky-600 text-white'
-                    : 'text-sky-500 hover:bg-[var(--ps-card)]'
-                }`}
-              >
-                VOLTA 3
-              </button>
-            )}
-          </div>
-        )}
+              {lap2 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedLapSlot('v2')}
+                  className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
+                    selectedLapSlot === 'v2'
+                      ? 'bg-red-600 text-white'
+                      : 'text-[var(--ps-danger)] hover:bg-[var(--ps-card)]'
+                  }`}
+                >
+                  VOLTA 2
+                </button>
+              )}
+              {lap3 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedLapSlot('v3')}
+                  className={`rounded-md px-2.5 py-1 font-extrabold transition-colors ${
+                    selectedLapSlot === 'v3'
+                      ? 'bg-sky-600 text-white'
+                      : 'text-sky-500 hover:bg-[var(--ps-card)]'
+                  }`}
+                >
+                  VOLTA 3
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Action Buttons Row: Gallery + Buscar Vídeo da GoPro + Export */}
@@ -1002,14 +1013,14 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
               setVideoUrl(URL.createObjectURL(file));
               setExportedBlobUrl(null);
               setExportStatus(null);
-              setAutoSync(null);
-              setFineOffsetMs(0);
-              pendingSeekSecRef.current = null;
+              setSyncLocked(false);
+              setTelemetryPlaying(false);
+              setManualTelemetryMs(0);
+              setVideoCurrentSec(0);
+              setVideoDurationSec(0);
               setLoadedVideoMeta({
                 source: 'gallery',
                 filename: file.name,
-                videoStartMs: null,
-                fileLastModifiedMs: file.lastModified,
               });
             }}
           />
@@ -1029,8 +1040,8 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
               connectedGoPro
                 ? 'bg-emerald-500/20 text-[var(--ps-emerald)]'
                 : hasPairedGoPro
-                ? 'bg-amber-500/20 text-[var(--ps-amber)]'
-                : 'bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
+                  ? 'bg-amber-500/20 text-[var(--ps-amber)]'
+                  : 'bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
             }`}
           >
             {connectedGoPro ? 'Pareada' : hasPairedGoPro ? 'Salva' : 'Wi-Fi'}
@@ -1062,7 +1073,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
         )}
       </div>
 
-      {/* 16:9 Responsive Video + RaceChrono Pro HUD */}
+      {/* 16:9 Video + Proportional GoPro Quik Style HUD */}
       <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#050608]">
         {videoUrl ? (
           <video
@@ -1077,27 +1088,27 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
           <div className="flex h-full w-full flex-col items-center justify-center p-4 text-center">
             <Film className="h-8 w-8 text-zinc-600" />
             <p className="mt-2 max-w-sm text-xs text-zinc-400">
-              Selecione um vídeo da galeria ou busque direto da GoPro para sincronizar o Overlay HUD.
+              Selecione um vídeo da galeria ou da GoPro para alinhar com a telemetria abaixo.
             </p>
           </div>
         )}
 
         {activeSample && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-2 sm:p-3">
-            {/* TOP ROW: Left Mini-Map + Center 3-Column Timers */}
+          <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-2.5 sm:p-3.5">
+            {/* TOP ROW: Left Transparent Track Line + Right Single Selected Lap Stopwatch */}
             <div className="flex items-start justify-between gap-2">
-              <div className="rounded-lg border border-white/20 bg-black/50 p-1 backdrop-blur-xs shadow-lg">
+              <div className="shrink-0">
                 <svg
                   viewBox="0 0 120 92"
-                  className="h-12 w-16 sm:h-20 sm:w-28"
-                  aria-label="Mini-mapa do traçado"
+                  className="h-11 w-14 sm:h-16 sm:w-20 drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]"
+                  aria-label="Traçado da pista"
                 >
                   {miniMap.polyline && (
                     <>
                       <polyline
                         fill="none"
-                        stroke="rgba(0,0,0,0.85)"
-                        strokeWidth="4.5"
+                        stroke="rgba(0,0,0,0.68)"
+                        strokeWidth="3.6"
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         points={miniMap.polyline}
@@ -1105,7 +1116,7 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                       <polyline
                         fill="none"
                         stroke="#FFFFFF"
-                        strokeWidth="2.2"
+                        strokeWidth="1.7"
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         points={miniMap.polyline}
@@ -1117,74 +1128,55 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                       <circle
                         cx={activeMapPt.x}
                         cy={activeMapPt.y}
-                        r="6.5"
-                        fill="rgba(255, 42, 42, 0.45)"
-                        className="animate-pulse"
+                        r="5.5"
+                        fill="rgba(255, 42, 42, 0.42)"
                       />
                       <circle
                         cx={activeMapPt.x}
                         cy={activeMapPt.y}
-                        r="3.8"
+                        r="3.2"
                         fill="#FF2A2A"
                         stroke="#FFFFFF"
-                        strokeWidth="1.5"
+                        strokeWidth="1.3"
                       />
                     </g>
                   )}
                 </svg>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 sm:gap-5 rounded-lg border border-white/20 bg-black/55 px-2.5 py-1 sm:px-4 sm:py-1.5 backdrop-blur-xs shadow-lg font-mono tabular-nums text-center">
-                <div>
-                  <p className="text-[8px] sm:text-[10px] font-bold tracking-wider text-zinc-300 uppercase">
-                    MELHOR
-                  </p>
-                  <p className="text-[11px] sm:text-base font-black text-[#10B981] leading-tight drop-shadow">
-                    {formatStageDuration(sessionOptimal.bestRunTotalMs)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[8px] sm:text-[10px] font-bold tracking-wider text-zinc-300 uppercase">
-                    ANTERIOR
-                  </p>
-                  <p className="text-[11px] sm:text-base font-black text-zinc-200 leading-tight drop-shadow">
-                    {formatStageDuration(previousRun?.totalMs ?? null)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[8px] sm:text-[10px] font-bold tracking-wider text-zinc-300 uppercase">
-                    ATUAL
-                  </p>
-                  <p className="text-[11px] sm:text-base font-black text-white leading-tight drop-shadow">
-                    {formatStageDuration(activeSample.stageElapsedMs)}
-                  </p>
-                </div>
+              <div className="rounded-lg border border-white/15 bg-black/45 px-2.5 py-1 text-right font-mono tabular-nums backdrop-blur-xs">
+                <p className="text-[8px] sm:text-[9px] font-bold tracking-wider text-zinc-300 uppercase leading-none">
+                  {activeLapLabel}
+                </p>
+                <p className="mt-0.5 text-xs sm:text-base font-black text-white leading-tight drop-shadow">
+                  {formatStageDuration(activeSample.stageElapsedMs)}
+                </p>
               </div>
-
-              <div className="hidden sm:block sm:w-28" aria-hidden="true" />
             </div>
 
-            {/* BOTTOM-CENTER: Alvo Força G + Velocímetro Analógico Redondo */}
-            <div className="mb-4 sm:mb-7 flex items-end justify-center gap-4 sm:gap-7">
-              <div className="flex flex-col items-center">
-                <div className="relative h-16 w-16 sm:h-24 sm:w-24 rounded-full border-2 border-white/30 bg-black/65 backdrop-blur-xs shadow-xl">
-                  <div className="absolute inset-3 sm:inset-5 rounded-full border border-white/20" />
-                  <div className="absolute inset-x-1.5 top-1/2 h-px bg-white/25" />
-                  <div className="absolute inset-y-1.5 left-1/2 w-px bg-white/25" />
-                  <div
-                    className="absolute h-2.5 w-2.5 sm:h-3 sm:w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-[#FF2A2A] shadow-[0_0_8px_rgba(255,42,42,0.9)] transition-all duration-75"
-                    style={{
-                      left: `${50 + (gX / 1.2) * 40}%`,
-                      top: `${50 - (gY / 1.2) * 40}%`,
-                    }}
-                  />
+            {/* BOTTOM-CENTER: Proportional GoPro-Style Compact Speedometer + Optional G-Force */}
+            <div className="mb-3 sm:mb-6 flex items-end justify-center gap-3 sm:gap-4">
+              {showGForceHud && (
+                <div className="flex flex-col items-center">
+                  <div className="relative h-12 w-12 sm:h-16 sm:w-16 rounded-full border border-white/25 bg-black/50 backdrop-blur-xs">
+                    <div className="absolute inset-2.5 sm:inset-3.5 rounded-full border border-white/18" />
+                    <div className="absolute inset-x-1 top-1/2 h-px bg-white/20" />
+                    <div className="absolute inset-y-1 left-1/2 w-px bg-white/20" />
+                    <div
+                      className="absolute h-2 w-2 sm:h-2.5 sm:w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-[#FF2A2A] shadow-[0_0_6px_rgba(255,42,42,0.9)] transition-all duration-75"
+                      style={{
+                        left: `${50 + (gX / 1.2) * 38}%`,
+                        top: `${50 - (gY / 1.2) * 38}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="mt-0.5 rounded bg-black/45 px-1 py-0.5 font-mono text-[8px] sm:text-[10px] font-black text-white tabular-nums">
+                    {totalG.toFixed(2)} G
+                  </span>
                 </div>
-                <span className="mt-1 rounded bg-black/65 px-1.5 py-0.5 font-mono text-[9px] sm:text-[11px] font-black text-white tabular-nums shadow">
-                  {totalG.toFixed(2)} G
-                </span>
-              </div>
+              )}
 
-              <div className="relative h-22 w-22 sm:h-32 sm:w-32 rounded-full border-2 border-white/30 bg-black/70 backdrop-blur-xs shadow-xl">
+              <div className="relative h-16 w-16 sm:h-22 sm:w-22 rounded-full border border-white/30 bg-black/55 backdrop-blur-xs">
                 <svg viewBox="0 0 140 140" className="h-full w-full">
                   {gaugeTicks.map((t) => {
                     const rOuter = 62;
@@ -1193,8 +1185,8 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                     const y1 = 70 + Math.sin(t.angRad) * rInner;
                     const x2 = 70 + Math.cos(t.angRad) * rOuter;
                     const y2 = 70 + Math.sin(t.angRad) * rOuter;
-                    const tx = 70 + Math.cos(t.angRad) * 42;
-                    const ty = 70 + Math.sin(t.angRad) * 42;
+                    const tx = 70 + Math.cos(t.angRad) * 41;
+                    const ty = 70 + Math.sin(t.angRad) * 41;
                     const isRedZone = t.v >= maxGaugeSpeed * 0.8;
                     return (
                       <g key={t.v}>
@@ -1235,9 +1227,9 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                       strokeLinecap="round"
                     />
                   </g>
-                  <circle cx="70" cy="70" r="5" fill="#FF2A2A" stroke="#FFFFFF" strokeWidth="1.5" />
+                  <circle cx="70" cy="70" r="4.5" fill="#FF2A2A" stroke="#FFFFFF" strokeWidth="1.4" />
 
-                  <circle cx="70" cy="96" r="22" fill="rgba(0,0,0,0.78)" />
+                  <circle cx="70" cy="96" r="22" fill="rgba(0,0,0,0.75)" />
                   <text
                     x="70"
                     y="98"
@@ -1267,104 +1259,222 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
         )}
       </div>
 
-      {/* Controles de Sincronia Vídeo vs GPS + Ajuste Fino */}
-      <div className="space-y-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 font-mono text-xs tabular-nums">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[var(--ps-muted)]">
-              Largada no Vídeo:{' '}
-              <strong className="text-[var(--ps-amber)]">
-                {formatSignedSeconds(effectiveStartSeekSec)}
-              </strong>
-            </span>
-            {autoSync?.active && (
-              <span className="text-[10px] text-[var(--ps-emerald)] font-bold">
-                [{autoSync.sourceLabel}]
+      {/* 2-Step Intuitive Manual Sync Controls (Video <-> Telemetry) */}
+      <div className="space-y-3 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-3 font-mono text-xs tabular-nums">
+        {!syncLocked ? (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-[var(--ps-text)]">
+                Passo 1 · Alinhe Vídeo e Telemetria separadamente
               </span>
-            )}
-          </div>
+              <span className="text-[10px] text-[var(--ps-muted)]">
+                Pause o vídeo na largada e posicione o ponto no mapa
+              </span>
+            </div>
 
-          <div className="flex flex-wrap items-center gap-1">
-            {[-500, -100, 100, 500].map((step) => (
-              <button
-                key={step}
-                type="button"
-                onClick={() => setFineOffsetMs((v) => v + step)}
-                className="min-h-[32px] rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
-              >
-                {step > 0 ? `+${(step / 1000).toFixed(1)}s` : `${(step / 1000).toFixed(1)}s`}
-              </button>
-            ))}
-            {autoSync?.active && videoRef.current && (
-              <button
-                type="button"
-                onClick={() => {
-                  setFineOffsetMs(0);
-                  const vid = videoRef.current;
-                  if (vid) {
-                    const seek = Math.max(0, Math.min(vid.duration || Infinity, autoSync.startSeekSec));
-                    vid.currentTime = seek;
-                  }
-                }}
-                className="inline-flex min-h-[32px] items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-[var(--ps-emerald)]"
-                title="Voltar para o frame exato calculado pelo Auto-Sync"
-              >
-                <RotateCcw className="h-3 w-3" />
-                <span>Largada</span>
-              </button>
-            )}
+            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+              {/* Controle Independente: VÍDEO */}
+              <div className="space-y-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
+                    Vídeo
+                  </span>
+                  <span className="text-[11px] font-bold text-[var(--ps-muted)]">
+                    {formatVideoClockSec(videoCurrentSec)} / {formatVideoClockSec(videoDurationSec)}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={!videoUrl}
+                    onClick={toggleVideoPlay}
+                    className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-[11px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)] disabled:opacity-40"
+                  >
+                    {videoPlaying ? (
+                      <>
+                        <Pause className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+                        <span>Pausar</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
+                        <span>Play</span>
+                      </>
+                    )}
+                  </button>
+
+                  {[-0.5, -0.1, 0.1, 0.5].map((secDelta) => (
+                    <button
+                      key={`vid-${secDelta}`}
+                      type="button"
+                      disabled={!videoUrl}
+                      onClick={() => stepVideoSeconds(secDelta)}
+                      className="min-h-[38px] flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-1.5 text-[10px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)] disabled:opacity-40"
+                    >
+                      {secDelta > 0 ? `+${secDelta.toFixed(1)}s` : `${secDelta.toFixed(1)}s`}
+                    </button>
+                  ))}
+                </div>
+
+                <input
+                  type="range"
+                  aria-label="Linha do tempo do vídeo"
+                  disabled={!videoUrl || videoDurationSec <= 0}
+                  min={0}
+                  max={Math.max(1, videoDurationSec)}
+                  step={0.05}
+                  value={Math.min(videoCurrentSec, Math.max(1, videoDurationSec))}
+                  onChange={(e) => {
+                    const nextSec = Number(e.target.value);
+                    if (videoRef.current) videoRef.current.currentTime = nextSec;
+                    setVideoCurrentSec(nextSec);
+                  }}
+                  className="w-full accent-[var(--ps-accent)] disabled:opacity-40"
+                />
+              </div>
+
+              {/* Controle Independente: TELEMETRIA */}
+              <div className="space-y-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-surface)] p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold tracking-wide text-[var(--ps-emerald)] uppercase">
+                    Telemetria ({activeLapLabel})
+                  </span>
+                  <span className="text-[11px] font-bold text-[var(--ps-text)]">
+                    {formatStageDuration(manualTelemetryMs)} / {formatStageDuration(lapTotalMs)}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={activeLapSamples.length < 2}
+                    onClick={() => setTelemetryPlaying((p) => !p)}
+                    className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-[11px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-emerald)] disabled:opacity-40"
+                  >
+                    {telemetryPlaying ? (
+                      <>
+                        <Pause className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+                        <span>Pausar</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="h-3.5 w-3.5 text-[var(--ps-emerald)]" />
+                        <span>Play</span>
+                      </>
+                    )}
+                  </button>
+
+                  {[-500, -100, 100, 500].map((msDelta) => (
+                    <button
+                      key={`tel-${msDelta}`}
+                      type="button"
+                      disabled={activeLapSamples.length < 2}
+                      onClick={() => stepTelemetryMs(msDelta)}
+                      className="min-h-[38px] flex-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-1.5 text-[10px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-emerald)] disabled:opacity-40"
+                    >
+                      {msDelta > 0
+                        ? `+${(msDelta / 1000).toFixed(1)}s`
+                        : `${(msDelta / 1000).toFixed(1)}s`}
+                    </button>
+                  ))}
+                </div>
+
+                <input
+                  type="range"
+                  aria-label="Linha do tempo da telemetria"
+                  disabled={activeLapSamples.length < 2}
+                  min={0}
+                  max={lapTotalMs}
+                  step={50}
+                  value={Math.min(manualTelemetryMs, lapTotalMs)}
+                  onChange={(e) => {
+                    setTelemetryPlaying(false);
+                    setManualTelemetryMs(Number(e.target.value));
+                  }}
+                  className="w-full accent-[var(--ps-emerald)] disabled:opacity-40"
+                />
+              </div>
+            </div>
+
+            {/* Passo 2: Botão Travar Sincronia Aqui */}
             <button
               type="button"
-              onClick={() => {
-                setAutoSync(null);
-                setFineOffsetMs(0);
-              }}
-              className="min-h-[32px] rounded border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 py-1 text-[10px] font-bold text-[var(--ps-muted)]"
+              disabled={!videoUrl || activeLapSamples.length < 2}
+              onClick={handleLockSyncHere}
+              className="pitstop-btn-red flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl px-4 text-xs font-extrabold uppercase tracking-wide disabled:opacity-40"
             >
-              0
+              <Lock className="h-4 w-4 shrink-0" />
+              <span>Travar Sincronia Aqui</span>
             </button>
-          </div>
-        </div>
+          </>
+        ) : (
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Lock className="h-4 w-4 shrink-0 text-[var(--ps-emerald)]" />
+                <div>
+                  <p className="text-xs font-extrabold text-[var(--ps-emerald)]">
+                    Sincronia Travada · Vídeo e Telemetria juntos
+                  </p>
+                  <p className="text-[10px] text-[var(--ps-muted)]">
+                    Dê Play no vídeo para reproduzir e exportar com o HUD alinhado.
+                  </p>
+                </div>
+              </div>
 
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[10px] text-[var(--ps-muted)]">
-            <span>
-              Ajuste fino manual (-10s a +10s{autoSync?.active ? ' sobre Auto-Sync' : ''})
-            </span>
-            <span>{formatSignedSeconds(fineOffsetMs / 1000, 2)}</span>
-          </div>
-          <input
-            type="range"
-            aria-label="Ajuste fino de sincronia entre vídeo e GPS"
-            min={-10000}
-            max={10000}
-            step={50}
-            value={Math.max(-10000, Math.min(10000, fineOffsetMs))}
-            onChange={(e) => setFineOffsetMs(Number(e.target.value))}
-            className="w-full accent-[var(--ps-accent)]"
-          />
-        </div>
+              <button
+                type="button"
+                onClick={handleUnlockSync}
+                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3 text-[11px] font-bold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+              >
+                <Unlock className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+                <span>Destravar / Ajustar</span>
+              </button>
+            </div>
 
-        {!videoUrl && activeLapSamples.length > 1 && (
-          <div className="space-y-1 border-t border-[var(--ps-border)] pt-2">
-            <span className="text-[10px] text-[var(--ps-muted)]">
-              Pré-visualização da volta no HUD
-            </span>
-            <input
-              type="range"
-              aria-label="Linha do tempo de pré-visualização do HUD"
-              min={0}
-              max={activeLapSamples.length - 1}
-              value={previewSampleIdx}
-              onChange={(e) => setPreviewSampleIdx(Number(e.target.value))}
-              className="w-full accent-[var(--ps-emerald)]"
-            />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                disabled={!videoUrl}
+                onClick={toggleVideoPlay}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-3.5 text-xs font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-accent)]"
+              >
+                {videoPlaying ? (
+                  <>
+                    <Pause className="h-4 w-4 text-[var(--ps-amber)]" />
+                    <span>Pausar Vídeo</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4 text-[var(--ps-emerald)]" />
+                    <span>Reproduzir Juntos</span>
+                  </>
+                )}
+              </button>
+
+              <div className="flex items-center gap-1">
+                <span className="mr-1 text-[10px] text-[var(--ps-muted)]">Microajuste:</span>
+                {[-500, -100, 100, 500].map((msDelta) => (
+                  <button
+                    key={`locked-${msDelta}`}
+                    type="button"
+                    onClick={() => stepTelemetryMs(msDelta)}
+                    className="min-h-[36px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] px-2 text-[10px] font-extrabold text-[var(--ps-text)] hover:border-[var(--ps-emerald)]"
+                  >
+                    {msDelta > 0
+                      ? `+${(msDelta / 1000).toFixed(1)}s`
+                      : `${(msDelta / 1000).toFixed(1)}s`}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
         {(exportStatus || exportedBlobUrl) && (
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--ps-border)] pt-2 text-[11px]">
-            <span className="text-[var(--ps-emerald)] font-bold">
+            <span className="font-bold text-[var(--ps-emerald)]">
               {exportStatus || 'Exportação concluída!'}
             </span>
             {exportedBlobUrl && (
@@ -1410,7 +1520,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
             </div>
 
             <div className="space-y-3 overflow-y-auto p-4">
-              {/* Passo 1: Status Wi-Fi AP via BLE */}
               <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="space-y-1">
@@ -1474,7 +1583,6 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
                 </div>
               )}
 
-              {/* Lista de Vídeos MP4 */}
               {goproMediaLoading && goproMediaList.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-xs text-[var(--ps-muted)]">
                   <Loader2 className="h-6 w-6 animate-spin text-sky-400" />

@@ -218,6 +218,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
   replayElapsedRef.current = replayElapsedMs;
   const [fsMapStyleIdx, setFsMapStyleIdx] = useState(0);
   const fsMapStyleLabels = ['Satélite', 'Híbrido', 'Ruas'] as const;
+  const [replayAutoFollow, setReplayAutoFollow] = useState(true);
 
   const lap1DurationMs =
     lap1Samples.length > 0
@@ -955,6 +956,11 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         <span className="shrink-0 font-extrabold text-[var(--ps-text)]">
           {scrubPoint.distKmStr} km · {scrubPoint.distM}m
         </span>
+        {scrubPoint.speed1 !== null && (
+          <span className="shrink-0 rounded bg-[#EF233C]/20 border border-[#EF233C]/40 px-1.5 py-0.5 text-[11px] font-black text-white">
+            {scrubPoint.speed1} km/h
+          </span>
+        )}
         {replayElapsedMs !== null && (
           <span className="shrink-0 rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-black text-[var(--ps-emerald)]">
             t {(replayElapsedMs / 1000).toFixed(2)}s
@@ -1993,7 +1999,11 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               }
               heatmapMode={mapLayerMode}
               showSpeedBadges={showMapPeaks}
-              onFullscreenToggle={() => setProFullscreen(true)}
+              compactCarMarkers={true}
+              onFullscreenToggle={() => {
+                setReplayAutoFollow(true);
+                setProFullscreen(true);
+              }}
               containerClassName="relative h-[420px] min-h-[52vh] w-full overflow-hidden bg-[#000000] sm:h-[480px]"
             />
           </div>
@@ -2009,7 +2019,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
         {lap1Samples.length > 1 && (
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-3 py-1.5 font-mono text-xs tabular-nums">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                   Distância Atual:
                 </span>
@@ -2019,6 +2029,21 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 <span className="text-[11px] font-bold text-[var(--ps-muted)]">
                   ({scrubPoint.distM}m)
                 </span>
+                {scrubPoint.speed1 !== null && (
+                  <span className="rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-xs font-black text-[var(--ps-emerald)]">
+                    V1 {scrubPoint.speed1} km/h
+                  </span>
+                )}
+                {showLap2 && scrubPoint.speed2 !== null && (
+                  <span className="rounded-md border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-xs font-black text-[#FF2A2A]">
+                    V2 {scrubPoint.speed2} km/h
+                  </span>
+                )}
+                {showLap3 && scrubPoint.speed3 !== null && (
+                  <span className="rounded-md border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-xs font-black text-[#38BDF8]">
+                    V3 {scrubPoint.speed3} km/h
+                  </span>
+                )}
               </div>
               {replayElapsedMs !== null && (
                 <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black text-[var(--ps-emerald)]">
@@ -2822,6 +2847,19 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                   <Layers className="h-3 w-3 text-amber-400" />
                   <span>{fsMapStyleLabels[fsMapStyleIdx % 3]}</span>
                 </button>
+                <button
+                  type="button"
+                  aria-pressed={replayAutoFollow}
+                  onClick={() => setReplayAutoFollow((v) => !v)}
+                  className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1.5 font-extrabold transition-colors ${
+                    replayAutoFollow
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
+                      : 'bg-white/5 text-slate-300 hover:text-white'
+                  }`}
+                  aria-label="Alternar seguir carro ou ver pista inteira"
+                >
+                  <span>{replayAutoFollow ? 'Seguir Carro' : 'Pista Inteira'}</span>
+                </button>
               </div>
 
               <button
@@ -2838,8 +2876,8 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
               </button>
             </header>
 
-            {/* Mapa Satélite Interativo Fixo no Topo (apenas controle único + / - no canto inferior direito) */}
-            <div className="relative h-[34dvh] w-full shrink-0 overflow-hidden border-b border-white/10 bg-[#000000] sm:h-[38dvh]">
+            {/* Mapa Satélite Interativo Fixo no Topo */}
+            <div className="relative h-[46dvh] w-full shrink-0 overflow-hidden border-b border-white/10 bg-[#000000] sm:h-[50dvh]">
               <VelocityMapboxView
                 trackId={`${sessionTrack?.id || 'session'}_pro_fs`}
                 editableTrace={lap1Samples}
@@ -2875,6 +2913,9 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                 }
                 heatmapMode={mapLayerMode}
                 showSpeedBadges={showMapPeaks}
+                compactCarMarkers={true}
+                autoFollowCar={replayAutoFollow}
+                onAutoFollowPausedByUser={() => setReplayAutoFollow(false)}
                 isExternalFullscreen={true}
                 mapStyleIndex={fsMapStyleIdx}
                 onCycleMapStyle={() => setFsMapStyleIdx((v) => (v + 1) % 3)}
@@ -2893,7 +2934,7 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
 
                 {/* Distância Atual em Destaque */}
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-1.5 font-mono text-xs tabular-nums">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                       Distância Atual:
                     </span>
@@ -2903,6 +2944,21 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
                     <span className="text-[11px] font-bold text-[var(--ps-muted)]">
                       ({scrubPoint.distM}m)
                     </span>
+                    {scrubPoint.speed1 !== null && (
+                      <span className="rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-xs font-black text-[var(--ps-emerald)]">
+                        V1 {scrubPoint.speed1} km/h
+                      </span>
+                    )}
+                    {showLap2 && scrubPoint.speed2 !== null && (
+                      <span className="rounded-md border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-xs font-black text-[#FF2A2A]">
+                        V2 {scrubPoint.speed2} km/h
+                      </span>
+                    )}
+                    {showLap3 && scrubPoint.speed3 !== null && (
+                      <span className="rounded-md border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-xs font-black text-[#38BDF8]">
+                        V3 {scrubPoint.speed3} km/h
+                      </span>
+                    )}
                   </div>
                   <button
                     type="button"

@@ -72,6 +72,17 @@ interface VelocityMapboxViewProps {
   postEditIdx: number;
   currentPos: { lat: number; lon: number } | null;
   vehicleStyle?: VehicleVariant;
+  compactCarMarkers?: boolean;
+  autoFollowCar?: boolean;
+  onAutoFollowPausedByUser?: () => void;
+  transitRoute?: {
+    toLat: number;
+    toLon: number;
+    label?: string;
+    color?: string;
+  } | null;
+  onSelectWaypoint?: (wp: GeoWaypoint) => void;
+  onSelectMultiTrace?: (trackId: string) => void;
   ghostCar?: ReplayVehiclePose | null;
   thirdCar?: ReplayVehiclePose | null;
   navigationMode?: boolean;
@@ -208,11 +219,16 @@ function createMarcoPinElement(
 
 function createVehicleMarkerElement(
   _headingDeg: number | null,
-  variant: VehicleVariant = 'default'
+  variant: VehicleVariant = 'default',
+  compact = false
 ): HTMLDivElement {
+  const wrapSize = compact ? 12 : 18;
+  const dotSize = compact ? 9 : 14;
+  const borderWidth = compact ? 1.5 : 2.5;
+
   const el = document.createElement('div');
-  el.style.width = '18px';
-  el.style.height = '18px';
+  el.style.width = `${wrapSize}px`;
+  el.style.height = `${wrapSize}px`;
   el.style.display = 'flex';
   el.style.alignItems = 'center';
   el.style.justifyContent = 'center';
@@ -232,11 +248,11 @@ function createVehicleMarkerElement(
   const strokeColor = variant === 'lapB' ? '#111214' : '#FFFFFF';
 
   const dot = document.createElement('div');
-  dot.style.width = '14px';
-  dot.style.height = '14px';
+  dot.style.width = `${dotSize}px`;
+  dot.style.height = `${dotSize}px`;
   dot.style.borderRadius = '9999px';
   dot.style.backgroundColor = fillColor;
-  dot.style.border = `2.5px solid ${strokeColor}`;
+  dot.style.border = `${borderWidth}px solid ${strokeColor}`;
   dot.style.boxShadow = '0 1px 4px rgba(0,0,0,0.85)';
 
   el.appendChild(dot);
@@ -318,6 +334,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   postEditIdx,
   currentPos,
   vehicleStyle = 'default',
+  compactCarMarkers = false,
+  autoFollowCar = false,
+  onAutoFollowPausedByUser,
+  transitRoute = null,
+  onSelectWaypoint,
+  onSelectMultiTrace,
   ghostCar = null,
   thirdCar = null,
   navigationMode = false,
@@ -348,6 +370,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   mapStyleIndex,
   onCycleMapStyle,
 }) => {
+  const outerWrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const baseLayersRef = useRef<{
@@ -356,6 +379,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     streets: L.TileLayer;
   } | null>(null);
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
+  const transitLayerRef = useRef<L.LayerGroup | null>(null);
   const speedBadgesLayerRef = useRef<L.LayerGroup | null>(null);
   const scrubberLayerRef = useRef<L.LayerGroup | null>(null);
   const gatesLayerRef = useRef<L.LayerGroup | null>(null);
@@ -375,14 +399,17 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     marker: L.Marker;
     el: HTMLDivElement;
     variant: string;
+    compact: boolean;
   } | null>(null);
   const ghostMarkerRef = useRef<{
     marker: L.Marker;
     el: HTMLDivElement;
+    compact: boolean;
   } | null>(null);
   const thirdMarkerRef = useRef<{
     marker: L.Marker;
     el: HTMLDivElement;
+    compact: boolean;
   } | null>(null);
   const lastFittedKeyRef = useRef<string>('');
   const lastNavEaseRef = useRef<number>(0);
@@ -401,10 +428,19 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   onDragTrapEndRef.current = onDragTrapEnd;
   const onCenterChangeRef = useRef(onCenterChange);
   onCenterChangeRef.current = onCenterChange;
+  const onAutoFollowPausedRef = useRef(onAutoFollowPausedByUser);
+  onAutoFollowPausedRef.current = onAutoFollowPausedByUser;
+  const onSelectWaypointRef = useRef(onSelectWaypoint);
+  onSelectWaypointRef.current = onSelectWaypoint;
+  const onSelectMultiTraceRef = useRef(onSelectMultiTrace);
+  onSelectMultiTraceRef.current = onSelectMultiTrace;
 
   const [styleIndex, setStyleIndex] = useState(0); // Default: Satélite
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [internalHeadingUp, setInternalHeadingUp] = useState(true);
+  const [wrapperSize, setWrapperSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [manualRotationDeg, setManualRotationDeg] = useState(0);
+  const [userInteracted, setUserInteracted] = useState(false);
   const [unlockedTrapId, setUnlockedTrapId] = useState<string | null>(null);
   const unlockedTrapIdRef = useRef<string | null>(null);
   unlockedTrapIdRef.current = unlockedTrapId;
@@ -453,10 +489,35 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   armUnlockRef.current = armUnlockedTrapTimeout;
 
   const effectiveHeadingUp = headingUp !== undefined ? headingUp : internalHeadingUp;
-  const rotationDeg =
-    navigationMode && effectiveHeadingUp && typeof navHeadingDeg === 'number'
+  const autoRotationDeg =
+    navigationMode && effectiveHeadingUp && typeof navHeadingDeg === 'number' && !userInteracted
       ? -navHeadingDeg
       : 0;
+  const totalRotationDeg =
+    userInteracted || Math.abs(manualRotationDeg) > 0.5 ? manualRotationDeg : autoRotationDeg;
+  const totalRotationRef = useRef(totalRotationDeg);
+  totalRotationRef.current = totalRotationDeg;
+  const userInteractedRef = useRef(userInteracted);
+  userInteractedRef.current = userInteracted;
+  const manualRotationRef = useRef(manualRotationDeg);
+  manualRotationRef.current = manualRotationDeg;
+
+  const clientToMapContainerPoint = (clientX: number, clientY: number): [number, number] | null => {
+    const wrapper = outerWrapperRef.current;
+    const cont = containerRef.current;
+    if (!wrapper || !cont) return null;
+    const wRect = wrapper.getBoundingClientRect();
+    const cx = wRect.left + wRect.width / 2;
+    const cy = wRect.top + wRect.height / 2;
+    const vx = clientX - cx;
+    const vy = clientY - cy;
+    const rad = (-totalRotationRef.current * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const lx = cont.clientWidth / 2 + (vx * cos - vy * sin);
+    const ly = cont.clientHeight / 2 + (vx * sin + vy * cos);
+    return [lx, ly];
+  };
 
   const effectiveStyleIndex =
     mapStyleIndex !== undefined ? mapStyleIndex % MAP_STYLES.length : styleIndex;
@@ -464,9 +525,36 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   const externalFs = Boolean(isExternalFullscreen);
   const effectiveFullscreen = typeof forceFullscreen === 'boolean' ? forceFullscreen : isFullscreen;
 
-  // Inicializa Leaflet em Modo Satélite
+  // Quando o caller reativa autoFollowCar (ex: botão Seguir Carro), retoma seguimento automático
+  const prevAutoFollowPropRef = useRef(autoFollowCar);
+  useEffect(() => {
+    if (autoFollowCar && !prevAutoFollowPropRef.current) {
+      setUserInteracted(false);
+    }
+    prevAutoFollowPropRef.current = autoFollowCar;
+  }, [autoFollowCar]);
+
+  // Mede o viewport externo para dimensionar o quadrado rotacionado sem cortar cantos
+  useEffect(() => {
+    const wrap = outerWrapperRef.current;
+    if (!wrap) return;
+    const updateSize = () => {
+      const w = wrap.clientWidth;
+      const h = wrap.clientHeight;
+      if (w > 0 && h > 0) {
+        setWrapperSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+      }
+    };
+    updateSize();
+    const ro = new ResizeObserver(updateSize);
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [effectiveFullscreen, externalFs, containerClassName]);
+
+  // Inicializa Leaflet em Modo Satélite com suporte multitoque completo (zoom pinça, arraste, rotação 2 dedos)
   useEffect(() => {
     const el = containerRef.current;
+    const wrap = outerWrapperRef.current;
     if (!el) return;
 
     const TRANSPARENT_TILE_DATA_URL =
@@ -479,6 +567,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       maxZoom: 21,
       zoomControl: false,
       attributionControl: false,
+      dragging: true,
+      touchZoom: true,
+      scrollWheelZoom: true,
+      bounceAtZoomLimits: false,
     });
 
     const satellite = L.tileLayer(
@@ -507,17 +599,104 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     baseLayersRef.current = { satellite, labels, streets };
 
     const routeLayer = L.layerGroup().addTo(map);
+    const transitLayer = L.layerGroup().addTo(map);
     const speedBadgesLayer = L.layerGroup().addTo(map);
     const scrubberLayer = L.layerGroup().addTo(map);
     const gatesLayer = L.layerGroup().addTo(map);
     const waypointLayer = L.layerGroup().addTo(map);
     const carLayer = L.layerGroup().addTo(map);
     routeLayerRef.current = routeLayer;
+    transitLayerRef.current = transitLayer;
     speedBadgesLayerRef.current = speedBadgesLayer;
     scrubberLayerRef.current = scrubberLayer;
     gatesLayerRef.current = gatesLayer;
     waypointLayerRef.current = waypointLayer;
     carLayerRef.current = carLayer;
+
+    // Compensa o arraste de 1 dedo quando o mapa estiver rotacionado em qualquer ângulo
+    const draggable = (
+      map.dragging as unknown as {
+        _draggable?: L.Draggable & { _startPos?: L.Point; _newPos?: L.Point };
+      }
+    )?._draggable;
+    if (draggable) {
+      draggable.on('predrag', () => {
+        const deg = totalRotationRef.current;
+        if (Math.abs(deg) > 0.01 && draggable._startPos && draggable._newPos) {
+          const dx = draggable._newPos.x - draggable._startPos.x;
+          const dy = draggable._newPos.y - draggable._startPos.y;
+          const rad = (-deg * Math.PI) / 180;
+          const cos = Math.cos(rad);
+          const sin = Math.sin(rad);
+          draggable._newPos.x = draggable._startPos.x + (dx * cos - dy * sin);
+          draggable._newPos.y = draggable._startPos.y + (dx * sin + dy * cos);
+        }
+      });
+    }
+
+    // Pausa auto-follow quando o piloto arrasta manualmente o mapa
+    map.on('dragstart', () => {
+      if (!userInteractedRef.current) {
+        setUserInteracted(true);
+        onAutoFollowPausedRef.current?.();
+      }
+    });
+
+    // Rotação manual fluida com 2 dedos no container externo
+    let twoFingerStartAngle = 0;
+    let twoFingerBaseRot = 0;
+    let twoFingerActive = false;
+    let twoFingerRotUnlocked = false;
+    let twoFingerZeroOffset = 0;
+
+    const getTouchAngleDeg = (touches: TouchList) => {
+      const t0 = touches[0];
+      const t1 = touches[1];
+      return (Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX) * 180) / Math.PI;
+    };
+
+    const onWrapperTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        twoFingerActive = true;
+        twoFingerRotUnlocked = false;
+        twoFingerStartAngle = getTouchAngleDeg(e.touches);
+        twoFingerBaseRot = totalRotationRef.current;
+        twoFingerZeroOffset = 0;
+      } else {
+        twoFingerActive = false;
+      }
+    };
+
+    const onWrapperTouchMove = (e: TouchEvent) => {
+      if (!twoFingerActive || e.touches.length !== 2) return;
+      const curAngle = getTouchAngleDeg(e.touches);
+      const rawDelta = ((curAngle - twoFingerStartAngle + 540) % 360) - 180;
+      if (!twoFingerRotUnlocked) {
+        if (Math.abs(rawDelta) < 6) return;
+        twoFingerRotUnlocked = true;
+        twoFingerZeroOffset = rawDelta > 0 ? 6 : -6;
+      }
+      const nextRot = twoFingerBaseRot + (rawDelta - twoFingerZeroOffset);
+      if (!userInteractedRef.current) {
+        setUserInteracted(true);
+        onAutoFollowPausedRef.current?.();
+      }
+      setManualRotationDeg(nextRot);
+    };
+
+    const onWrapperTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        twoFingerActive = false;
+        twoFingerRotUnlocked = false;
+      }
+    };
+
+    if (wrap) {
+      wrap.addEventListener('touchstart', onWrapperTouchStart, { passive: true });
+      wrap.addEventListener('touchmove', onWrapperTouchMove, { passive: true });
+      wrap.addEventListener('touchend', onWrapperTouchEnd, { passive: true });
+      wrap.addEventListener('touchcancel', onWrapperTouchEnd, { passive: true });
+    }
 
     map.on('click', (e: L.LeafletMouseEvent) => {
       if (!requireLongPressRef.current && placementKindRef.current && onMapClickRef.current) {
@@ -570,25 +749,26 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       mapHoldPointerId = ev.pointerId;
       mapHoldStartX = ev.clientX;
       mapHoldStartY = ev.clientY;
-      const rect = el.getBoundingClientRect();
-      const relX = ev.clientX - rect.left;
-      const relY = ev.clientY - rect.top;
+      const wRect = (wrap ?? el).getBoundingClientRect();
+      const ringX = ev.clientX - wRect.left;
+      const ringY = ev.clientY - wRect.top;
+      const localPt = clientToMapContainerPoint(ev.clientX, ev.clientY) ?? [ringX, ringY];
 
       mapRingShowTimer = window.setTimeout(() => {
         if (mapHoldPointerId === ev.pointerId) {
-          setHoldRing({ x: relX, y: relY });
+          setHoldRing({ x: ringX, y: ringY });
         }
       }, 100);
 
       mapLongPressTimer = window.setTimeout(() => {
         if (mapHoldPointerId !== ev.pointerId || activeMapPointers.size > 1) return;
         clearMapLongPress();
-        const ll = map.containerPointToLatLng([relX, relY]);
+        const ll = map.containerPointToLatLng(localPt);
         if (placementKindRef.current && onMapClickRef.current) {
-          triggerFeedbackRef.current(relX, relY, 'Marco posicionado!');
+          triggerFeedbackRef.current(ringX, ringY, 'Marco posicionado!');
           onMapClickRef.current(ll.lat, ll.lng);
         } else if (selectedTrapIdRef.current && onDragTrapEndRef.current) {
-          triggerFeedbackRef.current(relX, relY, 'Marco movido!');
+          triggerFeedbackRef.current(ringX, ringY, 'Marco movido!');
           onDragTrapEndRef.current(selectedTrapIdRef.current, ll.lat, ll.lng);
         }
       }, 400);
@@ -643,6 +823,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       clearMapLongPress();
       if (unlockTimerRef.current !== null) window.clearTimeout(unlockTimerRef.current);
       if (pulseClearTimerRef.current !== null) window.clearTimeout(pulseClearTimerRef.current);
+      if (wrap) {
+        wrap.removeEventListener('touchstart', onWrapperTouchStart);
+        wrap.removeEventListener('touchmove', onWrapperTouchMove);
+        wrap.removeEventListener('touchend', onWrapperTouchEnd);
+        wrap.removeEventListener('touchcancel', onWrapperTouchEnd);
+      }
       el.removeEventListener('pointerdown', onMapPointerDown);
       el.removeEventListener('pointermove', onMapPointerMove);
       el.removeEventListener('pointerup', onMapPointerUpOrCancel);
@@ -655,6 +841,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       mapRef.current = null;
       baseLayersRef.current = null;
       routeLayerRef.current = null;
+      transitLayerRef.current = null;
       speedBadgesLayerRef.current = null;
       scrubberLayerRef.current = null;
       gatesLayerRef.current = null;
@@ -863,22 +1050,30 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       for (const layerItem of multiTraces) {
         if (layerItem.trace.length < 2) continue;
         const latLngs = offsetTraceLatLngs(layerItem.trace, 0);
-        const lineWeight = layerItem.active ? 4.2 : 3.2;
-        L.polyline(latLngs, {
-          color: '#050608',
-          weight: lineWeight + 2,
-          opacity: 0.6,
+        const lineWeight = layerItem.active ? 5 : 3.2;
+        const casingPoly = L.polyline(latLngs, {
+          color: layerItem.active ? '#FFFFFF' : '#050608',
+          weight: lineWeight + 2.5,
+          opacity: layerItem.active ? 0.88 : 0.6,
           lineCap: 'round',
           lineJoin: 'round',
         }).addTo(routeLayer);
         const poly = L.polyline(latLngs, {
           color: layerItem.color || '#0288D1',
           weight: lineWeight,
-          opacity: layerItem.active === false ? 0.85 : 0.98,
+          opacity: layerItem.active === false ? 0.88 : 0.98,
           lineCap: 'round',
           lineJoin: 'round',
         }).addTo(routeLayer);
-        if (layerItem.name) {
+        const handlePolyTap = (ev: L.LeafletMouseEvent) => {
+          if (onSelectMultiTraceRef.current) {
+            L.DomEvent.stopPropagation(ev);
+            onSelectMultiTraceRef.current(layerItem.id);
+          }
+        };
+        casingPoly.on('click', handlePolyTap);
+        poly.on('click', handlePolyTap);
+        if (layerItem.name && !onSelectMultiTraceRef.current) {
           const popupEl = document.createElement('div');
           popupEl.style.fontFamily = 'sans-serif';
           popupEl.style.fontSize = '12px';
@@ -1168,11 +1363,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           slideMoved = false;
 
           const cont = containerRef.current;
+          const wrap = outerWrapperRef.current;
           const map = mapRef.current;
           if (!cont || !map) return;
-          const rect = cont.getBoundingClientRect();
-          const relX = ev.clientX - rect.left;
-          const relY = ev.clientY - rect.top;
+          const wRect = (wrap ?? cont).getBoundingClientRect();
+          const relX = ev.clientX - wRect.left;
+          const relY = ev.clientY - wRect.top;
 
           showTimer = window.setTimeout(() => {
             if (pointerId === ev.pointerId) {
@@ -1206,8 +1402,11 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 5) {
             slideMoved = true;
           }
+          const localPt = clientToMapContainerPoint(ev.clientX, ev.clientY);
           const rect = cont.getBoundingClientRect();
-          const ll = map.containerPointToLatLng([ev.clientX - rect.left, ev.clientY - rect.top]);
+          const ll = map.containerPointToLatLng(
+            localPt ?? [ev.clientX - rect.left, ev.clientY - rect.top]
+          );
           marker.setLatLng(ll);
           updateGateLines(ll.lat, ll.lng);
         };
@@ -1353,6 +1552,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         zIndexOffset: 650,
       }).addTo(wpLayer);
 
+      marker.on('click', () => {
+        onSelectWaypointRef.current?.(wp);
+      });
+
       const popupEl = document.createElement('div');
       popupEl.style.fontFamily = 'sans-serif';
       popupEl.style.fontSize = '12px';
@@ -1370,33 +1573,113 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     }
   }, [waypoints]);
 
+  // Linha guia de deslocamento GPS -> Destino selecionado (Largada da SS ou Parque Serviços/POI)
+  useEffect(() => {
+    const transitLayer = transitLayerRef.current;
+    if (!transitLayer) return;
+    transitLayer.clearLayers();
+    if (!transitRoute) return;
+
+    const destLatLng: [number, number] = [transitRoute.toLat, transitRoute.toLon];
+    const lineColor = transitRoute.color || '#38BDF8';
+
+    if (currentPos) {
+      const pts: [number, number][] = [[currentPos.lat, currentPos.lon], destLatLng];
+      L.polyline(pts, {
+        color: '#050608',
+        weight: 6.5,
+        opacity: 0.65,
+        lineCap: 'round',
+      }).addTo(transitLayer);
+      L.polyline(pts, {
+        color: lineColor,
+        weight: 3.5,
+        opacity: 0.95,
+        dashArray: '8 7',
+        lineCap: 'round',
+      }).addTo(transitLayer);
+    }
+
+    const beaconWrap = document.createElement('div');
+    beaconWrap.style.display = 'flex';
+    beaconWrap.style.flexDirection = 'column';
+    beaconWrap.style.alignItems = 'center';
+    beaconWrap.style.transform = 'translate(-50%, -82%)';
+    beaconWrap.style.pointerEvents = 'none';
+
+    const ring = document.createElement('div');
+    ring.style.width = '20px';
+    ring.style.height = '20px';
+    ring.style.borderRadius = '9999px';
+    ring.style.background = lineColor;
+    ring.style.border = '3px solid #FFFFFF';
+    ring.style.boxShadow = `0 0 14px ${lineColor}, 0 2px 8px rgba(0,0,0,0.85)`;
+    beaconWrap.appendChild(ring);
+
+    if (transitRoute.label) {
+      const lbl = document.createElement('span');
+      lbl.textContent = transitRoute.label;
+      lbl.style.marginTop = '3px';
+      lbl.style.background = 'rgba(7, 10, 14, 0.92)';
+      lbl.style.border = `1.5px solid ${lineColor}`;
+      lbl.style.color = '#FFFFFF';
+      lbl.style.fontFamily = 'monospace';
+      lbl.style.fontSize = '10px';
+      lbl.style.fontWeight = '800';
+      lbl.style.padding = '2px 7px';
+      lbl.style.borderRadius = '6px';
+      lbl.style.whiteSpace = 'nowrap';
+      lbl.style.maxWidth = '180px';
+      lbl.style.overflow = 'hidden';
+      lbl.style.textOverflow = 'ellipsis';
+      lbl.style.boxShadow = '0 2px 6px rgba(0,0,0,0.8)';
+      beaconWrap.appendChild(lbl);
+    }
+
+    const beaconIcon = L.divIcon({
+      html: beaconWrap,
+      className: 'pitstop-transit-dest-divicon',
+      iconSize: [0, 0],
+      iconAnchor: [0, 0],
+    });
+    L.marker(destLatLng, {
+      icon: beaconIcon,
+      interactive: false,
+      zIndexOffset: 980,
+    }).addTo(transitLayer);
+  }, [transitRoute, currentPos]);
+
   // Renderiza marcadores persistentes de Alta Taxa (30/60fps) para V1, V2 e V3
   useEffect(() => {
     const carLayer = carLayerRef.current;
     if (!carLayer) return;
 
+    const iconPx = compactCarMarkers ? 12 : 18;
+    const anchorPx = compactCarMarkers ? 6 : 9;
+
     // Carro 1 (Padrão ou Volta 1 Verde Esmeralda)
     if (currentPos) {
       if (
         !primaryMarkerRef.current ||
-        primaryMarkerRef.current.variant !== vehicleStyle
+        primaryMarkerRef.current.variant !== vehicleStyle ||
+        primaryMarkerRef.current.compact !== compactCarMarkers
       ) {
         if (primaryMarkerRef.current) {
           carLayer.removeLayer(primaryMarkerRef.current.marker);
         }
-        const el = createVehicleMarkerElement(navHeadingDeg, vehicleStyle);
+        const el = createVehicleMarkerElement(navHeadingDeg, vehicleStyle, compactCarMarkers);
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
-          iconSize: [18, 18],
-          iconAnchor: [9, 9],
+          iconSize: [iconPx, iconPx],
+          iconAnchor: [anchorPx, anchorPx],
         });
         const marker = L.marker([currentPos.lat, currentPos.lon], {
           icon,
           interactive: false,
           zIndexOffset: 1100,
         }).addTo(carLayer);
-        primaryMarkerRef.current = { marker, el, variant: vehicleStyle };
+        primaryMarkerRef.current = { marker, el, variant: vehicleStyle, compact: compactCarMarkers };
       } else {
         primaryMarkerRef.current.marker.setLatLng([currentPos.lat, currentPos.lon]);
       }
@@ -1411,20 +1694,23 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         ? offsetPointAlongTrace(ghostTrace, ghostCar.lat, ghostCar.lon, 1.8)
         : [ghostCar.lat, ghostCar.lon];
 
-      if (!ghostMarkerRef.current) {
-        const el = createVehicleMarkerElement(ghostCar.headingDeg, 'lap2');
+      if (!ghostMarkerRef.current || ghostMarkerRef.current.compact !== compactCarMarkers) {
+        if (ghostMarkerRef.current) {
+          carLayer.removeLayer(ghostMarkerRef.current.marker);
+        }
+        const el = createVehicleMarkerElement(ghostCar.headingDeg, 'lap2', compactCarMarkers);
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
-          iconSize: [18, 18],
-          iconAnchor: [9, 9],
+          iconSize: [iconPx, iconPx],
+          iconAnchor: [anchorPx, anchorPx],
         });
         const marker = L.marker([gLat, gLon], {
           icon,
           interactive: false,
           zIndexOffset: 1050,
         }).addTo(carLayer);
-        ghostMarkerRef.current = { marker, el };
+        ghostMarkerRef.current = { marker, el, compact: compactCarMarkers };
       } else {
         ghostMarkerRef.current.marker.setLatLng([gLat, gLon]);
       }
@@ -1439,20 +1725,23 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         ? offsetPointAlongTrace(thirdTrace, thirdCar.lat, thirdCar.lon, -1.8)
         : [thirdCar.lat, thirdCar.lon];
 
-      if (!thirdMarkerRef.current) {
-        const el = createVehicleMarkerElement(thirdCar.headingDeg, 'lap3');
+      if (!thirdMarkerRef.current || thirdMarkerRef.current.compact !== compactCarMarkers) {
+        if (thirdMarkerRef.current) {
+          carLayer.removeLayer(thirdMarkerRef.current.marker);
+        }
+        const el = createVehicleMarkerElement(thirdCar.headingDeg, 'lap3', compactCarMarkers);
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
-          iconSize: [18, 18],
-          iconAnchor: [9, 9],
+          iconSize: [iconPx, iconPx],
+          iconAnchor: [anchorPx, anchorPx],
         });
         const marker = L.marker([tLat, tLon], {
           icon,
           interactive: false,
           zIndexOffset: 1030,
         }).addTo(carLayer);
-        thirdMarkerRef.current = { marker, el };
+        thirdMarkerRef.current = { marker, el, compact: compactCarMarkers };
       } else {
         thirdMarkerRef.current.marker.setLatLng([tLat, tLon]);
       }
@@ -1464,6 +1753,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     currentPos,
     navHeadingDeg,
     vehicleStyle,
+    compactCarMarkers,
     ghostCar,
     ghostTrace,
     thirdCar,
@@ -1522,7 +1812,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   };
 
   useEffect(() => {
-    if (navigationMode) return;
+    if (navigationMode || autoFollowCar || userInteracted) return;
     fitMapToTrackOrCenter(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -1535,20 +1825,23 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     thirdTrace?.length,
     orderedTraps.length,
     navigationMode,
+    autoFollowCar,
+    userInteracted,
     currentPos?.lat,
     currentPos?.lon,
   ]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !navigationMode || !currentPos) return;
+    if (!map || (!navigationMode && !autoFollowCar) || userInteracted || !currentPos) return;
     const now = Date.now();
-    if (now - lastNavEaseRef.current < 350) return;
+    if (now - lastNavEaseRef.current < 160) return;
     lastNavEaseRef.current = now;
-    map.setView([currentPos.lat, currentPos.lon], Math.max(map.getZoom(), 17), {
+    const targetZoom = Math.max(map.getZoom(), 17);
+    map.setView([currentPos.lat, currentPos.lon], targetZoom, {
       animate: true,
     });
-  }, [navigationMode, currentPos]);
+  }, [navigationMode, autoFollowCar, userInteracted, currentPos]);
 
   const cycleMapStyle = () => {
     if (onCycleMapStyle) {
@@ -1615,6 +1908,27 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     }
   };
 
+  const handleRecenterAndNorth = () => {
+    setManualRotationDeg(0);
+    setUserInteracted(false);
+    if ((navigationMode || autoFollowCar) && currentPos && mapRef.current) {
+      mapRef.current.setView([currentPos.lat, currentPos.lon], Math.max(mapRef.current.getZoom(), 17), {
+        animate: true,
+      });
+      return;
+    }
+    if (
+      editableTrace.length > 0 ||
+      (multiTraces && multiTraces.length > 0) ||
+      (waypoints && waypoints.length > 0) ||
+      orderedTraps.length > 0
+    ) {
+      fitMapToTrackOrCenter(true);
+    } else {
+      void centerOnMyPosition();
+    }
+  };
+
   const handlePlaceAtCrosshair = () => {
     const map = mapRef.current;
     if (!map || !onMapClickPlaceTrap) return;
@@ -1622,8 +1936,24 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     onMapClickPlaceTrap(c.lat, c.lng);
   };
 
+  const isRotated = Math.abs(totalRotationDeg) > 0.05;
+  const rotatedSquareSide =
+    isRotated && wrapperSize.w > 0 && wrapperSize.h > 0
+      ? Math.ceil(Math.hypot(wrapperSize.w, wrapperSize.h)) + 16
+      : 0;
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const raf = window.requestAnimationFrame(() => {
+      map.invalidateSize({ animate: false });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [isRotated, rotatedSquareSide]);
+
   return (
     <div
+      ref={outerWrapperRef}
       className={
         effectiveFullscreen
           ? 'fixed inset-0 z-50 overflow-hidden bg-[var(--ps-bg)]'
@@ -1632,13 +1962,47 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     >
       <div
         ref={containerRef}
-        className="h-full w-full transition-transform duration-300 ease-out will-change-transform"
+        className="will-change-transform"
         style={
-          rotationDeg !== 0
-            ? { transform: `rotate(${rotationDeg}deg) scale(1.42)` }
-            : undefined
+          isRotated && rotatedSquareSide > 0
+            ? {
+                position: 'absolute',
+                left: '50%',
+                top: '50%',
+                width: `${rotatedSquareSide}px`,
+                height: `${rotatedSquareSide}px`,
+                transform: `translate(-50%, -50%) rotate(${totalRotationDeg}deg)`,
+                transition: userInteracted ? 'none' : 'transform 220ms ease-out',
+              }
+            : {
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                transform: isRotated ? `rotate(${totalRotationDeg}deg)` : undefined,
+              }
         }
       />
+
+      {/* Botão flutuante discreto Centralizar / Norte quando usuário move ou rotaciona o mapa manualmente */}
+      {(userInteracted || Math.abs(manualRotationDeg) > 1) && (
+        <button
+          type="button"
+          onClick={handleRecenterAndNorth}
+          className={`absolute left-2.5 z-[415] inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)] active:scale-95 ${
+            effectiveFullscreen && fullscreenOverlay
+              ? 'bottom-[94px] sm:bottom-[98px]'
+              : 'bottom-2.5'
+          }`}
+          title="Voltar para o Norte (0°) e centralizar mapa"
+        >
+          <Compass
+            className="h-3.5 w-3.5 text-[var(--ps-accent)] transition-transform"
+            style={{ transform: `rotate(${totalRotationDeg}deg)` }}
+          />
+          <span>Centralizar / Norte</span>
+        </button>
+      )}
 
       {/* Live Heading-Up vs Norte Fixo mode toggle when navigationMode is enabled */}
       {navigationMode && !hideBuiltInTopControls && (

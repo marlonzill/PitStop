@@ -72,6 +72,8 @@ export interface VelocityTrack {
   name: string;
   description?: string;
   color?: string;
+  folderId?: string;
+  folderName?: string;
   waypoints?: GeoWaypoint[];
   mode: TrackMode;
   traps: VelocityTrap[];
@@ -718,13 +720,13 @@ export function verificarCruzamento(
 
   if (Math.abs(dAlong) > 1e-7) {
     const tRaw = -alongA / dAlong;
-    if (tRaw < -1e-6 || tRaw > 1 + 1e-6) {
+    if (tRaw < -0.04 || tRaw > 1.04) {
       return null;
     }
     fatorInterpolacao = Math.max(0, Math.min(1, tRaw));
   } else {
     // Caso degenerado: deslocamento colinear sobre a própria linha (along ≈ 0)
-    if (Math.abs(alongA) > 0.05) {
+    if (Math.abs(alongA) > 0.08) {
       return null;
     }
     const minSegLat = Math.min(latA, latB);
@@ -754,7 +756,7 @@ export function verificarCruzamento(
       return null;
     }
     // Garante cruzamento real no sentido da pista (de antes da linha para depois da linha)
-    if (alongA > 0.25 || alongB < -0.25) {
+    if (dAlong <= 0 || alongA > 0.8 || alongB < -0.8) {
       return null;
     }
   }
@@ -1565,7 +1567,7 @@ export function inferNearestBaseTraceBearing(
  * gera automaticamente Largada (ponto inicial) e Chegada (ponto final) ou Largada/Chegada no circuito.
  */
 export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrack {
-  if (track.traps.length > 0 || !track.baseTrace || track.baseTrace.length < 2) {
+  if (!track.baseTrace || track.baseTrace.length < 2) {
     return track;
   }
   const pts = track.baseTrace;
@@ -1577,6 +1579,9 @@ export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrac
       : bearingBetweenDeg(pStart.lat, pStart.lon, pStartNext.lat, pStartNext.lon);
 
   if (track.mode === 'circuit') {
+    if (track.traps.some((t) => t.kind === 'start_finish' || t.kind === 'start')) {
+      return track;
+    }
     return {
       ...track,
       traps: [
@@ -1590,8 +1595,15 @@ export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrac
           widthM: 50,
           unidirectional: true,
         },
+        ...track.traps,
       ],
     };
+  }
+
+  const hasStart = track.traps.some((t) => t.kind === 'start' || t.kind === 'start_finish');
+  const hasFinish = track.traps.some((t) => t.kind === 'finish' || t.kind === 'start_finish');
+  if (hasStart && hasFinish) {
+    return track;
   }
 
   const pEnd = pts[pts.length - 1];
@@ -1601,30 +1613,35 @@ export function ensureAutoTrapsFromBaseTrace(track: VelocityTrack): VelocityTrac
       ? startBearing
       : bearingBetweenDeg(pEndPrev.lat, pEndPrev.lon, pEnd.lat, pEnd.lon);
 
+  const nextTraps = [...track.traps];
+  if (!hasStart) {
+    nextTraps.unshift({
+      id: `trap_start_auto_${track.id}`,
+      name: 'Largada (L)',
+      kind: 'start',
+      lat: pStart.lat,
+      lon: pStart.lon,
+      bearingDeg: startBearing,
+      widthM: 40,
+      unidirectional: true,
+    });
+  }
+  if (!hasFinish) {
+    nextTraps.push({
+      id: `trap_finish_auto_${track.id}`,
+      name: 'Chegada (C)',
+      kind: 'finish',
+      lat: pEnd.lat,
+      lon: pEnd.lon,
+      bearingDeg: endBearing,
+      widthM: 40,
+      unidirectional: true,
+    });
+  }
+
   return {
     ...track,
-    traps: [
-      {
-        id: `trap_start_auto_${track.id}`,
-        name: 'Largada (Start)',
-        kind: 'start',
-        lat: pStart.lat,
-        lon: pStart.lon,
-        bearingDeg: startBearing,
-        widthM: 50,
-        unidirectional: true,
-      },
-      {
-        id: `trap_finish_auto_${track.id}`,
-        name: 'Chegada (Finish)',
-        kind: 'finish',
-        lat: pEnd.lat,
-        lon: pEnd.lon,
-        bearingDeg: endBearing,
-        widthM: 50,
-        unidirectional: true,
-      },
-    ],
+    traps: nextTraps,
   };
 }
 

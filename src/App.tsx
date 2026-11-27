@@ -570,6 +570,7 @@ export default function App() {
                 </button>
               </div>
             )}
+            <OfflineIndicator />
           </div>
         </div>
       </header>
@@ -674,8 +675,6 @@ export default function App() {
           openSettingsSection('system');
         }}
       />
-
-      <OfflineIndicator />
 
       {/* Modal de Solicitação / Upgrade para Plano PRO */}
       {ENABLE_SUBSCRIPTION_GATE && proModal && (

@@ -1139,11 +1139,11 @@ input[type="date"] {
 }
 
 .finish-modal-pulse-green {
-  animation: finishBannerPulseGreen 0.9s ease-in-out 4;
+  animation: finishBannerPulseGreen 1.1s ease-in-out infinite;
 }
 
 .finish-modal-pulse-red {
-  animation: finishBannerPulseRed 0.9s ease-in-out 4;
+  animation: finishBannerPulseRed 1.1s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

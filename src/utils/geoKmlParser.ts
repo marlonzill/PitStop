@@ -10,6 +10,7 @@ export interface GeoWaypoint {
   lat: number;
   lon: number;
   color?: string;
+  folderId?: string;
   folderName?: string;
 }
 
@@ -53,6 +54,8 @@ export interface GeoParsedTrack {
   name: string;
   description?: string;
   color?: string;
+  folderId?: string;
+  folderName?: string;
   waypoints?: GeoWaypoint[];
   mode: GeoTrackMode;
   traps: GeoParsedTrap[];
@@ -437,12 +440,17 @@ function classifyPointKind(
     OFFICIAL_SPLIT_KEYWORD_RE.test(normName) ||
     (normFolder.length > 0 && OFFICIAL_SPLIT_KEYWORD_RE.test(normFolder));
 
-  const isPoiKeyword = POI_KEYWORD_RE.test(normName) && !hasOfficialSplit;
+  const hasStart = START_KEYWORD_RE.test(normName) || /^l(?:\s*[-:]|\s*\d|$)/i.test(normName);
+  const hasFinish = FINISH_KEYWORD_RE.test(normName) || /^c(?:\s*[-:]|\s*\d|$)/i.test(normName);
+  const isPoiKeyword =
+    (POI_KEYWORD_RE.test(normName) ||
+      (normFolder.length > 0 && POI_KEYWORD_RE.test(normFolder))) &&
+    !hasOfficialSplit &&
+    !hasStart &&
+    !hasFinish;
   if (isPoiKeyword) {
     return { explicitKind: null, isPoiKeyword: true, isOfficialSplitKeyword: false };
   }
-  const hasStart = START_KEYWORD_RE.test(normName) || /^l(?:\s*[-:]|\s*\d|$)/i.test(normName);
-  const hasFinish = FINISH_KEYWORD_RE.test(normName) || /^c(?:\s*[-:]|\s*\d|$)/i.test(normName);
   if (hasStart && hasFinish) {
     return { explicitKind: 'start_finish', isPoiKeyword: false, isOfficialSplitKeyword: false };
   }
@@ -680,8 +688,23 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
     doc.getElementsByTagName('Document')[0] ??
     kmlRoot;
 
-  const documentName =
-    (documentEl ? getDirectChildText(documentEl, 'name') : '') || cleanFileName;
+  const rawDocName =
+    (documentEl ? sanitizeDescription(getDirectChildText(documentEl, 'name')) : undefined) ||
+    sanitizeDescription(getDirectChildText(kmlRoot, 'name'));
+
+  let fallbackFolderName: string | undefined;
+  if (!rawDocName && documentEl) {
+    const topFolders = getDirectChildren(documentEl, 'Folder');
+    for (const fld of topFolders) {
+      const fn = sanitizeDescription(getDirectChildText(fld, 'name'));
+      if (fn && !isGenericPlacemarkName(fn)) {
+        fallbackFolderName = fn;
+        break;
+      }
+    }
+  }
+
+  const documentName = (rawDocName || fallbackFolderName || cleanFileName).trim();
 
   const styles = extractKmlStyles(doc);
   const lines: ExtractedLineItem[] = [];
@@ -953,11 +976,51 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
     });
   });
 
-  // Finalize tracks: add L/C traps and sort detectedSplitPoints by cumulative distance from L
+  const rallyFolderSlug =
+    documentName
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 36) || 'rally';
+  const rallyFolderId = `rally_${rallyFolderSlug}_${now}`;
+
+  // Tag waypoints with the Rally Document folder if missing
+  waypoints.forEach((wp) => {
+    wp.folderId = rallyFolderId;
+    wp.folderName = documentName;
+  });
+
+  // Finalize tracks: add L/C traps on EVERY SS and sort detectedSplitPoints by cumulative distance from L
   const tracks: GeoParsedTrack[] = builtTracks.map((bt, idx) => {
     const { line, baseTrace, traps, detectedSplitPoints } = bt;
-    const starts = traps.filter((t) => t.kind === 'start' || t.kind === 'start_finish');
-    const finishes = traps.filter((t) => t.kind === 'finish');
+    const totalDistKm = baseTrace.length > 0 ? baseTrace[baseTrace.length - 1].distKm : 0;
+    const endpointGapM =
+      baseTrace.length >= 2
+        ? haversineMetersGeo(
+            baseTrace[0].lat,
+            baseTrace[0].lon,
+            baseTrace[baseTrace.length - 1].lat,
+            baseTrace[baseTrace.length - 1].lon
+          )
+        : 0;
+    const looksPointToPoint = totalDistKm > 0.25 && endpointGapM > 150;
+
+    // If a point-to-point stage had a trap mistakenly flagged as start_finish, disambiguate start vs finish
+    const normalizedTraps = traps.map((tr) => {
+      if (tr.kind === 'start_finish' && looksPointToPoint && baseTrace.length >= 2) {
+        const proj = projectPointOntoTrace(tr.lat, tr.lon, baseTrace);
+        const inferredKind: GeoTrapKind =
+          proj.distKm <= totalDistKm * 0.5 ? 'start' : 'finish';
+        return { ...tr, kind: inferredKind };
+      }
+      return tr;
+    });
+
+    const starts = normalizedTraps.filter((t) => t.kind === 'start' || t.kind === 'start_finish');
+    const finishes = normalizedTraps.filter((t) => t.kind === 'finish');
+    const splits = normalizedTraps.filter((t) => t.kind === 'split');
     const sortedCandidates = [...detectedSplitPoints].sort((a, b) => a.distKm - b.distKm);
 
     const finalizedTraps: GeoParsedTrap[] = [];
@@ -978,6 +1041,10 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
       });
     }
 
+    if (splits.length > 0) {
+      finalizedTraps.push(...splits);
+    }
+
     if (finishes.length > 0) {
       finalizedTraps.push(...finishes);
     } else if (baseTrace.length >= 2 && !starts.some((t) => t.kind === 'start_finish')) {
@@ -994,13 +1061,13 @@ export function parseKmlToGeoResult(kmlXml: string, fileName: string): ParsedGeo
       });
     }
 
-    const totalDistKm = baseTrace.length > 0 ? baseTrace[baseTrace.length - 1].distKm : 0;
-
     return {
       id: `trk_kml_${idx + 1}_${now}`,
       name: line.name,
       description: line.description,
       color: line.color,
+      folderId: rallyFolderId,
+      folderName: documentName,
       waypoints: waypoints.length > 0 ? waypoints : undefined,
       mode: finalizedTraps.some((t) => t.kind === 'start_finish') ? 'circuit' : 'point-to-point',
       traps: finalizedTraps,
@@ -1203,8 +1270,17 @@ export function parseGpxOrGeoJsonToGeoResult(
       }
     });
 
+    const jsonDocName = String(parsed.name || cleanName);
+    const jsonFolderId = `rally_json_${now}`;
+    waypoints.forEach((wp) => {
+      wp.folderId = jsonFolderId;
+      wp.folderName = jsonDocName;
+    });
+
     // Ensure auto L/C traps on GeoJSON tracks & sort candidates
     tracks.forEach((trk, idx) => {
+      trk.folderId = jsonFolderId;
+      trk.folderName = jsonDocName;
       if (trk.detectedSplitPoints) {
         trk.detectedSplitPoints.sort((a, b) => a.distKm - b.distKm);
       }
@@ -1245,7 +1321,7 @@ export function parseGpxOrGeoJsonToGeoResult(
     });
 
     return {
-      documentName: String(parsed.name || cleanName),
+      documentName: jsonDocName,
       tracks,
       waypoints,
     };
@@ -1453,8 +1529,16 @@ export function parseGpxOrGeoJsonToGeoResult(
     }
   });
 
+  const gpxFolderId = `rally_gpx_${now}`;
+  waypoints.forEach((wp) => {
+    wp.folderId = gpxFolderId;
+    wp.folderName = gpxMetaName;
+  });
+
   // Auto-add Start / Finish traps if missing on GPX tracks & sort split candidates
   tracks.forEach((trk, idx) => {
+    trk.folderId = gpxFolderId;
+    trk.folderName = gpxMetaName;
     if (trk.detectedSplitPoints) {
       trk.detectedSplitPoints.sort((a, b) => a.distKm - b.distKm);
     }

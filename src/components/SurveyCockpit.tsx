@@ -6,11 +6,14 @@ import {
   ArrowUp,
   ArrowUpLeft,
   ArrowUpRight,
+  Box,
   Clock,
   Compass,
   CornerUpLeft,
   CornerUpRight,
   Flag,
+  Folder,
+  Map as MapIcon,
   MapPin,
   Mountain,
   Navigation,
@@ -27,9 +30,11 @@ import {
   X,
 } from 'lucide-react';
 import { useNavSettings } from '../utils/navSettings';
+import type { GeoWaypoint } from '../utils/geoKmlParser';
 import {
   bearingBetweenDeg,
   createGpsKalmanProcessor,
+  ensureAutoTrapsFromBaseTrace,
   formatImportedTrackNamesList,
   getCapacitorGpsWatchOptions,
   haversineMetersVel,
@@ -40,7 +45,11 @@ import {
   type VelocityTrack,
   type VelocityTrap,
 } from '../utils/velocityEngine';
+import { loadVelocityDatabase, persistVelocityTracks } from '../utils/velocityStorage';
 import { VelocityMapboxView, type MapPolylineLayer } from './VelocityMapboxView';
+import { VirtualRecce3D } from './VirtualRecce3D';
+import { RallyOverviewMapModal } from './RallyOverviewMapModal';
+import { uploadAllTracksToCloud } from '../services/cloudTracksService';
 
 type DriveMode = 'gps' | 'simulator';
 
@@ -312,10 +321,26 @@ const SurveyFullscreenClockPill: React.FC<{ clockOffsetMs: number }> = ({ clockO
 
 interface SurveyCockpitProps {
   isActive?: boolean;
+  externalTracks?: VelocityTrack[];
+  externalWaypoints?: GeoWaypoint[];
+  initialSelectedTrackId?: string;
+  initialTransitTargetKey?: string;
+  forceOpenNavToken?: number;
+  onTracksUpdated?: () => void;
 }
 
-export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true }) => {
+export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
+  isActive = true,
+  externalTracks,
+  externalWaypoints,
+  initialSelectedTrackId,
+  initialTransitTargetKey,
+  forceOpenNavToken,
+  onTracksUpdated,
+}) => {
   const [settings] = useNavSettings();
+  const [surveySubTab, setSurveySubTab] = useState<'survey' | 'recce3d'>('survey');
+  const [standaloneTracks, setStandaloneTracks] = useState<VelocityTrack[]>([]);
   const [source, setSource] = useState<DriveMode>('gps');
   const [totalKm, setTotalKm] = useState(0);
   const [tripKm, setTripKm] = useState(0);
@@ -350,14 +375,19 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   const [importedGeo, setImportedGeo] = useState<ParsedGeoImportResult | null>(
     () => initialStoredGeo?.geo ?? null
   );
+  const [selectedTrackIdOverride, setSelectedTrackIdOverride] = useState<string | null>(
+    initialSelectedTrackId ?? null
+  );
   const [selectedTrackIdx, setSelectedTrackIdx] = useState<number>(
     () => initialStoredGeo?.selectedTrackIdx ?? 0
   );
+  const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [wazeNavActive, setWazeNavActive] = useState(false);
   const [navSpeedFullscreen, setNavSpeedFullscreen] = useState(false);
   const [wazeVoiceEnabled, setWazeVoiceEnabled] = useState(true);
+  const [showRallyOverviewModal, setShowRallyOverviewModal] = useState(false);
   const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(null);
   const [headingDeg, setHeadingDeg] = useState<number | null>(null);
   const [altitudeM, setAltitudeM] = useState<number | null>(null);
@@ -373,6 +403,35 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   const lastSpokenStepKeyRef = useRef<string>('');
   const calFactorRef = useRef(settings.calibrationPct / 100);
   calFactorRef.current = settings.calibrationPct / 100;
+
+  useEffect(() => {
+    if (externalTracks) return;
+    let alive = true;
+    loadVelocityDatabase()
+      .then(({ tracks }) => {
+        if (alive) setStandaloneTracks(tracks);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [externalTracks]);
+
+  useEffect(() => {
+    if (!forceOpenNavToken) return;
+    setSurveySubTab('survey');
+    if (initialTransitTargetKey?.startsWith('wp:')) {
+      setSelectedPoiId(initialTransitTargetKey.slice(3));
+    } else if (initialTransitTargetKey?.startsWith('ss:')) {
+      setSelectedPoiId(null);
+      setSelectedTrackIdOverride(initialTransitTargetKey.slice(3));
+    } else if (initialSelectedTrackId) {
+      setSelectedPoiId(null);
+      setSelectedTrackIdOverride(initialSelectedTrackId);
+    }
+    setWazeNavActive(true);
+    setNavSpeedFullscreen(true);
+  }, [forceOpenNavToken, initialTransitTargetKey, initialSelectedTrackId]);
 
   useEffect(() => {
     try {
@@ -405,15 +464,54 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     }
   }, [importedGeo, selectedTrackIdx]);
 
+  const mergedTracks: VelocityTrack[] = useMemo(() => {
+    const map = new Map<string, VelocityTrack>();
+    for (const tr of importedGeo?.tracks ?? []) {
+      map.set(tr.id, tr);
+    }
+    for (const tr of externalTracks ?? standaloneTracks) {
+      if (!map.has(tr.id)) {
+        map.set(tr.id, tr);
+      }
+    }
+    return Array.from(map.values());
+  }, [importedGeo, externalTracks, standaloneTracks]);
+
+  const mergedWaypoints: GeoWaypoint[] = useMemo(() => {
+    const byKey = new Map<string, GeoWaypoint>();
+    for (const wp of externalWaypoints ?? []) {
+      byKey.set(wp.name.trim().toLowerCase(), wp);
+    }
+    for (const tr of mergedTracks) {
+      for (const wp of tr.waypoints ?? []) {
+        byKey.set(wp.name.trim().toLowerCase(), wp);
+      }
+    }
+    for (const wp of importedGeo?.waypoints ?? []) {
+      byKey.set(wp.name.trim().toLowerCase(), wp);
+    }
+    return Array.from(byKey.values());
+  }, [externalWaypoints, mergedTracks, importedGeo]);
+
   const loadedTrack: VelocityTrack | null = useMemo(() => {
-    if (!importedGeo || importedGeo.tracks.length === 0) return null;
-    const clampedIdx = Math.min(selectedTrackIdx, importedGeo.tracks.length - 1);
-    return importedGeo.tracks[clampedIdx] ?? null;
-  }, [importedGeo, selectedTrackIdx]);
+    if (mergedTracks.length === 0) return null;
+    if (selectedTrackIdOverride) {
+      const matched = mergedTracks.find((t) => t.id === selectedTrackIdOverride);
+      if (matched) return matched;
+    }
+    const clampedIdx = Math.min(selectedTrackIdx, mergedTracks.length - 1);
+    return mergedTracks[clampedIdx] ?? mergedTracks[0] ?? null;
+  }, [mergedTracks, selectedTrackIdOverride, selectedTrackIdx]);
+
+  const activeTrackIndex = useMemo(() => {
+    if (!loadedTrack) return 0;
+    const idx = mergedTracks.findIndex((t) => t.id === loadedTrack.id);
+    return idx >= 0 ? idx : 0;
+  }, [mergedTracks, loadedTrack]);
 
   const multiTraces: MapPolylineLayer[] = useMemo(() => {
-    if (!importedGeo || importedGeo.tracks.length === 0) return [];
-    return importedGeo.tracks
+    if (mergedTracks.length === 0) return [];
+    return mergedTracks
       .filter((tr) => tr.baseTrace && tr.baseTrace.length >= 2)
       .map((tr, idx) => ({
         id: tr.id,
@@ -421,9 +519,9 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
         description: tr.description,
         color: tr.color || '#0288D1',
         trace: tr.baseTrace ?? [],
-        active: idx === selectedTrackIdx,
+        active: idx === activeTrackIndex,
       }));
-  }, [importedGeo, selectedTrackIdx]);
+  }, [mergedTracks, activeTrackIndex]);
 
   // Build ordered navigable points from KML/KMZ (either polyline trace or traps fallback)
   const routeSamples: VelocitySample[] = useMemo(() => {
@@ -772,19 +870,44 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
     setImportSummary(null);
     try {
       const result = await parseTrackFileToGeoResult(file);
-      setImportedGeo(result);
+      const preparedTracks = result.tracks.map((trk) => {
+        const withTraps = ensureAutoTrapsFromBaseTrace(trk);
+        return result.waypoints.length > 0 && !withTraps.waypoints
+          ? { ...withTraps, waypoints: result.waypoints }
+          : withTraps;
+      });
+      const preparedResult: ParsedGeoImportResult = {
+        ...result,
+        tracks: preparedTracks,
+      };
+      setImportedGeo(preparedResult);
       setSelectedTrackIdx(0);
+      setSelectedTrackIdOverride(preparedTracks[0]?.id ?? null);
+      setSelectedPoiId(null);
       simProgressKmRef.current = 0;
+      if (preparedTracks.length > 0) {
+        const db = await loadVelocityDatabase();
+        const existingIds = new Set(preparedTracks.map((t) => t.id));
+        const nextTracks = [
+          ...preparedTracks,
+          ...db.tracks.filter((t) => !existingIds.has(t.id)),
+        ];
+        await persistVelocityTracks(nextTracks);
+        setStandaloneTracks(nextTracks);
+        window.dispatchEvent(new Event('pitstop:velocity-db-updated'));
+        onTracksUpdated?.();
+        void uploadAllTracksToCloud(preparedTracks);
+      }
 
-      if (result.tracks.length >= 2) {
-        const names = formatImportedTrackNamesList(result.tracks.map((t) => t.name));
+      if (preparedTracks.length >= 2) {
+        const names = formatImportedTrackNamesList(preparedTracks.map((t) => t.name));
         const wpSuffix =
           result.waypoints.length > 0
             ? ` + ${result.waypoints.length} ponto${result.waypoints.length > 1 ? 's' : ''} de apoio`
             : '';
-        setImportSummary(`${result.tracks.length} especiais importadas: ${names}${wpSuffix}.`);
-      } else if (result.tracks.length === 1) {
-        const t = result.tracks[0];
+        setImportSummary(`${preparedTracks.length} especiais importadas: ${names}${wpSuffix}.`);
+      } else if (preparedTracks.length === 1) {
+        const t = preparedTracks[0];
         const wpSuffix =
           result.waypoints.length > 0
             ? ` + ${result.waypoints.length} ponto${result.waypoints.length > 1 ? 's' : ''} no mapa`
@@ -794,7 +917,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
         setImportSummary(`${result.waypoints.length} pontos de interesse carregados no mapa.`);
       }
 
-      const firstTrack = result.tracks[0];
+      const firstTrack = preparedTracks[0];
       const firstPt =
         firstTrack?.baseTrace?.[0] ?? firstTrack?.traps[0] ?? result.waypoints[0];
       if (firstPt && source === 'simulator') {
@@ -820,9 +943,12 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   const handleClearImportedGeo = () => {
     setImportedGeo(null);
     setSelectedTrackIdx(0);
+    setSelectedTrackIdOverride(null);
+    setSelectedPoiId(null);
     setImportSummary(null);
     setImportError(null);
     setWazeNavActive(false);
+    setNavSpeedFullscreen(false);
     simProgressKmRef.current = 0;
     try {
       localStorage.removeItem(SURVEY_GEO_STORAGE_KEY);
@@ -863,23 +989,83 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
       ? Math.round(avgSpeedSamples.reduce((a, b) => a + b, 0) / avgSpeedSamples.length)
       : 0;
 
-  const toggleWazeNavigation = () => {
-    setWazeNavActive((prev) => {
-      const next = !prev;
-      if (next && !currentPos && routeSamples.length > 0) {
-        setCurrentPos({ lat: routeSamples[0].lat, lon: routeSamples[0].lon });
-        setHeadingDeg(
-          bearingBetweenDeg(
-            routeSamples[0].lat,
-            routeSamples[0].lon,
-            routeSamples[1].lat,
-            routeSamples[1].lon
-          )
-        );
+  const transitDestination = useMemo(() => {
+    if (selectedPoiId && mergedWaypoints.length > 0) {
+      const wp = mergedWaypoints.find((item) => item.id === selectedPoiId);
+      if (wp) {
+        const distM = currentPos
+          ? haversineMetersVel(currentPos.lat, currentPos.lon, wp.lat, wp.lon)
+          : null;
+        const absBrg = currentPos
+          ? bearingBetweenDeg(currentPos.lat, currentPos.lon, wp.lat, wp.lon)
+          : 0;
+        const relArrowDeg =
+          headingDeg !== null ? (absBrg - headingDeg + 360) % 360 : absBrg;
+        return {
+          id: wp.id,
+          name: wp.name,
+          kind: 'poi' as const,
+          lat: wp.lat,
+          lon: wp.lon,
+          color: wp.color || '#F59E0B',
+          distM,
+          relArrowDeg,
+        };
       }
-      return next;
-    });
-  };
+    }
+    if (loadedTrack) {
+      const startTrap =
+        loadedTrack.traps.find((t) => t.kind === 'start' || t.kind === 'start_finish') ??
+        loadedTrack.traps[0];
+      const pt = startTrap
+        ? { lat: startTrap.lat, lon: startTrap.lon }
+        : routeSamples[0]
+          ? { lat: routeSamples[0].lat, lon: routeSamples[0].lon }
+          : null;
+      if (pt) {
+        const distM = currentPos
+          ? haversineMetersVel(currentPos.lat, currentPos.lon, pt.lat, pt.lon)
+          : null;
+        const absBrg = currentPos
+          ? bearingBetweenDeg(currentPos.lat, currentPos.lon, pt.lat, pt.lon)
+          : 0;
+        const relArrowDeg =
+          headingDeg !== null ? (absBrg - headingDeg + 360) % 360 : absBrg;
+        return {
+          id: loadedTrack.id,
+          name: `${loadedTrack.name} · Largada`,
+          kind: 'ss' as const,
+          lat: pt.lat,
+          lon: pt.lon,
+          color: loadedTrack.color || '#38BDF8',
+          distM,
+          relArrowDeg,
+        };
+      }
+    }
+    if (mergedWaypoints.length > 0) {
+      const wp = mergedWaypoints[0];
+      const distM = currentPos
+        ? haversineMetersVel(currentPos.lat, currentPos.lon, wp.lat, wp.lon)
+        : null;
+      const absBrg = currentPos
+        ? bearingBetweenDeg(currentPos.lat, currentPos.lon, wp.lat, wp.lon)
+        : 0;
+      const relArrowDeg =
+        headingDeg !== null ? (absBrg - headingDeg + 360) % 360 : absBrg;
+      return {
+        id: wp.id,
+        name: wp.name,
+        kind: 'poi' as const,
+        lat: wp.lat,
+        lon: wp.lon,
+        color: wp.color || '#F59E0B',
+        distM,
+        relArrowDeg,
+      };
+    }
+    return null;
+  }, [selectedPoiId, mergedWaypoints, loadedTrack, routeSamples, currentPos, headingDeg]);
 
   const startSpeedNavigation = () => {
     setWazeNavActive(true);
@@ -905,17 +1091,63 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
   return (
     <div
       className={`mx-auto max-w-5xl space-y-2.5 text-[var(--ps-text)] rounded-2xl transition-all ${
-        recceZone === 'over'
+        surveySubTab === 'survey' && recceZone === 'over'
           ? 'ring-2 ring-red-500 bg-red-950/20 p-1.5 shadow-[0_0_32px_rgba(239,68,68,0.45)]'
           : ''
       }`}
     >
-      {/* Top Header: Levantamento & Hodômetro + GPS/Simulador + Importar KML/KMZ */}
+      {/* Unified Sub-Tabs: 1) Levantamento & Deslocamento  2) Reconhecimento Virtual 3D */}
+      <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-1.5">
+        <button
+          type="button"
+          onClick={() => setSurveySubTab('survey')}
+          className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 text-xs font-extrabold tracking-wide uppercase transition-colors ${
+            surveySubTab === 'survey'
+              ? 'pitstop-btn-red'
+              : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+          }`}
+        >
+          <Compass className="h-4 w-4 shrink-0" />
+          <span className="truncate">Levantamento &amp; Deslocamento</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setNavSpeedFullscreen(false);
+            setWazeNavActive(false);
+            setSurveySubTab('recce3d');
+          }}
+          className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-2.5 text-xs font-extrabold tracking-wide uppercase transition-colors ${
+            surveySubTab === 'recce3d'
+              ? 'pitstop-btn-red'
+              : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+          }`}
+        >
+          <Box className="h-4 w-4 shrink-0" />
+          <span className="truncate">Reconhecimento Virtual 3D</span>
+        </button>
+      </div>
+
+      {surveySubTab === 'recce3d' ? (
+        <VirtualRecce3D
+          track={loadedTrack}
+          availableTracks={mergedTracks}
+          onSelectTrackId={(id) => {
+            setSelectedTrackIdOverride(id);
+            const idx = mergedTracks.findIndex((t) => t.id === id);
+            if (idx >= 0) setSelectedTrackIdx(idx);
+          }}
+          waypoints={mergedWaypoints}
+        />
+      ) : (
+        <>
+      {/* Top Header: Levantamento & Deslocamento + GPS/Simulador + Importar KML/KMZ */}
       <section className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <Compass className="h-4 w-4 shrink-0 text-[var(--ps-accent)]" />
           <h1 className="truncate font-['Barlow_Condensed'] text-lg font-extrabold italic tracking-wide uppercase">
-            Levantamento &amp; Hodômetro
+            Levantamento &amp; Deslocamento
           </h1>
         </div>
 
@@ -1110,13 +1342,13 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
             </p>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             {importedGeo && (
               <button
                 type="button"
                 onClick={handleClearImportedGeo}
                 title="Remover arquivo KML/GPX salvo"
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-red-500/50 hover:text-red-400 transition-colors"
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border)] bg-transparent px-2 text-[10px] font-bold text-[var(--ps-muted)] hover:border-[var(--ps-border-strong)] hover:text-[var(--ps-text)] transition-colors"
               >
                 <X className="h-3 w-3 shrink-0" />
                 <span>Limpar Arquivo</span>
@@ -1140,24 +1372,11 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
 
             <button
               type="button"
-              onClick={toggleWazeNavigation}
-              className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-extrabold uppercase transition-colors ${
-                wazeNavActive
-                  ? 'bg-sky-500 text-slate-950'
-                  : 'border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-sky-400'
-              }`}
-            >
-              <Navigation className="h-3 w-3" />
-              <span>{wazeNavActive ? 'Navegando' : 'Navegar'}</span>
-            </button>
-
-            <button
-              type="button"
               onClick={startSpeedNavigation}
-              className="pitstop-btn-red inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-extrabold uppercase transition-colors"
+              className="pitstop-btn-red inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[11px] font-extrabold uppercase transition-colors"
             >
-              <Navigation className="h-3 w-3" />
-              <span>Iniciar Navegação</span>
+              <Navigation className="h-3.5 w-3.5" />
+              <span>Navegar em Tela Cheia</span>
             </button>
           </div>
         </div>
@@ -1201,15 +1420,33 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           </div>
         )}
 
-        {importedGeo && importedGeo.tracks.length >= 2 && (
+        {(mergedTracks.length >= 1 || mergedWaypoints.length > 0) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {importedGeo.tracks.map((tr, idx) => {
-              const isSelected = idx === selectedTrackIdx;
+            {loadedTrack?.folderName && (
+              <span className="inline-flex items-center gap-1 rounded-lg border border-amber-400/35 bg-amber-500/10 px-2 py-1 text-[10px] font-extrabold text-amber-300">
+                <Folder className="h-3 w-3 shrink-0" />
+                <span className="max-w-[160px] truncate">{loadedTrack.folderName}</span>
+              </span>
+            )}
+            {mergedTracks.length >= 1 && (
+              <button
+                type="button"
+                onClick={() => setShowRallyOverviewModal(true)}
+                className="inline-flex items-center gap-1 rounded-lg border border-sky-400/45 bg-sky-500/15 px-2.5 py-1 text-[10px] font-extrabold text-sky-300 uppercase hover:bg-sky-500/25 active:scale-95"
+              >
+                <MapIcon className="h-3 w-3 shrink-0" />
+                <span>Ver Mapa da Prova</span>
+              </button>
+            )}
+            {mergedTracks.map((tr, idx) => {
+              const isSelected = !selectedPoiId && loadedTrack?.id === tr.id;
               return (
                 <button
                   key={tr.id}
                   type="button"
                   onClick={() => {
+                    setSelectedPoiId(null);
+                    setSelectedTrackIdOverride(tr.id);
                     setSelectedTrackIdx(idx);
                     simProgressKmRef.current = 0;
                   }}
@@ -1230,6 +1467,27 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                 </button>
               );
             })}
+            {mergedWaypoints.map((wp) => {
+              const isSelected = selectedPoiId === wp.id;
+              return (
+                <button
+                  key={wp.id}
+                  type="button"
+                  onClick={() => setSelectedPoiId(wp.id)}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                    isSelected
+                      ? 'border-amber-400 bg-amber-500/15 text-[var(--ps-text)]'
+                      : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+                  }`}
+                >
+                  <MapPin
+                    className="h-3 w-3 shrink-0"
+                    style={{ color: wp.color || '#F59E0B' }}
+                  />
+                  <span className="truncate max-w-[160px]">{wp.name}</span>
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -1242,9 +1500,9 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           traceColor={loadedTrack?.color}
           multiTraces={multiTraces.length > 0 ? multiTraces : undefined}
           waypoints={
-            importedGeo
+            mergedWaypoints.length > 0 || (loadedTrack?.detectedSplitPoints?.length ?? 0) > 0
               ? [
-                  ...importedGeo.waypoints,
+                  ...mergedWaypoints,
                   ...(loadedTrack?.detectedSplitPoints ?? []).map((pt) => ({
                     id: pt.id,
                     name: pt.originalName,
@@ -1258,32 +1516,144 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           orderedTraps={orderedTraps}
           postEditIdx={guidance ? guidance.closestIdx : 0}
           currentPos={currentPos}
-          navigationMode={wazeNavActive}
+          navigationMode={wazeNavActive || navSpeedFullscreen}
           navHeadingDeg={headingDeg}
+          transitRoute={
+            navSpeedFullscreen && transitDestination
+              ? {
+                  toLat: transitDestination.lat,
+                  toLon: transitDestination.lon,
+                  label: transitDestination.name,
+                  color: transitDestination.color,
+                }
+              : null
+          }
+          onSelectWaypoint={(wp) => {
+            setSelectedPoiId(wp.id);
+          }}
           forceFullscreen={navSpeedFullscreen ? true : undefined}
           onFullscreenToggle={
-            navSpeedFullscreen ? () => setNavSpeedFullscreen(false) : undefined
+            navSpeedFullscreen
+              ? () => {
+                  setNavSpeedFullscreen(false);
+                  setWazeNavActive(false);
+                }
+              : undefined
           }
           fullscreenTopOverlay={
-            navSpeedFullscreen ? undefined : (
+            navSpeedFullscreen ? (
+              <div className="pointer-events-auto flex w-full flex-col items-center gap-1.5 px-2 pt-1">
+                {transitDestination && (
+                  <div className="flex w-full max-w-md items-center justify-between gap-2.5 rounded-xl border border-white/15 bg-black/75 px-3 py-2 text-white shadow-xl backdrop-blur-md">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-sky-400/40 bg-sky-500/20">
+                        <ArrowUp
+                          className="h-5 w-5 text-sky-300 transition-transform duration-200"
+                          style={{
+                            transform: `rotate(${Math.round(transitDestination.relArrowDeg)}deg)`,
+                          }}
+                        />
+                      </div>
+                      <div className="min-w-0 leading-tight">
+                        <p className="text-[9px] font-extrabold tracking-wider text-sky-300 uppercase">
+                          Destino · {transitDestination.kind === 'poi' ? 'Ponto Apoio' : 'Largada'}
+                        </p>
+                        <p className="truncate text-xs font-extrabold text-white">
+                          {transitDestination.name}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right font-mono tabular-nums">
+                      <p className="text-sm font-black text-emerald-300">
+                        {transitDestination.distM === null
+                          ? '--'
+                          : transitDestination.distM >= 1000
+                            ? `${(transitDestination.distM / 1000).toFixed(2).replace('.', ',')} km`
+                            : `${Math.round(transitDestination.distM)} m`}
+                      </p>
+                      <p className="text-[10px] font-bold text-white/60">
+                        {speedKmh} km/h
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {(mergedTracks.length > 0 || mergedWaypoints.length > 0) && (
+                  <div className="flex max-w-md items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {mergedTracks.map((tr, idx) => {
+                      const active = !selectedPoiId && loadedTrack?.id === tr.id;
+                      return (
+                        <button
+                          key={`fs_tr_${tr.id}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedPoiId(null);
+                            setSelectedTrackIdOverride(tr.id);
+                            setSelectedTrackIdx(idx);
+                          }}
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-extrabold transition-colors ${
+                            active
+                              ? 'border-sky-400 bg-sky-500/25 text-white'
+                              : 'border-white/15 bg-black/65 text-white/75 hover:text-white'
+                          }`}
+                        >
+                          <Flag className="h-3 w-3 shrink-0" style={{ color: tr.color || '#38BDF8' }} />
+                          <span className="max-w-[110px] truncate">{tr.name}</span>
+                        </button>
+                      );
+                    })}
+                    {mergedWaypoints.map((wp) => {
+                      const active = selectedPoiId === wp.id;
+                      return (
+                        <button
+                          key={`fs_wp_${wp.id}`}
+                          type="button"
+                          onClick={() => setSelectedPoiId(wp.id)}
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-extrabold transition-colors ${
+                            active
+                              ? 'border-amber-400 bg-amber-500/25 text-white'
+                              : 'border-white/15 bg-black/65 text-white/75 hover:text-white'
+                          }`}
+                        >
+                          <MapPin className="h-3 w-3 shrink-0 text-amber-400" />
+                          <span className="max-w-[120px] truncate">{wp.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
               <SurveyFullscreenClockPill clockOffsetMs={settings.clockOffsetMs} />
             )
           }
           fullscreenZoomBottomClass={
-            navSpeedFullscreen ? 'bottom-[96px] sm:bottom-[100px]' : 'bottom-[88px] sm:bottom-[92px]'
+            navSpeedFullscreen ? 'bottom-[104px] sm:bottom-[108px]' : 'bottom-[88px] sm:bottom-[92px]'
           }
           fullscreenOverlayFullWidth={!navSpeedFullscreen}
           fullscreenOverlay={
             navSpeedFullscreen ? (
-              <div className="mx-auto w-full max-w-xs rounded-2xl border border-white/20 bg-black/65 px-3 py-2.5 text-white shadow-2xl backdrop-blur-md">
+              <div
+                className={`mx-auto w-full max-w-xs rounded-2xl border px-3 py-2.5 text-white shadow-2xl backdrop-blur-md transition-colors ${
+                  recceZone === 'over'
+                    ? 'border-red-500 bg-red-950/90 ring-2 ring-red-500/80'
+                    : recceZone === 'warning'
+                      ? 'border-amber-400 bg-amber-950/85'
+                      : 'border-white/20 bg-black/70'
+                }`}
+              >
                 <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10">
-                  <span className="text-[10px] font-extrabold tracking-wider text-white/80 uppercase">
-                    Limite de Velocidade
+                  <span className="text-[10px] font-extrabold tracking-wider text-white/85 uppercase">
+                    {recceZone === 'over'
+                      ? 'ALERTA: ACIMA DO LIMITE!'
+                      : recceZone === 'warning'
+                        ? 'PRÓXIMO DO LIMITE'
+                        : 'Limite de Velocidade'}
                   </span>
                   <span
                     className={`font-mono text-xs font-black tabular-nums ${
                       recceZone === 'over'
-                        ? 'text-[#FF2A2A] animate-pulse'
+                        ? 'text-red-300 animate-pulse'
                         : recceZone === 'warning'
                           ? 'text-amber-300'
                           : 'text-[#6EE7B7]'
@@ -1343,7 +1713,10 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
                   </button>
                   <button
                     type="button"
-                    onClick={() => setNavSpeedFullscreen(false)}
+                    onClick={() => {
+                      setNavSpeedFullscreen(false);
+                      setWazeNavActive(false);
+                    }}
                     className="inline-flex h-10 items-center justify-center rounded-xl border border-white/20 bg-white/10 px-2.5 text-[11px] font-extrabold text-white/90 uppercase active:scale-95"
                   >
                     Fechar
@@ -1416,7 +1789,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
               </div>
             )
           }
-          containerClassName="relative mt-2 h-56 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-72"
+          containerClassName="relative mt-2 h-72 w-full overflow-hidden rounded-xl border border-[var(--ps-border)] bg-[#000000] sm:h-96"
         />
       </section>
 
@@ -1941,6 +2314,66 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({ isActive = true })
           )}
         </div>
       </section>
+        </>
+      )}
+
+      {(() => {
+        const activeFolderId = loadedTrack?.folderId;
+        const activeFolderName = loadedTrack?.folderName || importedGeo?.documentName;
+        const folderTracks =
+          activeFolderId || activeFolderName
+            ? mergedTracks.filter(
+                (t) =>
+                  (activeFolderId && t.folderId === activeFolderId) ||
+                  (activeFolderName && t.folderName === activeFolderName)
+              )
+            : mergedTracks;
+        const overviewTracks = folderTracks.length > 0 ? folderTracks : mergedTracks;
+        const folderWps =
+          activeFolderId || activeFolderName
+            ? mergedWaypoints.filter(
+                (wp) =>
+                  (activeFolderId && wp.folderId === activeFolderId) ||
+                  (activeFolderName && wp.folderName === activeFolderName)
+              )
+            : mergedWaypoints;
+        const overviewWps = folderWps.length > 0 ? folderWps : mergedWaypoints;
+        return (
+          <RallyOverviewMapModal
+            isOpen={showRallyOverviewModal}
+            rallyName={activeFolderName || 'Mapa da Prova'}
+            tracks={overviewTracks}
+            waypoints={overviewWps}
+            activeTrackId={loadedTrack?.id}
+            currentPos={currentPos}
+            onClose={() => setShowRallyOverviewModal(false)}
+            onSelectStage={(tr) => {
+              setSelectedPoiId(null);
+              setSelectedTrackIdOverride(tr.id);
+              const idx = mergedTracks.findIndex((item) => item.id === tr.id);
+              if (idx >= 0) setSelectedTrackIdx(idx);
+              simProgressKmRef.current = 0;
+              setShowRallyOverviewModal(false);
+            }}
+            onNavigateToStage={(tr) => {
+              setSelectedPoiId(null);
+              setSelectedTrackIdOverride(tr.id);
+              const idx = mergedTracks.findIndex((item) => item.id === tr.id);
+              if (idx >= 0) setSelectedTrackIdx(idx);
+              simProgressKmRef.current = 0;
+              setShowRallyOverviewModal(false);
+              setWazeNavActive(true);
+              setNavSpeedFullscreen(true);
+            }}
+            onNavigateToWaypoint={(wp) => {
+              setSelectedPoiId(wp.id);
+              setShowRallyOverviewModal(false);
+              setWazeNavActive(true);
+              setNavSpeedFullscreen(true);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 };

@@ -5,8 +5,11 @@ import {
   ChevronDown,
   Copy,
   Download,
+  Eye,
+  EyeOff,
   Infinity as InfinityIcon,
   LogOut,
+  MapPin,
   RefreshCw,
   Save,
   Search,
@@ -30,6 +33,14 @@ import {
   updateDispositivoRecord,
   useAdminLicenseSession,
 } from '../services/deviceLicenseService';
+import {
+  deleteCloudTrack,
+  fetchAllCloudTracksAdmin,
+  isMissingCloudTracksTableError,
+  type PistaNuvemRecord,
+  PISTAS_NUVEM_SETUP_SQL,
+  updateCloudTrackApproval,
+} from '../services/cloudTracksService';
 import { ENABLE_SUBSCRIPTION_GATE, useAuthSession } from '../utils/authSubscription';
 
 interface AccountSubscriptionPanelProps {
@@ -123,7 +134,8 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
   } | null>(null);
   const [updatingApp, setUpdatingApp] = useState(false);
 
-  // Supabase dispositivos admin state
+  // Supabase dispositivos & pistas_nuvem admin state
+  const [adminTab, setAdminTab] = useState<'devices' | 'tracks'>('devices');
   const [devices, setDevices] = useState<DispositivoRecord[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesError, setDevicesError] = useState<string | null>(null);
@@ -133,6 +145,15 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
   const [editingNames, setEditingNames] = useState<Record<string, string>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [panelFeedback, setPanelFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const [cloudTracks, setCloudTracks] = useState<PistaNuvemRecord[]>([]);
+  const [cloudTracksLoading, setCloudTracksLoading] = useState(false);
+  const [cloudTracksError, setCloudTracksError] = useState<string | null>(null);
+  const [cloudTracksMissingTable, setCloudTracksMissingTable] = useState(false);
+  const [copiedTrackSql, setCopiedTrackSql] = useState(false);
+  const [trackSearch, setTrackSearch] = useState('');
+  const [busyTrackKey, setBusyTrackKey] = useState<string | null>(null);
+  const [confirmDeleteTrackKey, setConfirmDeleteTrackKey] = useState<string | null>(null);
 
   const handleVersionRowTap = () => {
     tapCountRef.current += 1;
@@ -176,11 +197,44 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
     }
   }, [isUnifiedAdmin]);
 
+  const loadCloudTracks = useCallback(async () => {
+    if (!isUnifiedAdmin) return;
+    setCloudTracksLoading(true);
+    setCloudTracksError(null);
+    setCloudTracksMissingTable(false);
+    try {
+      const list = await fetchAllCloudTracksAdmin();
+      setCloudTracks(list);
+    } catch (err) {
+      if (isMissingCloudTracksTableError(err)) {
+        setCloudTracksMissingTable(true);
+        setCloudTracksError(null);
+      } else {
+        setCloudTracksError(
+          err instanceof Error ? err.message : 'Não foi possível carregar as pistas da nuvem.'
+        );
+      }
+    } finally {
+      setCloudTracksLoading(false);
+    }
+  }, [isUnifiedAdmin]);
+
+  const handleCopyTrackSetupSql = async () => {
+    try {
+      await navigator.clipboard.writeText(PISTAS_NUVEM_SETUP_SQL);
+      setCopiedTrackSql(true);
+      window.setTimeout(() => setCopiedTrackSql(false), 2200);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
   useEffect(() => {
     if (isUnifiedAdmin) {
       void loadDevices();
+      void loadCloudTracks();
     }
-  }, [isUnifiedAdmin, loadDevices]);
+  }, [isUnifiedAdmin, loadDevices, loadCloudTracks]);
 
   const handleCopyCurrentId = async () => {
     try {
@@ -344,6 +398,75 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
     });
   }, [devices, deviceSearch, currentIdentity.deviceId]);
 
+  const getTrackRowKey = (t: PistaNuvemRecord, idx?: number) =>
+    t.id !== undefined && t.id !== null ? String(t.id) : `${t.device_id}::${t.nome}::${idx ?? 0}`;
+
+  const handleToggleTrackApproval = async (track: PistaNuvemRecord, key: string) => {
+    setBusyTrackKey(key);
+    setPanelFeedback(null);
+    try {
+      const nextApproved = !track.aprovada;
+      const updated = await updateCloudTrackApproval(track, nextApproved);
+      setCloudTracks((prev) =>
+        prev.map((item, i) => (getTrackRowKey(item, i) === key ? { ...item, ...updated } : item))
+      );
+      setPanelFeedback({
+        ok: true,
+        msg: nextApproved
+          ? `Pista "${track.nome}" aprovada na biblioteca online.`
+          : `Pista "${track.nome}" ocultada da biblioteca online.`,
+      });
+    } catch (err) {
+      setPanelFeedback({
+        ok: false,
+        msg: err instanceof Error ? err.message : 'Falha ao atualizar status da pista.',
+      });
+    } finally {
+      setBusyTrackKey(null);
+    }
+  };
+
+  const handleDeleteCloudTrack = async (track: PistaNuvemRecord, key: string) => {
+    setBusyTrackKey(key);
+    setPanelFeedback(null);
+    try {
+      await deleteCloudTrack(track);
+      setCloudTracks((prev) => prev.filter((item, i) => getTrackRowKey(item, i) !== key));
+      setConfirmDeleteTrackKey(null);
+      setPanelFeedback({
+        ok: true,
+        msg: `Pista "${track.nome}" removida da nuvem.`,
+      });
+    } catch (err) {
+      setPanelFeedback({
+        ok: false,
+        msg: err instanceof Error ? err.message : 'Falha ao excluir pista da nuvem.',
+      });
+    } finally {
+      setBusyTrackKey(null);
+    }
+  };
+
+  const cloudTrackSummary = useMemo(() => {
+    let approved = 0;
+    let hidden = 0;
+    for (const t of cloudTracks) {
+      if (t.aprovada) approved += 1;
+      else hidden += 1;
+    }
+    return { total: cloudTracks.length, approved, hidden };
+  }, [cloudTracks]);
+
+  const filteredCloudTracks = useMemo(() => {
+    const q = trackSearch.trim().toLowerCase();
+    if (!q) return cloudTracks;
+    return cloudTracks.filter(
+      (t) =>
+        t.nome.toLowerCase().includes(q) ||
+        t.device_id.toLowerCase().includes(q)
+    );
+  }, [cloudTracks, trackSearch]);
+
   const isAllowed = isUnifiedAdmin || deviceLicense?.status !== 'blocked';
 
   const statusText = useMemo(() => {
@@ -484,25 +607,32 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
         )}
       </section>
 
-      {/* PAINEL ADMIN SÓBRIO & EXPANSÍVEL (TELEMETRIA PRO / ACORDEÃO) */}
+      {/* PAINEL ADMIN SÓBRIO & EXPANSÍVEL (DISPOSITIVOS | PISTAS) */}
       {isUnifiedAdmin && (
         <section className="rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-surface)] p-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-[var(--ps-muted)]" />
               <h3 className="font-['Barlow_Condensed'] text-lg font-extrabold tracking-wide text-[var(--ps-text)] uppercase">
-                Painel Admin · Dispositivos
+                Painel Admin · {adminTab === 'devices' ? 'Dispositivos' : 'Pistas na Nuvem'}
               </h3>
             </div>
 
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                disabled={devicesLoading}
-                onClick={() => void loadDevices()}
+                disabled={adminTab === 'devices' ? devicesLoading : cloudTracksLoading}
+                onClick={() => {
+                  if (adminTab === 'devices') void loadDevices();
+                  else void loadCloudTracks();
+                }}
                 className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-3 text-xs font-bold text-[var(--ps-text)] hover:border-white/30"
               >
-                <RefreshCw className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${devicesLoading ? 'animate-spin' : ''}`} />
+                <RefreshCw
+                  className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${
+                    (adminTab === 'devices' ? devicesLoading : cloudTracksLoading) ? 'animate-spin' : ''
+                  }`}
+                />
                 <span>Atualizar</span>
               </button>
 
@@ -519,39 +649,37 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
             </div>
           </div>
 
-          {/* 4 Contadores Minimalistas (baixos, bordas finas, sem fundos coloridos) */}
-          <div className="grid grid-cols-4 gap-1.5 font-mono tabular-nums">
-            {[
-              { label: 'Total', value: summary.total, dotClass: 'bg-zinc-400' },
-              { label: 'Ativos', value: summary.active, dotClass: 'bg-emerald-400' },
-              { label: '24h', value: summary.trial, dotClass: 'bg-amber-400' },
-              { label: 'Bloq.', value: summary.blockedOrExpired, dotClass: 'bg-red-500' },
-            ].map((stat) => (
-              <div
-                key={stat.label}
-                className="flex flex-col items-center justify-center gap-0.5 rounded-lg border border-[var(--ps-border)] bg-[#141619] px-2 py-1.5 sm:flex-row sm:justify-between sm:px-2.5"
-              >
-                <span className="inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-[var(--ps-muted)] uppercase">
-                  <span className={`h-1.5 w-1.5 rounded-full ${stat.dotClass}`} />
-                  <span>{stat.label}</span>
-                </span>
-                <span className="text-sm font-black text-[var(--ps-text)] leading-none">
-                  {stat.value}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Busca */}
-          <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--ps-muted)]" />
-            <input
-              type="text"
-              value={deviceSearch}
-              onChange={(e) => setDeviceSearch(e.target.value)}
-              placeholder="Buscar piloto, ID de 5 dígitos ou aparelho..."
-              className="min-h-[38px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[#141619] pr-3 pl-9 text-[13px] font-medium text-[var(--ps-text)] focus:border-white/40 focus:outline-none"
-            />
+          {/* Abas Compactas: Dispositivos | Pistas */}
+          <div className="grid grid-cols-2 gap-1 rounded-lg border border-[var(--ps-border)] bg-[#141619] p-1 font-mono text-xs tabular-nums">
+            <button
+              type="button"
+              onClick={() => {
+                setPanelFeedback(null);
+                setAdminTab('devices');
+              }}
+              className={`min-h-[36px] rounded-md px-3 font-extrabold transition-colors ${
+                adminTab === 'devices'
+                  ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                  : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+              }`}
+            >
+              Dispositivos ({devices.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPanelFeedback(null);
+                setAdminTab('tracks');
+                if (cloudTracks.length === 0) void loadCloudTracks();
+              }}
+              className={`min-h-[36px] rounded-md px-3 font-extrabold transition-colors ${
+                adminTab === 'tracks'
+                  ? 'bg-[var(--ps-accent)] text-[var(--ps-accent-text)]'
+                  : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
+              }`}
+            >
+              Pistas ({cloudTracks.length})
+            </button>
           </div>
 
           {panelFeedback && (
@@ -566,23 +694,232 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
             </div>
           )}
 
-          {devicesError && (
-            <div className="rounded-lg border border-red-500/35 bg-[#141619] px-3 py-2 text-xs text-red-300">
-              {devicesError}
-            </div>
-          )}
+          {adminTab === 'tracks' ? (
+            <div className="space-y-3">
+              {/* Contadores de Pistas */}
+              <div className="grid grid-cols-3 gap-1.5 font-mono tabular-nums">
+                {[
+                  { label: 'Total', value: cloudTrackSummary.total, dotClass: 'bg-zinc-400' },
+                  { label: 'Aprovadas', value: cloudTrackSummary.approved, dotClass: 'bg-emerald-400' },
+                  { label: 'Ocultas', value: cloudTrackSummary.hidden, dotClass: 'bg-amber-400' },
+                ].map((stat) => (
+                  <div
+                    key={stat.label}
+                    className="flex items-center justify-between rounded-lg border border-[var(--ps-border)] bg-[#141619] px-2.5 py-1.5"
+                  >
+                    <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold tracking-wide text-[var(--ps-muted)] uppercase">
+                      <span className={`h-1.5 w-1.5 rounded-full ${stat.dotClass}`} />
+                      <span>{stat.label}</span>
+                    </span>
+                    <span className="text-sm font-black text-[var(--ps-text)] leading-none">
+                      {stat.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
 
-          {devicesLoading && devices.length === 0 ? (
-            <div className="py-6 text-center text-xs text-[var(--ps-muted)]">
-              Carregando dispositivos cadastrados...
-            </div>
-          ) : filteredDevices.length === 0 ? (
-            <div className="flex items-center justify-center gap-1.5 py-6 text-xs text-[var(--ps-muted)]">
-              <Users className="h-3.5 w-3.5" />
-              <span>Nenhum dispositivo encontrado.</span>
+              {/* Busca de Pistas */}
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--ps-muted)]" />
+                <input
+                  type="text"
+                  value={trackSearch}
+                  onChange={(e) => setTrackSearch(e.target.value)}
+                  placeholder="Buscar nome da pista ou ID do aparelho..."
+                  className="min-h-[38px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[#141619] pr-3 pl-9 text-[13px] font-medium text-[var(--ps-text)] focus:border-white/40 focus:outline-none"
+                />
+              </div>
+
+              {cloudTracksMissingTable && (
+                <div className="rounded-xl border border-amber-500/40 bg-[#141619] p-3 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-extrabold text-amber-300 uppercase">
+                        Tabela pistas_nuvem não configurada no Supabase
+                      </p>
+                      <p className="text-[11px] text-[var(--ps-muted)]">
+                        Execute o SQL abaixo no SQL Editor do seu projeto Supabase e toque em Atualizar.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyTrackSetupSql()}
+                      className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-amber-400/40 bg-amber-500/15 px-3 text-xs font-extrabold text-amber-200 hover:bg-amber-500/25"
+                    >
+                      {copiedTrackSql ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      <span>{copiedTrackSql ? 'SQL Copiado' : 'Copiar SQL'}</span>
+                    </button>
+                  </div>
+                  <pre className="max-h-40 overflow-auto rounded-lg border border-[var(--ps-border)] bg-black/60 p-2 font-mono text-[10px] leading-relaxed text-zinc-300 select-all">
+                    {PISTAS_NUVEM_SETUP_SQL}
+                  </pre>
+                </div>
+              )}
+
+              {cloudTracksError && !cloudTracksMissingTable && (
+                <div className="rounded-lg border border-red-500/35 bg-[#141619] px-3 py-2 text-xs text-red-300">
+                  {cloudTracksError}
+                </div>
+              )}
+
+              {cloudTracksLoading && cloudTracks.length === 0 ? (
+                <div className="py-6 text-center text-xs text-[var(--ps-muted)]">
+                  Carregando pistas enviadas para a nuvem...
+                </div>
+              ) : filteredCloudTracks.length === 0 && !cloudTracksMissingTable ? (
+                <div className="flex items-center justify-center gap-1.5 py-6 text-xs text-[var(--ps-muted)]">
+                  <MapPin className="h-3.5 w-3.5" />
+                  <span>Nenhuma pista encontrada em pistas_nuvem.</span>
+                </div>
+              ) : filteredCloudTracks.length > 0 ? (
+                <div className="divide-y divide-[var(--ps-border)] rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] overflow-hidden">
+                  {filteredCloudTracks.map((t, idx) => {
+                    const rowKey = getTrackRowKey(t, idx);
+                    const busy = busyTrackKey === rowKey;
+                    const confirming = confirmDeleteTrackKey === rowKey;
+
+                    return (
+                      <div
+                        key={rowKey}
+                        className="flex flex-wrap items-center justify-between gap-2.5 px-3 py-2.5"
+                      >
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="truncate text-[13px] font-bold text-[var(--ps-text)]">
+                              {t.nome}
+                            </span>
+                            <span className="font-mono text-xs font-extrabold text-[var(--ps-accent)] tabular-nums">
+                              {t.distancia.toFixed(2)} km
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[11px] text-[var(--ps-muted)] tabular-nums">
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                  t.aprovada ? 'bg-emerald-400' : 'bg-amber-400'
+                                }`}
+                              />
+                              <span className={t.aprovada ? 'text-emerald-300' : 'text-amber-300'}>
+                                {t.aprovada ? 'Aprovada' : 'Oculta'}
+                              </span>
+                            </span>
+                            <span>ID {t.device_id || '--'}</span>
+                            <span>{t.parciais.length} marcos</span>
+                            <span>{formatDateTimePtBr(t.criado_em)}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleToggleTrackApproval(t, rowKey)}
+                            className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[#141619] px-2.5 text-xs font-semibold text-[var(--ps-text)] hover:border-white/35 disabled:opacity-50"
+                          >
+                            {t.aprovada ? (
+                              <>
+                                <EyeOff className="h-3.5 w-3.5 text-amber-400" />
+                                <span>Ocultar</span>
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="h-3.5 w-3.5 text-emerald-400" />
+                                <span>Aprovar</span>
+                              </>
+                            )}
+                          </button>
+
+                          {confirming ? (
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void handleDeleteCloudTrack(t, rowKey)}
+                                className="inline-flex min-h-[34px] items-center rounded-md border border-red-500/50 bg-red-600/80 px-2.5 text-xs font-bold text-white hover:bg-red-600 disabled:opacity-50"
+                              >
+                                Confirmar
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => setConfirmDeleteTrackKey(null)}
+                                className="inline-flex min-h-[34px] items-center rounded-md border border-[var(--ps-border-strong)] bg-[#1B1E24] px-2 text-xs font-semibold text-[var(--ps-muted)]"
+                              >
+                                Não
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setConfirmDeleteTrackKey(rowKey)}
+                              className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-[var(--ps-border-strong)] bg-[#141619] px-2.5 text-xs font-semibold text-[var(--ps-muted)] hover:border-red-500/40 hover:text-red-300 disabled:opacity-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>Excluir</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           ) : (
-            <div className="divide-y divide-[var(--ps-border)] rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] overflow-hidden">
+            <>
+              {/* 4 Contadores Minimalistas */}
+              <div className="grid grid-cols-4 gap-1.5 font-mono tabular-nums">
+                {[
+                  { label: 'Total', value: summary.total, dotClass: 'bg-zinc-400' },
+                  { label: 'Ativos', value: summary.active, dotClass: 'bg-emerald-400' },
+                  { label: '24h', value: summary.trial, dotClass: 'bg-amber-400' },
+                  { label: 'Bloq.', value: summary.blockedOrExpired, dotClass: 'bg-red-500' },
+                ].map((stat) => (
+                  <div
+                    key={stat.label}
+                    className="flex flex-col items-center justify-center gap-0.5 rounded-lg border border-[var(--ps-border)] bg-[#141619] px-2 py-1.5 sm:flex-row sm:justify-between sm:px-2.5"
+                  >
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-[var(--ps-muted)] uppercase">
+                      <span className={`h-1.5 w-1.5 rounded-full ${stat.dotClass}`} />
+                      <span>{stat.label}</span>
+                    </span>
+                    <span className="text-sm font-black text-[var(--ps-text)] leading-none">
+                      {stat.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Busca */}
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--ps-muted)]" />
+                <input
+                  type="text"
+                  value={deviceSearch}
+                  onChange={(e) => setDeviceSearch(e.target.value)}
+                  placeholder="Buscar piloto, ID de 5 dígitos ou aparelho..."
+                  className="min-h-[38px] w-full rounded-lg border border-[var(--ps-border-strong)] bg-[#141619] pr-3 pl-9 text-[13px] font-medium text-[var(--ps-text)] focus:border-white/40 focus:outline-none"
+                />
+              </div>
+
+              {devicesError && (
+                <div className="rounded-lg border border-red-500/35 bg-[#141619] px-3 py-2 text-xs text-red-300">
+                  {devicesError}
+                </div>
+              )}
+
+              {devicesLoading && devices.length === 0 ? (
+                <div className="py-6 text-center text-xs text-[var(--ps-muted)]">
+                  Carregando dispositivos cadastrados...
+                </div>
+              ) : filteredDevices.length === 0 ? (
+                <div className="flex items-center justify-center gap-1.5 py-6 text-xs text-[var(--ps-muted)]">
+                  <Users className="h-3.5 w-3.5" />
+                  <span>Nenhum dispositivo encontrado.</span>
+                </div>
+              ) : (
+                <div className="divide-y divide-[var(--ps-border)] rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] overflow-hidden">
               {filteredDevices.map((d) => {
                 const isCurrent = d.device_id === currentIdentity.deviceId;
                 const expired = isLicenseExpired(d.expires_at);
@@ -834,7 +1171,9 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
                   </div>
                 );
               })}
-            </div>
+                </div>
+              )}
+            </>
           )}
         </section>
       )}
