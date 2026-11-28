@@ -1587,6 +1587,85 @@ export function parseGpxOrGeoJsonToGeoResult(
   };
 }
 
+function compactGeoSamples(
+  samples: GeoParsedSample[],
+  toleranceM = 1.5
+): GeoParsedSample[] {
+  const n = samples.length;
+  if (n === 0) return samples;
+  let kept = samples;
+  if (n >= 10 && toleranceM > 0) {
+    const avgLat = samples[Math.floor(n / 2)].lat;
+    const mPerDegLat = 111132;
+    const mPerDegLon = 111320 * Math.max(0.2, Math.cos((avgLat * Math.PI) / 180));
+    const keep = new Uint8Array(n);
+    keep[0] = 1;
+    keep[n - 1] = 1;
+    const stack: number[] = [0, n - 1];
+    while (stack.length > 0) {
+      const end = stack.pop()!;
+      const start = stack.pop()!;
+      if (end - start <= 1) continue;
+      const a = samples[start];
+      const b = samples[end];
+      const ax = a.lon * mPerDegLon;
+      const ay = a.lat * mPerDegLat;
+      const bx = b.lon * mPerDegLon;
+      const by = b.lat * mPerDegLat;
+      const dx = bx - ax;
+      const dy = by - ay;
+      const lenSq = dx * dx + dy * dy;
+      let maxDist = 0;
+      let maxIdx = -1;
+      for (let i = start + 1; i < end; i += 1) {
+        const p = samples[i];
+        const px = p.lon * mPerDegLon;
+        const py = p.lat * mPerDegLat;
+        let d = 0;
+        if (lenSq <= 1e-8) {
+          d = Math.hypot(px - ax, py - ay);
+        } else {
+          const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+          d = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+        }
+        if (d > maxDist) {
+          maxDist = d;
+          maxIdx = i;
+        }
+      }
+      if (maxIdx !== -1 && maxDist > toleranceM) {
+        keep[maxIdx] = 1;
+        if (maxIdx - start > 1) stack.push(start, maxIdx);
+        if (end - maxIdx > 1) stack.push(maxIdx, end);
+      }
+    }
+    kept = [];
+    for (let i = 0; i < n; i += 1) {
+      if (keep[i]) kept.push(samples[i]);
+    }
+  }
+  return kept.map((s) => ({
+    ...s,
+    lat: Math.round(s.lat * 1e6) / 1e6,
+    lon: Math.round(s.lon * 1e6) / 1e6,
+    speedKmh: Math.round((Number.isFinite(s.speedKmh) ? s.speedKmh : 0) * 10) / 10,
+    altitudeM: s.altitudeM !== null && Number.isFinite(s.altitudeM) ? Math.round(s.altitudeM * 10) / 10 : null,
+    distKm: Math.round((Number.isFinite(s.distKm) ? s.distKm : 0) * 10000) / 10000,
+    stageElapsedMs: Math.round(s.stageElapsedMs),
+  }));
+}
+
+function finalizeCompactGeoResult(res: ParsedGeoImportResult): ParsedGeoImportResult {
+  return {
+    ...res,
+    tracks: res.tracks.map((trk) =>
+      trk.baseTrace && trk.baseTrace.length >= 2
+        ? { ...trk, baseTrace: compactGeoSamples(trk.baseTrace, 1.5) }
+        : trk
+    ),
+  };
+}
+
 /**
  * Unifica leitura multi-especial para .KML, .KMZ, .GPX e .GeoJSON/.JSON
  */
@@ -1625,15 +1704,15 @@ export async function parseTrackFileToGeoResult(
       throw new Error('Conteúdo KML descompactado excede o limite seguro (25 MB).');
     }
     const kmlText = new TextDecoder('utf-8').decode(rawKmlBytes);
-    return parseKmlToGeoResult(kmlText, file.name);
+    return finalizeCompactGeoResult(parseKmlToGeoResult(kmlText, file.name));
   }
 
   const text = new TextDecoder('utf-8').decode(bytes);
   if (lowerName.endsWith('.kml') || /<kml[\s>]/i.test(text)) {
-    return parseKmlToGeoResult(text, file.name);
+    return finalizeCompactGeoResult(parseKmlToGeoResult(text, file.name));
   }
 
-  return parseGpxOrGeoJsonToGeoResult(text, file.name);
+  return finalizeCompactGeoResult(parseGpxOrGeoJsonToGeoResult(text, file.name));
 }
 
 export function formatImportedTrackNamesList(names: string[]): string {

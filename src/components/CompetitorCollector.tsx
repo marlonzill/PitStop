@@ -28,6 +28,7 @@ import {
   formatImportedTrackNamesList,
   type VelocitySample,
 } from '../utils/velocityEngine';
+import { idbKvGet, idbKvSet } from '../utils/idbCache';
 import type {
   ParsedRoadbook,
   PassageRecord,
@@ -151,28 +152,42 @@ export const CompetitorCollector: React.FC = () => {
   trackerRef.current = { passages, pending, nextExpectedIndex };
 
   useEffect(() => {
-    try {
-      const savedRaw = localStorage.getItem(STORAGE_KEY);
-      if (!savedRaw) return;
-      const saved = JSON.parse(savedRaw) as PersistedSession;
-      if (saved && saved.roadbook && saved.config) {
-        setPhase(saved.phase);
-        setConfig(saved.config);
-        setRoadbook(saved.roadbook);
-        setPassages(saved.passages || []);
-        setPending(saved.pending || {});
-        setNextExpectedIndex(saved.nextExpectedIndex || 0);
-        setStartTimestampMs(saved.startTimestampMs || 0);
-        setResultTxt(saved.resultTxt || '');
+    let alive = true;
+    (async () => {
+      try {
+        let saved = await idbKvGet<PersistedSession>(STORAGE_KEY);
+        if (!saved && typeof localStorage !== 'undefined') {
+          const savedRaw = localStorage.getItem(STORAGE_KEY);
+          if (savedRaw) {
+            saved = JSON.parse(savedRaw) as PersistedSession;
+            if (saved && saved.roadbook && saved.config) {
+              await idbKvSet(STORAGE_KEY, saved);
+              localStorage.removeItem(STORAGE_KEY);
+            }
+          }
+        }
+        if (alive && saved && saved.roadbook && saved.config) {
+          setPhase(saved.phase);
+          setConfig(saved.config);
+          setRoadbook(saved.roadbook);
+          setPassages(saved.passages || []);
+          setPending(saved.pending || {});
+          setNextExpectedIndex(saved.nextExpectedIndex || 0);
+          setStartTimestampMs(saved.startTimestampMs || 0);
+          setResultTxt(saved.resultTxt || '');
+        }
+      } catch {
+        // Ignore corrupt storage
       }
-    } catch {
-      // Ignore corrupt storage
-    }
+    })();
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
     if (phase === 'setup' || !roadbook) return;
-    try {
+    const t = window.setTimeout(() => {
       const payload: PersistedSession = {
         phase,
         config,
@@ -183,10 +198,9 @@ export const CompetitorCollector: React.FC = () => {
         startTimestampMs,
         resultTxt,
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // Ignore storage quota errors
-    }
+      void idbKvSet(STORAGE_KEY, payload);
+    }, 250);
+    return () => window.clearTimeout(t);
   }, [
     phase,
     config,

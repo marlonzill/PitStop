@@ -1514,6 +1514,18 @@ export const NavigationCockpit: React.FC<NavigationCockpitProps> = ({
     };
   }, [isRunning, driveSource]);
 
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, []);
+
   // Auto-advance with configurable Totem transition advance (meters before next tulipa)
   useEffect(() => {
     if (!roadbook || !autoAdvance) return;

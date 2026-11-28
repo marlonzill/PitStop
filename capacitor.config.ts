@@ -5,11 +5,19 @@ const config: CapacitorConfig = {
   appName: 'PitStop-Sports',
   webDir: 'dist',
   server: {
-    androidScheme: 'https',
+    cleartext: true,
+    androidScheme: 'http',
   },
   android: {
-    backgroundColor: '#070B12',
-    allowMixedContent: false,
+    backgroundColor: '#090A0D',
+    allowMixedContent: true,
+  },
+  plugins: {
+    StatusBar: {
+      overlaysWebView: false,
+      style: 'DARK',
+      backgroundColor: '#090A0D',
+    },
   },
 };
 

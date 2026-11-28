@@ -44,6 +44,10 @@ jobs:
           cd android
           ./gradlew assembleDebug
 
+      - name: Ler versão atual do package.json
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Renomear APK
         run: cp android/app/build/outputs/apk/debug/app-debug.apk PitStop-Sports.apk
 
@@ -54,9 +58,20 @@ jobs:
           path: PitStop-Sports.apk
           retention-days: 30
 
+      - name: Atualizar tag latest para o commit atual
+        run: |
+          git tag -f latest "${{ github.sha }}"
+          git push origin refs/tags/latest --force
+
       - name: Publicar APK na aba Releases (Link Público)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: PitStop-Sports (Última Versão)
+          name: PitStop-Sports v${{ steps.pkg.outputs.version }}
+          body: |
+            Compilação automática do **PitStop-Sports v${{ steps.pkg.outputs.version }}** (Modo Competidor).
+            Commit: `${{ github.sha }}`
+          make_latest: true
+          overwrite: true
           files: PitStop-Sports.apk
+

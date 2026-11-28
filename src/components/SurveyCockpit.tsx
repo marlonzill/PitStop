@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import {
@@ -11,8 +11,12 @@ import {
   Compass,
   CornerUpLeft,
   CornerUpRight,
+  Download,
   Flag,
   Folder,
+  Gauge,
+  Layers,
+  LocateFixed,
   Map as MapIcon,
   MapPin,
   Mountain,
@@ -21,6 +25,7 @@ import {
   Pencil,
   Play,
   RotateCcw,
+  RotateCw,
   Satellite,
   Settings2,
   ShieldAlert,
@@ -46,10 +51,29 @@ import {
   type VelocityTrap,
 } from '../utils/velocityEngine';
 import { loadVelocityDatabase, persistVelocityTracks } from '../utils/velocityStorage';
+import { idbKvDelete, idbKvGet, idbKvSet } from '../utils/idbCache';
 import { VelocityMapboxView, type MapPolylineLayer } from './VelocityMapboxView';
-import { VirtualRecce3D } from './VirtualRecce3D';
-import { RallyOverviewMapModal } from './RallyOverviewMapModal';
 import { uploadAllTracksToCloud } from '../services/cloudTracksService';
+
+const VirtualRecce3D = lazy(() =>
+  import('./VirtualRecce3D').then((m) => ({ default: m.VirtualRecce3D }))
+);
+const RallyOverviewMapModal = lazy(() =>
+  import('./RallyOverviewMapModal').then((m) => ({ default: m.RallyOverviewMapModal }))
+);
+import {
+  computeOsrmGuidanceFromRoute,
+  downloadRallyOfflineBundle,
+  fetchAndCacheLiveOsrmRoute,
+  findBestCachedTransitRoute,
+  findNearestOfflineRouteEntry,
+  formatBytesCompact,
+  loadOfflineRallyPacks,
+  OFFLINE_MAPS_UPDATED_EVENT,
+  type CachedTransitRoute,
+  type OfflineDownloadProgress,
+  type OfflineRallyPackMeta,
+} from '../utils/offlineMapsService';
 
 type DriveMode = 'gps' | 'simulator';
 
@@ -59,6 +83,7 @@ type ManeuverKind =
   | 'left'
   | 'slight-right'
   | 'right'
+  | 'roundabout'
   | 'uturn'
   | 'finish';
 
@@ -87,27 +112,20 @@ interface StoredSurveyGeo {
   selectedTrackIdx: number;
 }
 
-function loadStoredSurveyGeo(): StoredSurveyGeo | null {
-  try {
-    const raw = localStorage.getItem(SURVEY_GEO_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<StoredSurveyGeo>;
-    if (
-      !parsed?.geo ||
-      !Array.isArray(parsed.geo.tracks) ||
-      !Array.isArray(parsed.geo.waypoints)
-    ) {
-      return null;
-    }
-    const maxIdx = Math.max(0, parsed.geo.tracks.length - 1);
-    const idx =
-      typeof parsed.selectedTrackIdx === 'number' && parsed.selectedTrackIdx >= 0
-        ? Math.min(maxIdx, Math.floor(parsed.selectedTrackIdx))
-        : 0;
-    return { geo: parsed.geo, selectedTrackIdx: idx };
-  } catch {
+function sanitizeStoredSurveyGeo(parsed: Partial<StoredSurveyGeo> | null | undefined): StoredSurveyGeo | null {
+  if (
+    !parsed?.geo ||
+    !Array.isArray(parsed.geo.tracks) ||
+    !Array.isArray(parsed.geo.waypoints)
+  ) {
     return null;
   }
+  const maxIdx = Math.max(0, parsed.geo.tracks.length - 1);
+  const idx =
+    typeof parsed.selectedTrackIdx === 'number' && parsed.selectedTrackIdx >= 0
+      ? Math.min(maxIdx, Math.floor(parsed.selectedTrackIdx))
+      : 0;
+  return { geo: parsed.geo, selectedTrackIdx: idx };
 }
 
 const DEFAULT_RECCE_PREFS: ReccePrefs = {
@@ -224,23 +242,24 @@ function classifyTurn(signedDeg: number): { kind: ManeuverKind; label: string } 
   return { kind: 'straight', label: 'Siga em frente' };
 }
 
-function renderManeuverIcon(kind: ManeuverKind) {
-  const cls = 'h-5 w-5 text-white shrink-0';
+function renderManeuverIcon(kind: ManeuverKind, sizeClass = 'h-5 w-5 text-white shrink-0') {
   switch (kind) {
     case 'left':
-      return <CornerUpLeft className={cls} />;
+      return <CornerUpLeft className={sizeClass} />;
     case 'slight-left':
-      return <ArrowUpLeft className={cls} />;
+      return <ArrowUpLeft className={sizeClass} />;
     case 'right':
-      return <CornerUpRight className={cls} />;
+      return <CornerUpRight className={sizeClass} />;
     case 'slight-right':
-      return <ArrowUpRight className={cls} />;
+      return <ArrowUpRight className={sizeClass} />;
+    case 'roundabout':
+      return <RotateCw className={sizeClass} />;
     case 'uturn':
-      return <RotateCcw className={cls} />;
+      return <RotateCcw className={sizeClass} />;
     case 'finish':
-      return <Flag className={cls} />;
+      return <Flag className={sizeClass} />;
     default:
-      return <ArrowUp className={cls} />;
+      return <ArrowUp className={sizeClass} />;
   }
 }
 
@@ -347,8 +366,8 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
   const [regressive, setRegressive] = useState(false);
   const [targetKm, setTargetKm] = useState(10.0);
   const [speedKmh, setSpeedKmh] = useState(0);
+  const [avgSpeedKmh, setAvgSpeedKmh] = useState(0);
   const [maxSpeedKmh, setMaxSpeedKmh] = useState(0);
-  const [avgSpeedSamples, setAvgSpeedSamples] = useState<number[]>([]);
   const [simSpeedKmh, setSimSpeedKmh] = useState(50);
   const [simRunning, setSimRunning] = useState(false);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
@@ -369,24 +388,26 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
   const lastRecceAlertTsRef = useRef<number>(0);
   const wasOverLimitRef = useRef<boolean>(false);
 
-  // KML / KMZ & Waze Navigation State (persistido no localStorage)
+  // KML / KMZ & Waze Navigation State (persistido no IndexedDB)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const initialStoredGeo = useMemo(() => loadStoredSurveyGeo(), []);
-  const [importedGeo, setImportedGeo] = useState<ParsedGeoImportResult | null>(
-    () => initialStoredGeo?.geo ?? null
-  );
+  const [importedGeo, setImportedGeo] = useState<ParsedGeoImportResult | null>(null);
+  const [surveyGeoHydrated, setSurveyGeoHydrated] = useState(false);
   const [selectedTrackIdOverride, setSelectedTrackIdOverride] = useState<string | null>(
     initialSelectedTrackId ?? null
   );
-  const [selectedTrackIdx, setSelectedTrackIdx] = useState<number>(
-    () => initialStoredGeo?.selectedTrackIdx ?? 0
-  );
+  const [selectedTrackIdx, setSelectedTrackIdx] = useState<number>(0);
   const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [wazeNavActive, setWazeNavActive] = useState(false);
   const [navSpeedFullscreen, setNavSpeedFullscreen] = useState(false);
   const [wazeVoiceEnabled, setWazeVoiceEnabled] = useState(true);
+  const [drivingMapTheme, setDrivingMapTheme] = useState<'satellite' | 'dark' | 'light'>('dark');
+  const [drivingHeadingUp, setDrivingHeadingUp] = useState(true);
+  const [drivingMapUserPaused, setDrivingMapUserPaused] = useState(false);
+  const [drivingRecenterTick, setDrivingRecenterTick] = useState(0);
+  const [showDrivingSpeedLimitPopover, setShowDrivingSpeedLimitPopover] = useState(false);
+  const [drivingClockNowMs, setDrivingClockNowMs] = useState(() => Date.now());
   const [showRallyOverviewModal, setShowRallyOverviewModal] = useState(false);
   const [currentPos, setCurrentPos] = useState<{ lat: number; lon: number } | null>(null);
   const [headingDeg, setHeadingDeg] = useState<number | null>(null);
@@ -403,6 +424,41 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
   const lastSpokenStepKeyRef = useRef<string>('');
   const calFactorRef = useRef(settings.calibrationPct / 100);
   calFactorRef.current = settings.calibrationPct / 100;
+  const avgSpeedSumRef = useRef(0);
+  const avgSpeedCountRef = useRef(0);
+  const totalKmRef = useRef(0);
+  const tripKmRef = useRef(0);
+  totalKmRef.current = totalKm;
+  tripKmRef.current = tripKm;
+  const speedKmhRef = useRef(0);
+  speedKmhRef.current = speedKmh;
+  const lastClosestRouteIdxRef = useRef<number>(-1);
+  const lastClosestRouteTrackIdRef = useRef<string>('');
+
+  // Mapas Offline + Rotas de Deslocamento OSRM pré-salvas
+  const [offlinePacks, setOfflinePacks] = useState<OfflineRallyPackMeta[]>(() =>
+    loadOfflineRallyPacks()
+  );
+  const [offlineDownloading, setOfflineDownloading] = useState(false);
+  const [offlineProg, setOfflineProg] = useState<OfflineDownloadProgress | null>(null);
+  const offlineAbortRef = useRef<AbortController | null>(null);
+  const [activeOsrmRoute, setActiveOsrmRoute] = useState<CachedTransitRoute | null>(null);
+  const [isRecalculatingRoute, setIsRecalculatingRoute] = useState(false);
+  const lastOsrmFetchKeyRef = useRef<string>('');
+  const lastRecalcAtMsRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!navSpeedFullscreen) return;
+    setDrivingClockNowMs(Date.now());
+    const id = window.setInterval(() => setDrivingClockNowMs(Date.now()), 5000);
+    return () => window.clearInterval(id);
+  }, [navSpeedFullscreen]);
+
+  useEffect(() => {
+    const syncPacks = () => setOfflinePacks(loadOfflineRallyPacks());
+    window.addEventListener(OFFLINE_MAPS_UPDATED_EVENT, syncPacks);
+    return () => window.removeEventListener(OFFLINE_MAPS_UPDATED_EVENT, syncPacks);
+  }, []);
 
   useEffect(() => {
     if (externalTracks) return;
@@ -450,19 +506,53 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
   }, [gaugeVisibility]);
 
   useEffect(() => {
-    try {
-      if (!importedGeo) {
-        localStorage.removeItem(SURVEY_GEO_STORAGE_KEY);
-      } else {
-        localStorage.setItem(
-          SURVEY_GEO_STORAGE_KEY,
-          JSON.stringify({ geo: importedGeo, selectedTrackIdx })
-        );
+    let alive = true;
+    (async () => {
+      try {
+        let saved = sanitizeStoredSurveyGeo(await idbKvGet<StoredSurveyGeo>(SURVEY_GEO_STORAGE_KEY));
+        if (!saved && typeof localStorage !== 'undefined') {
+          const raw = localStorage.getItem(SURVEY_GEO_STORAGE_KEY);
+          if (raw) {
+            saved = sanitizeStoredSurveyGeo(JSON.parse(raw) as Partial<StoredSurveyGeo>);
+            if (saved) {
+              await idbKvSet(SURVEY_GEO_STORAGE_KEY, saved);
+            }
+            localStorage.removeItem(SURVEY_GEO_STORAGE_KEY);
+          }
+        }
+        if (alive && saved) {
+          setImportedGeo(saved.geo);
+          setSelectedTrackIdx(saved.selectedTrackIdx);
+        }
+      } catch {
+        // ignore corrupt storage
+      } finally {
+        if (alive) setSurveyGeoHydrated(true);
       }
-    } catch {
-      // Ignore storage quota errors
+    })();
+    return () => {
+      alive = false;
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!surveyGeoHydrated) return;
+    if (!importedGeo) {
+      void idbKvDelete(SURVEY_GEO_STORAGE_KEY);
+      return;
     }
-  }, [importedGeo, selectedTrackIdx]);
+    const t = window.setTimeout(() => {
+      void idbKvSet(SURVEY_GEO_STORAGE_KEY, { geo: importedGeo, selectedTrackIdx });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [importedGeo, selectedTrackIdx, surveyGeoHydrated]);
 
   const mergedTracks: VelocityTrack[] = useMemo(() => {
     const map = new Map<string, VelocityTrack>();
@@ -557,13 +647,40 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
     [loadedTrack]
   );
 
-  // Continuous High-Accuracy GPS watcher with 2D Kalman Filter (detects walking step-by-step)
+  // Continuous High-Accuracy GPS watcher with 2D Kalman Filter + throttled UI flushes (~130ms)
   useEffect(() => {
     if (!isActive || source !== 'gps') return;
     let cancelled = false;
     let webWid: number | null = null;
     let capWid: string | null = null;
+    let lastUiFlushMs = 0;
+    let pendingMaxSpd = 0;
+    let lastAcc: number | null = null;
+    let lastPos: { lat: number; lon: number } | null = null;
+    let lastHdg: number | null = null;
+    let lastAlt: number | null = null;
+    let lastSpd = 0;
     kalmanRef.current.reset();
+
+    const flushGpsUi = (force = false) => {
+      const now = performance.now();
+      if (!force && now - lastUiFlushMs < 130) return;
+      lastUiFlushMs = now;
+      setGpsAccuracy(lastAcc);
+      if (lastPos) setCurrentPos(lastPos);
+      if (lastHdg !== null) setHeadingDeg(lastHdg);
+      if (lastAlt !== null) setAltitudeM(lastAlt);
+      setTotalKm(totalKmRef.current);
+      setTripKm(tripKmRef.current);
+      setSpeedKmh(lastSpd);
+      if (pendingMaxSpd > 0) {
+        const nextMax = pendingMaxSpd;
+        setMaxSpeedKmh((m) => Math.max(m, nextMax));
+      }
+      if (avgSpeedCountRef.current > 0) {
+        setAvgSpeedKmh(Math.round(avgSpeedSumRef.current / avgSpeedCountRef.current));
+      }
+    };
 
     const handlePos = (
       lat: number,
@@ -586,27 +703,25 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
         timestampMs: ts,
       });
 
-      setGpsAccuracy(filtered.accuracyM);
-      setCurrentPos({ lat: filtered.lat, lon: filtered.lon });
-      if (filtered.headingDeg !== null) {
-        setHeadingDeg(filtered.headingDeg);
-      }
-      if (altM !== null && Number.isFinite(altM)) {
-        setAltitudeM(Math.round(altM));
-      }
+      lastAcc = filtered.accuracyM;
+      lastPos = { lat: filtered.lat, lon: filtered.lon };
+      if (filtered.headingDeg !== null) lastHdg = filtered.headingDeg;
+      if (altM !== null && Number.isFinite(altM)) lastAlt = Math.round(altM);
 
       if (isCountingRef.current && filtered.distStepM > 0) {
         const scaledKm = (filtered.distStepM / 1000) * calFactorRef.current;
-        setTotalKm((v) => Math.max(0, v + scaledKm));
-        setTripKm((v) => Math.max(0, v + scaledKm));
+        totalKmRef.current = Math.max(0, totalKmRef.current + scaledKm);
+        tripKmRef.current = Math.max(0, tripKmRef.current + scaledKm);
       }
 
       const spdRounded = Math.round(filtered.speedKmh);
-      setSpeedKmh(spdRounded);
+      lastSpd = spdRounded;
       if (isCountingRef.current && spdRounded >= 2) {
-        setMaxSpeedKmh((m) => Math.max(m, spdRounded));
-        setAvgSpeedSamples((arr) => [...arr.slice(-119), spdRounded]);
+        pendingMaxSpd = Math.max(pendingMaxSpd, spdRounded);
+        avgSpeedSumRef.current += spdRounded;
+        avgSpeedCountRef.current += 1;
       }
+      flushGpsUi(lastUiFlushMs === 0);
     };
 
     const start = async () => {
@@ -681,7 +796,9 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
         setTripKm((v) => v + kmTick);
         if (simSpeedKmh >= 2) {
           setMaxSpeedKmh((m) => Math.max(m, simSpeedKmh));
-          setAvgSpeedSamples((arr) => [...arr.slice(-119), simSpeedKmh]);
+          avgSpeedSumRef.current += simSpeedKmh;
+          avgSpeedCountRef.current += 1;
+          setAvgSpeedKmh(Math.round(avgSpeedSumRef.current / avgSpeedCountRef.current));
         }
       }
       setSpeedKmh(simSpeedKmh);
@@ -757,26 +874,51 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
     }
   }, [reccePrefs.enabled, reccePrefs.speedLimitKmh, reccePrefs.soundEnabled, recceZone, speedKmh]);
 
-  // Compute Waze-style turn-by-turn guidance from current position + loaded KML/KMZ
+  // Compute Waze-style turn-by-turn guidance from current position + loaded KML/KMZ (sliding window search)
   const guidance: WazeGuidance | null = useMemo(() => {
     if (!loadedTrack || routeSamples.length < 2) return null;
+    if (lastClosestRouteTrackIdRef.current !== loadedTrack.id) {
+      lastClosestRouteTrackIdRef.current = loadedTrack.id;
+      lastClosestRouteIdxRef.current = -1;
+    }
     const totalRouteKm = routeSamples[routeSamples.length - 1].distKm;
     let closestIdx = 0;
 
     if (currentPos) {
       let bestDistM = Infinity;
-      for (let i = 0; i < routeSamples.length; i += 1) {
-        const dM = haversineMetersVel(
-          currentPos.lat,
-          currentPos.lon,
-          routeSamples[i].lat,
-          routeSamples[i].lon
-        );
-        if (dM < bestDistM) {
-          bestDistM = dM;
-          closestIdx = i;
+      const hintIdx = lastClosestRouteIdxRef.current;
+      if (hintIdx >= 0 && hintIdx < routeSamples.length) {
+        const wStart = Math.max(0, hintIdx - 25);
+        const wEnd = Math.min(routeSamples.length - 1, hintIdx + 80);
+        for (let i = wStart; i <= wEnd; i += 1) {
+          const dM = haversineMetersVel(
+            currentPos.lat,
+            currentPos.lon,
+            routeSamples[i].lat,
+            routeSamples[i].lon
+          );
+          if (dM < bestDistM) {
+            bestDistM = dM;
+            closestIdx = i;
+          }
         }
       }
+      if (hintIdx < 0 || bestDistM > 350) {
+        bestDistM = Infinity;
+        for (let i = 0; i < routeSamples.length; i += 1) {
+          const dM = haversineMetersVel(
+            currentPos.lat,
+            currentPos.lon,
+            routeSamples[i].lat,
+            routeSamples[i].lon
+          );
+          if (dM < bestDistM) {
+            bestDistM = dM;
+            closestIdx = i;
+          }
+        }
+      }
+      lastClosestRouteIdxRef.current = closestIdx;
     }
 
     const currentSample = routeSamples[closestIdx];
@@ -836,32 +978,6 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
       closestIdx,
     };
   }, [loadedTrack, routeSamples, orderedTraps, currentPos]);
-
-  // Optional pt-BR Waze Voice Guidance
-  useEffect(() => {
-    if (!wazeNavActive || !wazeVoiceEnabled || !guidance) return;
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    const dM = guidance.distToManeuverM;
-    const bucket = dM <= 45 ? 'now' : dM <= 180 ? '150m' : dM <= 500 ? '400m' : '';
-    if (!bucket) return;
-    const key = `${guidance.targetLabel}-${guidance.kind}-${bucket}`;
-    if (lastSpokenStepKeyRef.current === key) return;
-    lastSpokenStepKeyRef.current = key;
-
-    const spokenText =
-      bucket === 'now'
-        ? guidance.instruction
-        : `Em ${Math.round(dM / 10) * 10} metros, ${guidance.instruction.toLowerCase()}`;
-    try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(spokenText);
-      utter.lang = 'pt-BR';
-      utter.rate = 1.08;
-      window.speechSynthesis.speak(utter);
-    } catch {
-      // ignore speech errors
-    }
-  }, [wazeNavActive, wazeVoiceEnabled, guidance]);
 
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -950,6 +1066,7 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
     setWazeNavActive(false);
     setNavSpeedFullscreen(false);
     simProgressKmRef.current = 0;
+    void idbKvDelete(SURVEY_GEO_STORAGE_KEY);
     try {
       localStorage.removeItem(SURVEY_GEO_STORAGE_KEY);
     } catch {
@@ -962,9 +1079,12 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
     if (Number.isFinite(num) && num >= 0) {
       const nextKm = odoEditUnit === 'm' ? num / 1000 : num;
       if (which === 'total') {
+        totalKmRef.current = nextKm;
         setTotalKm(nextKm);
       } else {
-        setTripKm(regressive ? Math.max(0, targetKm - nextKm) : nextKm);
+        const resolved = regressive ? Math.max(0, targetKm - nextKm) : nextKm;
+        tripKmRef.current = resolved;
+        setTripKm(resolved);
       }
     }
     if (which === 'total') setEditingTotalOdo(false);
@@ -972,10 +1092,14 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
   };
 
   const handleResetAllSurvey = () => {
+    totalKmRef.current = 0;
+    tripKmRef.current = 0;
     setTotalKm(0);
     setTripKm(0);
     setMaxSpeedKmh(0);
-    setAvgSpeedSamples([]);
+    avgSpeedSumRef.current = 0;
+    avgSpeedCountRef.current = 0;
+    setAvgSpeedKmh(0);
     setRecceOverCount(0);
     setReccePeakSpeedKmh(0);
     simProgressKmRef.current = 0;
@@ -984,10 +1108,6 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
   const displayedTripKm = regressive ? Math.max(0, targetKm - tripKm) : tripKm;
   const totalMeters = Math.round(totalKm * 1000);
   const tripMeters = Math.round(displayedTripKm * 1000);
-  const avgSpeedKmh =
-    avgSpeedSamples.length > 0
-      ? Math.round(avgSpeedSamples.reduce((a, b) => a + b, 0) / avgSpeedSamples.length)
-      : 0;
 
   const transitDestination = useMemo(() => {
     if (selectedPoiId && mergedWaypoints.length > 0) {
@@ -1067,8 +1187,220 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
     return null;
   }, [selectedPoiId, mergedWaypoints, loadedTrack, routeSamples, currentPos, headingDeg]);
 
+  // Busca rota real pelas ruas/rodovias (OSRM online ou Cache Offline pré-salvo) sempre que houver destino e GPS
+  useEffect(() => {
+    if (!currentPos || !transitDestination) {
+      setActiveOsrmRoute(null);
+      return;
+    }
+
+    const cached = findBestCachedTransitRoute(
+      currentPos.lat,
+      currentPos.lon,
+      transitDestination.lat,
+      transitDestination.lon
+    );
+    if (cached) {
+      const check = computeOsrmGuidanceFromRoute(
+        cached,
+        currentPos.lat,
+        currentPos.lon,
+        speedKmhRef.current
+      );
+      if (check.distanceFromRouteM <= 40 || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        setActiveOsrmRoute(cached);
+        return;
+      }
+    }
+
+    const fetchKey = `${currentPos.lat.toFixed(2)},${currentPos.lon.toFixed(2)}->${transitDestination.lat.toFixed(4)},${transitDestination.lon.toFixed(4)}`;
+    if (lastOsrmFetchKeyRef.current === fetchKey) return;
+    lastOsrmFetchKeyRef.current = fetchKey;
+
+    const ctrl = new AbortController();
+    void fetchAndCacheLiveOsrmRoute(
+      currentPos.lat,
+      currentPos.lon,
+      transitDestination.lat,
+      transitDestination.lon,
+      'Posição Atual',
+      transitDestination.name,
+      ctrl.signal
+    ).then((route) => {
+      if (ctrl.signal.aborted) return;
+      if (route) {
+        setActiveOsrmRoute(route);
+      } else {
+        const offlineNearest = findNearestOfflineRouteEntry(
+          currentPos.lat,
+          currentPos.lon,
+          transitDestination.lat,
+          transitDestination.lon
+        );
+        if (offlineNearest) setActiveOsrmRoute(offlineNearest);
+      }
+    });
+    return () => ctrl.abort();
+  }, [currentPos, transitDestination]);
+
+  const osrmGuidance = useMemo(() => {
+    if (!activeOsrmRoute || !currentPos) return null;
+    return computeOsrmGuidanceFromRoute(activeOsrmRoute, currentPos.lat, currentPos.lon, speedKmh);
+  }, [activeOsrmRoute, currentPos, speedKmh]);
+
+  // Recálculo automático se o veículo sair da rota planejada (> 40 metros)
+  useEffect(() => {
+    if (!currentPos || !transitDestination || !activeOsrmRoute || !osrmGuidance) return;
+    if (osrmGuidance.distanceFromRouteM <= 40) return;
+
+    const nowMs = Date.now();
+    if (nowMs - lastRecalcAtMsRef.current < 6000) return;
+    lastRecalcAtMsRef.current = nowMs;
+
+    const ctrl = new AbortController();
+    setIsRecalculatingRoute(true);
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const nearestOffline = findNearestOfflineRouteEntry(
+        currentPos.lat,
+        currentPos.lon,
+        transitDestination.lat,
+        transitDestination.lon
+      );
+      if (nearestOffline && nearestOffline.id !== activeOsrmRoute.id) {
+        setActiveOsrmRoute(nearestOffline);
+      }
+      setIsRecalculatingRoute(false);
+      return () => ctrl.abort();
+    }
+
+    void fetchAndCacheLiveOsrmRoute(
+      currentPos.lat,
+      currentPos.lon,
+      transitDestination.lat,
+      transitDestination.lon,
+      'Posição Atual',
+      transitDestination.name,
+      ctrl.signal
+    ).then((recalculated) => {
+      if (ctrl.signal.aborted) return;
+      if (recalculated) {
+        setActiveOsrmRoute(recalculated);
+      } else {
+        const nearestOffline = findNearestOfflineRouteEntry(
+          currentPos.lat,
+          currentPos.lon,
+          transitDestination.lat,
+          transitDestination.lon
+        );
+        if (nearestOffline && nearestOffline.id !== activeOsrmRoute.id) {
+          setActiveOsrmRoute(nearestOffline);
+        }
+      }
+      setIsRecalculatingRoute(false);
+    });
+
+    return () => ctrl.abort();
+  }, [currentPos, transitDestination, activeOsrmRoute, osrmGuidance]);
+
+  // Optional pt-BR Waze Voice Guidance (prioritizes OSRM turn-by-turn street instructions)
+  useEffect(() => {
+    if (!wazeNavActive || !wazeVoiceEnabled) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+
+    const dM = osrmGuidance ? osrmGuidance.distToManeuverM : guidance?.distToManeuverM;
+    const rawInstr = osrmGuidance ? osrmGuidance.nextInstruction : guidance?.instruction;
+    const rawTarget = osrmGuidance
+      ? osrmGuidance.nextRoadName || transitDestination?.name || 'destino'
+      : guidance?.targetLabel;
+    const kindKey = osrmGuidance ? osrmGuidance.nextKind : guidance?.kind;
+
+    if (dM === undefined || !rawInstr || !kindKey) return;
+    const bucket = dM <= 45 ? 'now' : dM <= 180 ? '150m' : dM <= 500 ? '400m' : '';
+    if (!bucket) return;
+    const key = `${rawTarget}-${kindKey}-${bucket}`;
+    if (lastSpokenStepKeyRef.current === key) return;
+    lastSpokenStepKeyRef.current = key;
+
+    const spokenText =
+      bucket === 'now'
+        ? rawInstr
+        : `Em ${Math.round(dM / 10) * 10} metros, ${rawInstr.toLowerCase()}`;
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(spokenText);
+      utter.lang = 'pt-BR';
+      utter.rate = 1.08;
+      window.speechSynthesis.speak(utter);
+    } catch {
+      // ignore speech errors
+    }
+  }, [wazeNavActive, wazeVoiceEnabled, osrmGuidance, guidance, transitDestination]);
+
+  const activeRallyFolderKey = useMemo(() => {
+    const first = mergedTracks[0];
+    if (first?.folderId) return `folder:${first.folderId}`;
+    if (first?.folderName) return `name:${first.folderName.trim().toLowerCase()}`;
+    if (importedGeo?.documentName) return `name:${importedGeo.documentName.trim().toLowerCase()}`;
+    return 'rally-survey-default';
+  }, [mergedTracks, importedGeo]);
+
+  const activeRallyFolderName = useMemo(() => {
+    return (
+      mergedTracks[0]?.folderName ||
+      importedGeo?.documentName ||
+      loadedTrack?.name ||
+      'Mapa da Prova'
+    );
+  }, [mergedTracks, importedGeo, loadedTrack]);
+
+  const activeOfflinePack = useMemo(
+    () => offlinePacks.find((p) => p.folderKey === activeRallyFolderKey) ?? null,
+    [offlinePacks, activeRallyFolderKey]
+  );
+
+  const handleDownloadSurveyOfflineMap = async () => {
+    if (offlineDownloading || (mergedTracks.length === 0 && mergedWaypoints.length === 0)) return;
+    const ctrl = new AbortController();
+    offlineAbortRef.current = ctrl;
+    setOfflineDownloading(true);
+    setOfflineProg({
+      phase: 'tiles',
+      completed: 0,
+      total: 1,
+      bytesDownloaded: 0,
+      label: 'Preparando quadrantes...',
+    });
+    try {
+      const meta = await downloadRallyOfflineBundle({
+        folderKey: activeRallyFolderKey,
+        folderName: activeRallyFolderName,
+        tracks: mergedTracks,
+        waypoints: mergedWaypoints,
+        signal: ctrl.signal,
+        onProgress: (p) => setOfflineProg(p),
+      });
+      setOfflinePacks(loadOfflineRallyPacks());
+      if (!ctrl.signal.aborted) {
+        setImportSummary(
+          `✅ Mapa Offline pronto (${formatBytesCompact(meta.estimatedBytes)} · ${meta.tileCount} quadrantes · ${meta.routesCount} rotas).`
+        );
+      }
+    } catch {
+      setImportError('Falha parcial ao baixar mapa offline. Tente novamente com conexão estável.');
+    } finally {
+      offlineAbortRef.current = null;
+      setOfflineDownloading(false);
+      setOfflineProg(null);
+    }
+  };
+
   const startSpeedNavigation = () => {
     setWazeNavActive(true);
+    setDrivingHeadingUp(true);
+    setDrivingMapUserPaused(false);
+    setShowDrivingSpeedLimitPopover(false);
+    setDrivingRecenterTick((t) => t + 1);
     if (!currentPos && routeSamples.length > 1) {
       setCurrentPos({ lat: routeSamples[0].lat, lon: routeSamples[0].lon });
       setHeadingDeg(
@@ -1081,6 +1413,19 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
       );
     }
     setNavSpeedFullscreen(true);
+  };
+
+  const exitSpeedNavigation = () => {
+    setNavSpeedFullscreen(false);
+    setWazeNavActive(false);
+    setShowDrivingSpeedLimitPopover(false);
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore speech cancel errors
+      }
+    }
   };
 
   const speedPctOfLimit = Math.min(
@@ -1130,16 +1475,24 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
       </div>
 
       {surveySubTab === 'recce3d' ? (
-        <VirtualRecce3D
-          track={loadedTrack}
-          availableTracks={mergedTracks}
-          onSelectTrackId={(id) => {
-            setSelectedTrackIdOverride(id);
-            const idx = mergedTracks.findIndex((t) => t.id === id);
-            if (idx >= 0) setSelectedTrackIdx(idx);
-          }}
-          waypoints={mergedWaypoints}
-        />
+        <Suspense
+          fallback={
+            <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-8 text-center text-xs text-[var(--ps-muted)]">
+              Carregando motor 3D de terreno...
+            </div>
+          }
+        >
+          <VirtualRecce3D
+            track={loadedTrack}
+            availableTracks={mergedTracks}
+            onSelectTrackId={(id) => {
+              setSelectedTrackIdOverride(id);
+              const idx = mergedTracks.findIndex((t) => t.id === id);
+              if (idx >= 0) setSelectedTrackIdx(idx);
+            }}
+            waypoints={mergedWaypoints}
+          />
+        </Suspense>
       ) : (
         <>
       {/* Top Header: Levantamento & Deslocamento + GPS/Simulador + Importar KML/KMZ */}
@@ -1370,6 +1723,35 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
               </button>
             )}
 
+            {(mergedTracks.length > 0 || mergedWaypoints.length > 0) && (
+              <>
+                <span
+                  className={`inline-flex h-8 items-center rounded-lg border px-2 font-mono text-[10px] font-extrabold ${
+                    activeOfflinePack
+                      ? 'border-emerald-500/45 bg-emerald-500/15 text-[var(--ps-emerald)]'
+                      : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-muted)]'
+                  }`}
+                >
+                  {activeOfflinePack
+                    ? `✅ Offline Pronto (${formatBytesCompact(activeOfflinePack.estimatedBytes)})`
+                    : 'Online'}
+                </span>
+
+                <button
+                  type="button"
+                  disabled={offlineDownloading}
+                  onClick={() => {
+                    void handleDownloadSurveyOfflineMap();
+                  }}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-2.5 text-[10px] font-extrabold text-emerald-300 uppercase hover:bg-emerald-500/25 disabled:opacity-50"
+                  title="Baixar mapa offline (Satélite/Ruas, Elevação e Rotas de Deslocamento)"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>{activeOfflinePack ? 'Atualizar Offline' : 'Baixar Mapa Offline'}</span>
+                </button>
+              </>
+            )}
+
             <button
               type="button"
               onClick={startSpeedNavigation}
@@ -1381,40 +1763,93 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
           </div>
         </div>
 
-        {/* Slim Waze Turn-by-Turn Strip */}
-        {wazeNavActive && (
+        {offlineDownloading && offlineProg && (
+          <div className="mt-2 rounded-xl border border-emerald-500/35 bg-[var(--ps-card-deep)] px-3 py-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2 font-mono text-[11px]">
+              <span className="truncate font-bold text-emerald-300">
+                {offlineProg.label} ({formatBytesCompact(offlineProg.bytesDownloaded)})
+              </span>
+              <button
+                type="button"
+                onClick={() => offlineAbortRef.current?.abort()}
+                className="shrink-0 rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[10px] font-extrabold text-red-300 uppercase"
+              >
+                Cancelar
+              </button>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/50">
+              <div
+                className="h-full rounded-full bg-emerald-400 transition-all duration-150"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    Math.round((offlineProg.completed / Math.max(1, offlineProg.total)) * 100)
+                  )}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Card de Navegação Curva a Curva (Ruas / Rodovias / Offline) */}
+        {(wazeNavActive || Boolean(transitDestination && (osrmGuidance || activeOsrmRoute))) && (
           <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-sky-400/40 bg-[#081A2E] px-2.5 py-1.5">
             <div className="flex items-center gap-2 min-w-0">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-500/20 border border-sky-400/30">
-                {guidance ? renderManeuverIcon(guidance.kind) : <Navigation className="h-4 w-4 text-sky-300" />}
+                {osrmGuidance
+                  ? renderManeuverIcon(osrmGuidance.nextKind)
+                  : guidance
+                    ? renderManeuverIcon(guidance.kind)
+                    : <Navigation className="h-4 w-4 text-sky-300" />}
               </div>
               <div className="min-w-0 leading-tight">
                 <p className="truncate text-xs font-extrabold text-white">
                   <span className="font-mono text-sky-300 mr-1.5 tabular-nums">
-                    {guidance
-                      ? guidance.distToManeuverM >= 1000
-                        ? `${(guidance.distToManeuverM / 1000).toFixed(1).replace('.', ',')}km`
-                        : `${guidance.distToManeuverM}m`
-                      : 'GPS'}
+                    {osrmGuidance
+                      ? osrmGuidance.distToManeuverM >= 1000
+                        ? `${(osrmGuidance.distToManeuverM / 1000).toFixed(1).replace('.', ',')}km`
+                        : `${osrmGuidance.distToManeuverM}m`
+                      : guidance
+                        ? guidance.distToManeuverM >= 1000
+                          ? `${(guidance.distToManeuverM / 1000).toFixed(1).replace('.', ',')}km`
+                          : `${guidance.distToManeuverM}m`
+                        : 'GPS'}
                   </span>
-                  {guidance ? guidance.instruction : 'Mapa livre'}
+                  {isRecalculatingRoute
+                    ? 'Recalculando rota...'
+                    : osrmGuidance
+                      ? osrmGuidance.nextInstruction
+                      : guidance
+                        ? guidance.instruction
+                        : 'Calculando rota pelas vias...'}
                 </p>
-                {guidance && (
+                {(osrmGuidance || guidance || transitDestination) && (
                   <p className="truncate font-mono text-[10px] text-sky-200/75">
-                    {guidance.targetLabel}
+                    {osrmGuidance?.nextRoadName
+                      ? `${osrmGuidance.nextRoadName} · ${transitDestination?.name ?? ''}`
+                      : transitDestination?.name ?? guidance?.targetLabel}
                   </p>
                 )}
               </div>
             </div>
 
-            {guidance && (
+            {(osrmGuidance || guidance) && (
               <div className="shrink-0 text-right font-mono text-[11px] leading-tight tabular-nums">
-                <span className="font-bold text-white">
-                  {guidance.remainingTotalKm.toFixed(1).replace('.', ',')}km
-                </span>
-                <span className="ml-1.5 text-amber-300">
-                  {headingDeg !== null ? `${headingDeg}°` : ''}
-                </span>
+                <div className="flex items-center justify-end gap-1.5">
+                  {osrmGuidance && (
+                    <span className="font-black text-emerald-300">
+                      {osrmGuidance.etaMin} min
+                    </span>
+                  )}
+                  <span className="font-bold text-white">
+                    {(osrmGuidance ? osrmGuidance.remainingTotalKm : guidance!.remainingTotalKm)
+                      .toFixed(1)
+                      .replace('.', ',')} km
+                  </span>
+                </div>
+                {headingDeg !== null && (
+                  <span className="text-[10px] text-amber-300">{headingDeg}°</span>
+                )}
               </div>
             )}
           </div>
@@ -1517,14 +1952,21 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
           postEditIdx={guidance ? guidance.closestIdx : 0}
           currentPos={currentPos}
           navigationMode={wazeNavActive || navSpeedFullscreen}
+          driving3dMode={navSpeedFullscreen || wazeNavActive}
+          headingUp={navSpeedFullscreen ? drivingHeadingUp : undefined}
+          drivingTheme={navSpeedFullscreen ? drivingMapTheme : undefined}
+          recenterTrigger={drivingRecenterTick}
+          onUserPanChanged={setDrivingMapUserPaused}
+          hideBuiltInTopControls={navSpeedFullscreen}
           navHeadingDeg={headingDeg}
           transitRoute={
-            navSpeedFullscreen && transitDestination
+            transitDestination && currentPos
               ? {
                   toLat: transitDestination.lat,
                   toLon: transitDestination.lon,
                   label: transitDestination.name,
                   color: transitDestination.color,
+                  routeLatLngs: osrmGuidance?.remainingGeometry ?? activeOsrmRoute?.geometryLatLng,
                 }
               : null
           }
@@ -1532,97 +1974,98 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
             setSelectedPoiId(wp.id);
           }}
           forceFullscreen={navSpeedFullscreen ? true : undefined}
-          onFullscreenToggle={
-            navSpeedFullscreen
-              ? () => {
-                  setNavSpeedFullscreen(false);
-                  setWazeNavActive(false);
-                }
-              : undefined
-          }
+          onFullscreenToggle={navSpeedFullscreen ? exitSpeedNavigation : undefined}
           fullscreenTopOverlay={
             navSpeedFullscreen ? (
-              <div className="pointer-events-auto flex w-full flex-col items-center gap-1.5 px-2 pt-1">
-                {transitDestination && (
-                  <div className="flex w-full max-w-md items-center justify-between gap-2.5 rounded-xl border border-white/15 bg-black/75 px-3 py-2 text-white shadow-xl backdrop-blur-md">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-sky-400/40 bg-sky-500/20">
-                        <ArrowUp
-                          className="h-5 w-5 text-sky-300 transition-transform duration-200"
-                          style={{
-                            transform: `rotate(${Math.round(transitDestination.relArrowDeg)}deg)`,
-                          }}
-                        />
-                      </div>
-                      <div className="min-w-0 leading-tight">
-                        <p className="text-[9px] font-extrabold tracking-wider text-sky-300 uppercase">
-                          Destino · {transitDestination.kind === 'poi' ? 'Ponto Apoio' : 'Largada'}
-                        </p>
-                        <p className="truncate text-xs font-extrabold text-white">
-                          {transitDestination.name}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right font-mono tabular-nums">
-                      <p className="text-sm font-black text-emerald-300">
-                        {transitDestination.distM === null
-                          ? '--'
-                          : transitDestination.distM >= 1000
-                            ? `${(transitDestination.distM / 1000).toFixed(2).replace('.', ',')} km`
-                            : `${Math.round(transitDestination.distM)} m`}
-                      </p>
-                      <p className="text-[10px] font-bold text-white/60">
-                        {speedKmh} km/h
-                      </p>
-                    </div>
-                  </div>
-                )}
+              (() => {
+                const distM =
+                  osrmGuidance?.distToManeuverM ??
+                  guidance?.distToManeuverM ??
+                  (transitDestination?.distM !== null && transitDestination?.distM !== undefined
+                    ? Math.round(transitDestination.distM)
+                    : null);
+                const formattedDist =
+                  distM === null
+                    ? 'GPS'
+                    : distM >= 1000
+                      ? `${(distM / 1000).toFixed(1).replace('.', ',')} km`
+                      : `${distM} m`;
+                const primaryHeadline = isRecalculatingRoute
+                  ? 'Recalculando rota...'
+                  : osrmGuidance?.nextRoadName
+                    ? osrmGuidance.nextRoadName
+                    : osrmGuidance
+                      ? osrmGuidance.nextInstruction
+                      : transitDestination?.name || guidance?.instruction || 'Siga pela rota';
+                const primarySubtitle = isRecalculatingRoute
+                  ? 'Buscando novo trajeto pelas vias'
+                  : osrmGuidance?.nextRoadName
+                    ? osrmGuidance.nextInstruction
+                    : transitDestination
+                      ? `Rumo a ${transitDestination.name}`
+                      : guidance?.targetLabel || '';
+                const hasFollowing = Boolean(
+                  osrmGuidance?.followingRoadName || osrmGuidance?.followingInstruction
+                );
 
-                {(mergedTracks.length > 0 || mergedWaypoints.length > 0) && (
-                  <div className="flex max-w-md items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    {mergedTracks.map((tr, idx) => {
-                      const active = !selectedPoiId && loadedTrack?.id === tr.id;
-                      return (
-                        <button
-                          key={`fs_tr_${tr.id}`}
-                          type="button"
-                          onClick={() => {
-                            setSelectedPoiId(null);
-                            setSelectedTrackIdOverride(tr.id);
-                            setSelectedTrackIdx(idx);
-                          }}
-                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-extrabold transition-colors ${
-                            active
-                              ? 'border-sky-400 bg-sky-500/25 text-white'
-                              : 'border-white/15 bg-black/65 text-white/75 hover:text-white'
-                          }`}
-                        >
-                          <Flag className="h-3 w-3 shrink-0" style={{ color: tr.color || '#38BDF8' }} />
-                          <span className="max-w-[110px] truncate">{tr.name}</span>
-                        </button>
-                      );
-                    })}
-                    {mergedWaypoints.map((wp) => {
-                      const active = selectedPoiId === wp.id;
-                      return (
-                        <button
-                          key={`fs_wp_${wp.id}`}
-                          type="button"
-                          onClick={() => setSelectedPoiId(wp.id)}
-                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-extrabold transition-colors ${
-                            active
-                              ? 'border-amber-400 bg-amber-500/25 text-white'
-                              : 'border-white/15 bg-black/65 text-white/75 hover:text-white'
-                          }`}
-                        >
-                          <MapPin className="h-3 w-3 shrink-0 text-amber-400" />
-                          <span className="max-w-[120px] truncate">{wp.name}</span>
-                        </button>
-                      );
-                    })}
+                return (
+                  <div className="pointer-events-auto mx-auto w-full max-w-xl">
+                    {/* Banner Principal Turn-by-Turn Estilo Google Maps / Waze */}
+                    <div
+                      className={`flex items-center gap-3 px-3.5 py-2.5 text-white shadow-2xl border ${
+                        isRecalculatingRoute
+                          ? 'border-amber-400/50 bg-[#78350F]'
+                          : 'border-emerald-400/40 bg-[#0A3D28]'
+                      } ${hasFollowing ? 'rounded-t-2xl' : 'rounded-2xl'}`}
+                    >
+                      <div className="flex min-w-[74px] shrink-0 flex-col items-center justify-center rounded-xl bg-black/25 px-2 py-1.5 text-center">
+                        {osrmGuidance ? (
+                          renderManeuverIcon(osrmGuidance.nextKind, 'h-9 w-9 text-white')
+                        ) : guidance ? (
+                          renderManeuverIcon(guidance.kind, 'h-9 w-9 text-white')
+                        ) : (
+                          <ArrowUp
+                            className="h-9 w-9 text-white transition-transform duration-200"
+                            style={{
+                              transform: transitDestination
+                                ? `rotate(${Math.round(transitDestination.relArrowDeg)}deg)`
+                                : undefined,
+                            }}
+                          />
+                        )}
+                        <span className="mt-1 font-mono text-lg font-black leading-none tracking-tight text-white tabular-nums">
+                          {formattedDist}
+                        </span>
+                      </div>
+
+                      <div className="min-w-0 flex-1 leading-tight">
+                        <p className="line-clamp-2 text-lg font-black tracking-tight text-white sm:text-xl">
+                          {primaryHeadline}
+                        </p>
+                        {primarySubtitle && (
+                          <p className="mt-0.5 truncate text-xs font-bold text-emerald-100/85">
+                            {primarySubtitle}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Faixa Secundária "Depois:" */}
+                    {hasFollowing && osrmGuidance && (
+                      <div className="flex items-center gap-2 rounded-b-2xl border-x border-b border-emerald-400/30 bg-[#062619] px-3.5 py-1.5 text-xs font-bold text-emerald-100 shadow-lg">
+                        <span className="font-mono text-[10px] font-extrabold tracking-wider text-emerald-300 uppercase">
+                          Depois:
+                        </span>
+                        {osrmGuidance.followingKind &&
+                          renderManeuverIcon(osrmGuidance.followingKind, 'h-4 w-4 text-white shrink-0')}
+                        <span className="truncate text-white">
+                          {osrmGuidance.followingRoadName || osrmGuidance.followingInstruction}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()
             ) : (
               <SurveyFullscreenClockPill clockOffsetMs={settings.clockOffsetMs} />
             )
@@ -1630,99 +2073,268 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
           fullscreenZoomBottomClass={
             navSpeedFullscreen ? 'bottom-[104px] sm:bottom-[108px]' : 'bottom-[88px] sm:bottom-[92px]'
           }
-          fullscreenOverlayFullWidth={!navSpeedFullscreen}
+          fullscreenOverlayFullWidth={navSpeedFullscreen}
           fullscreenOverlay={
             navSpeedFullscreen ? (
-              <div
-                className={`mx-auto w-full max-w-xs rounded-2xl border px-3 py-2.5 text-white shadow-2xl backdrop-blur-md transition-colors ${
-                  recceZone === 'over'
-                    ? 'border-red-500 bg-red-950/90 ring-2 ring-red-500/80'
-                    : recceZone === 'warning'
-                      ? 'border-amber-400 bg-amber-950/85'
-                      : 'border-white/20 bg-black/70'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-white/10">
-                  <span className="text-[10px] font-extrabold tracking-wider text-white/85 uppercase">
-                    {recceZone === 'over'
-                      ? 'ALERTA: ACIMA DO LIMITE!'
-                      : recceZone === 'warning'
-                        ? 'PRÓXIMO DO LIMITE'
-                        : 'Limite de Velocidade'}
-                  </span>
-                  <span
-                    className={`font-mono text-xs font-black tabular-nums ${
-                      recceZone === 'over'
-                        ? 'text-red-300 animate-pulse'
-                        : recceZone === 'warning'
-                          ? 'text-amber-300'
-                          : 'text-[#6EE7B7]'
-                    }`}
-                  >
-                    Atual: {speedKmh} km/h
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-1.5 font-mono tabular-nums">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setReccePrefs((prev) => ({
-                        ...prev,
-                        enabled: true,
-                        speedLimitKmh: Math.max(10, prev.speedLimitKmh - 5),
-                      }))
-                    }
-                    className="inline-flex h-10 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-xs font-extrabold text-white active:scale-95"
-                  >
-                    -5
-                  </button>
-                  <div className="flex items-baseline justify-center gap-1 rounded-xl border border-white/20 bg-black/50 px-2.5 py-1">
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={10}
-                      max={200}
-                      value={reccePrefs.speedLimitKmh}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        if (Number.isFinite(val)) {
-                          setReccePrefs((prev) => ({
-                            ...prev,
-                            enabled: true,
-                            speedLimitKmh: Math.max(10, Math.min(200, Math.round(val))),
-                          }));
-                        }
-                      }}
-                      aria-label="Limite de Velocidade em km/h"
-                      className="w-14 bg-transparent text-center font-mono text-lg font-black text-white focus:outline-none"
-                    />
-                    <span className="text-[10px] font-bold text-white/70 uppercase">km/h</span>
+              (() => {
+                const etaMinutes = osrmGuidance
+                  ? osrmGuidance.etaMin
+                  : transitDestination?.distM !== null && transitDestination?.distM !== undefined
+                    ? Math.max(1, Math.round((transitDestination.distM / 1000 / 50) * 60))
+                    : guidance
+                      ? Math.max(1, Math.round((guidance.remainingTotalKm / 50) * 60))
+                      : null;
+                const remainingKmVal = osrmGuidance
+                  ? osrmGuidance.remainingTotalKm
+                  : transitDestination?.distM !== null && transitDestination?.distM !== undefined
+                    ? transitDestination.distM / 1000
+                    : guidance
+                      ? guidance.remainingTotalKm
+                      : null;
+                const etaArrivalDate =
+                  etaMinutes !== null
+                    ? new Date(drivingClockNowMs + settings.clockOffsetMs + etaMinutes * 60_000)
+                    : null;
+                const etaClockLabel = etaArrivalDate
+                  ? `${String(etaArrivalDate.getHours()).padStart(2, '0')}:${String(
+                      etaArrivalDate.getMinutes()
+                    ).padStart(2, '0')}`
+                  : '--:--';
+                const themeLabel =
+                  drivingMapTheme === 'satellite'
+                    ? 'Satélite'
+                    : drivingMapTheme === 'dark'
+                      ? 'Escuro'
+                      : 'Claro';
+
+                return (
+                  <div className="mx-auto flex w-full max-w-2xl flex-col gap-2">
+                    {/* Popover Rápido de Limite de Velocidade (quando aberto) */}
+                    {showDrivingSpeedLimitPopover && (
+                      <div className="ml-auto w-full max-w-xs rounded-2xl border border-white/20 bg-[#0B0E14]/95 px-3 py-2.5 text-white shadow-2xl">
+                        <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-1.5">
+                          <span className="text-[10px] font-extrabold tracking-wider text-white/85 uppercase">
+                            Alerta de Velocidade
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setReccePrefs((prev) => ({ ...prev, enabled: !prev.enabled }))
+                            }
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-black uppercase ${
+                              reccePrefs.enabled
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                                : 'bg-white/10 text-white/60 border border-white/15'
+                            }`}
+                          >
+                            {reccePrefs.enabled ? 'Ativo' : 'Desligado'}
+                          </button>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-1.5 font-mono tabular-nums">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setReccePrefs((prev) => ({
+                                ...prev,
+                                enabled: true,
+                                speedLimitKmh: Math.max(10, prev.speedLimitKmh - 5),
+                              }))
+                            }
+                            className="inline-flex h-10 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-xs font-extrabold text-white active:scale-95"
+                          >
+                            -5
+                          </button>
+                          <div className="flex items-baseline justify-center gap-1 rounded-xl border border-white/20 bg-black/60 px-2.5 py-1">
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={10}
+                              max={200}
+                              value={reccePrefs.speedLimitKmh}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                if (Number.isFinite(val)) {
+                                  setReccePrefs((prev) => ({
+                                    ...prev,
+                                    enabled: true,
+                                    speedLimitKmh: Math.max(10, Math.min(200, Math.round(val))),
+                                  }));
+                                }
+                              }}
+                              aria-label="Limite de Velocidade em km/h"
+                              className="w-14 bg-transparent text-center font-mono text-lg font-black text-white focus:outline-none"
+                            />
+                            <span className="text-[10px] font-bold text-white/70 uppercase">km/h</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setReccePrefs((prev) => ({
+                                ...prev,
+                                enabled: true,
+                                speedLimitKmh: Math.min(200, prev.speedLimitKmh + 5),
+                              }))
+                            }
+                            className="inline-flex h-10 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-xs font-extrabold text-white active:scale-95"
+                          >
+                            +5
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowDrivingSpeedLimitPopover(false)}
+                            className="inline-flex h-10 items-center justify-center rounded-xl border border-white/20 bg-white/10 px-2.5 text-[11px] font-extrabold text-white uppercase active:scale-95"
+                          >
+                            OK
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Linha Flutuante: Velocímetro Circular (Esq) + Botões Discretos (Dir) */}
+                    <div className="flex items-end justify-between gap-3">
+                      {/* Velocímetro Circular Flutuante Estilo Waze */}
+                      <div
+                        className={`flex h-[76px] w-[76px] shrink-0 flex-col items-center justify-center rounded-full border-[3.5px] bg-[#090C12]/95 text-center shadow-2xl transition-colors ${
+                          recceZone === 'over'
+                            ? 'animate-pulse border-[#EF233C] ring-4 ring-[#EF233C]/40'
+                            : recceZone === 'warning'
+                              ? 'border-amber-400 ring-2 ring-amber-400/35'
+                              : 'border-white/30'
+                        }`}
+                      >
+                        <span
+                          className={`font-mono text-[26px] font-black leading-none tracking-tight tabular-nums ${
+                            recceZone === 'over'
+                              ? 'text-[#FF4D62]'
+                              : recceZone === 'warning'
+                                ? 'text-amber-300'
+                                : 'text-white'
+                          }`}
+                        >
+                          {speedKmh}
+                        </span>
+                        <span className="mt-0.5 text-[10px] font-bold tracking-wider text-white/70 uppercase">
+                          km/h
+                        </span>
+                      </div>
+
+                      {/* Controles Laterais Limpos no Canto Direito */}
+                      <div className="flex flex-col items-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDrivingHeadingUp(true);
+                            setDrivingMapUserPaused(false);
+                            setDrivingRecenterTick((t) => t + 1);
+                          }}
+                          className={`inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-[11px] font-extrabold shadow-xl transition-all active:scale-95 ${
+                            drivingMapUserPaused
+                              ? 'border-sky-400 bg-sky-500 text-slate-950'
+                              : 'border-white/20 bg-[#0D1118]/92 text-white/90 hover:border-white/40'
+                          }`}
+                          title="Recentralizar câmera 3D no carro"
+                        >
+                          <LocateFixed className="h-4 w-4 shrink-0" />
+                          <span>Recentralizar</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDrivingMapTheme((prev) =>
+                              prev === 'satellite' ? 'dark' : prev === 'dark' ? 'light' : 'satellite'
+                            )
+                          }
+                          className="inline-flex h-10 items-center gap-1.5 rounded-full border border-white/20 bg-[#0D1118]/92 px-3 text-[11px] font-extrabold text-white shadow-xl transition-all hover:border-white/40 active:scale-95"
+                          title="Alternar camada do mapa (Satélite / Escuro / Claro)"
+                        >
+                          <Layers className="h-4 w-4 shrink-0 text-amber-400" />
+                          <span>{themeLabel}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowDrivingSpeedLimitPopover((v) => !v)}
+                          className={`inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-[11px] font-extrabold shadow-xl transition-all active:scale-95 ${
+                            recceZone === 'over'
+                              ? 'border-[#EF233C] bg-[#EF233C]/90 text-white'
+                              : 'border-white/20 bg-[#0D1118]/92 text-white hover:border-white/40'
+                          }`}
+                          title="Ajustar Limite de Velocidade"
+                        >
+                          <Gauge className="h-4 w-4 shrink-0 text-emerald-400" />
+                          <span className="font-mono tabular-nums">
+                            {reccePrefs.enabled ? `${reccePrefs.speedLimitKmh} km/h` : 'Limite'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Barra Inferior de Navegação Estilo Waze/Maps (Voz · ETA & Distância · Sair) */}
+                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/15 bg-[#0C0F16]/95 px-2.5 py-2 text-white shadow-2xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWazeVoiceEnabled((prev) => {
+                            const next = !prev;
+                            if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                              try {
+                                window.speechSynthesis.cancel();
+                                if (next) {
+                                  const utter = new SpeechSynthesisUtterance(
+                                    'Instruções por voz ativadas'
+                                  );
+                                  utter.lang = 'pt-BR';
+                                  utter.rate = 1.08;
+                                  window.speechSynthesis.speak(utter);
+                                }
+                              } catch {
+                                // ignore speech restrictions
+                              }
+                            }
+                            return next;
+                          });
+                        }}
+                        aria-label={wazeVoiceEnabled ? 'Silenciar voz' : 'Ativar voz'}
+                        className={`inline-flex min-h-[44px] min-w-[54px] shrink-0 flex-col items-center justify-center rounded-xl border px-2 transition-colors active:scale-95 ${
+                          wazeVoiceEnabled
+                            ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300'
+                            : 'border-white/15 bg-white/5 text-white/60'
+                        }`}
+                      >
+                        {wazeVoiceEnabled ? (
+                          <Volume2 className="h-4 w-4 shrink-0" />
+                        ) : (
+                          <VolumeX className="h-4 w-4 shrink-0" />
+                        )}
+                        <span className="mt-0.5 text-[9px] font-extrabold uppercase">Voz</span>
+                      </button>
+
+                      <div className="min-w-0 flex-1 text-center leading-tight">
+                        <p className="font-mono text-2xl font-black tracking-tight text-white tabular-nums">
+                          {etaClockLabel}
+                        </p>
+                        <p className="truncate font-mono text-xs font-bold text-emerald-300 tabular-nums">
+                          {etaMinutes !== null ? `${etaMinutes} min` : '-- min'}
+                          {' • '}
+                          {remainingKmVal !== null
+                            ? `${remainingKmVal.toFixed(1).replace('.', ',')} km`
+                            : '-- km'}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={exitSpeedNavigation}
+                        className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl bg-[#EF233C] px-4 text-xs font-black tracking-wider text-white uppercase shadow-lg transition-colors hover:bg-[#d61d34] active:scale-95"
+                      >
+                        <X className="h-4 w-4 stroke-[2.75]" />
+                        <span>Sair</span>
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setReccePrefs((prev) => ({
-                        ...prev,
-                        enabled: true,
-                        speedLimitKmh: Math.min(200, prev.speedLimitKmh + 5),
-                      }))
-                    }
-                    className="inline-flex h-10 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-xs font-extrabold text-white active:scale-95"
-                  >
-                    +5
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNavSpeedFullscreen(false);
-                      setWazeNavActive(false);
-                    }}
-                    className="inline-flex h-10 items-center justify-center rounded-xl border border-white/20 bg-white/10 px-2.5 text-[11px] font-extrabold text-white/90 uppercase active:scale-95"
-                  >
-                    Fechar
-                  </button>
-                </div>
-              </div>
+                );
+              })()
             ) : (
               <div className="rounded-2xl border border-white/15 bg-black/45 px-2.5 py-2 text-white shadow-xl backdrop-blur-sm">
                 <div className="grid grid-cols-3 items-center gap-1.5 font-mono tabular-nums">
@@ -2339,39 +2951,41 @@ export const SurveyCockpit: React.FC<SurveyCockpitProps> = ({
             : mergedWaypoints;
         const overviewWps = folderWps.length > 0 ? folderWps : mergedWaypoints;
         return (
-          <RallyOverviewMapModal
-            isOpen={showRallyOverviewModal}
-            rallyName={activeFolderName || 'Mapa da Prova'}
-            tracks={overviewTracks}
-            waypoints={overviewWps}
-            activeTrackId={loadedTrack?.id}
-            currentPos={currentPos}
-            onClose={() => setShowRallyOverviewModal(false)}
-            onSelectStage={(tr) => {
-              setSelectedPoiId(null);
-              setSelectedTrackIdOverride(tr.id);
-              const idx = mergedTracks.findIndex((item) => item.id === tr.id);
-              if (idx >= 0) setSelectedTrackIdx(idx);
-              simProgressKmRef.current = 0;
-              setShowRallyOverviewModal(false);
-            }}
-            onNavigateToStage={(tr) => {
-              setSelectedPoiId(null);
-              setSelectedTrackIdOverride(tr.id);
-              const idx = mergedTracks.findIndex((item) => item.id === tr.id);
-              if (idx >= 0) setSelectedTrackIdx(idx);
-              simProgressKmRef.current = 0;
-              setShowRallyOverviewModal(false);
-              setWazeNavActive(true);
-              setNavSpeedFullscreen(true);
-            }}
-            onNavigateToWaypoint={(wp) => {
-              setSelectedPoiId(wp.id);
-              setShowRallyOverviewModal(false);
-              setWazeNavActive(true);
-              setNavSpeedFullscreen(true);
-            }}
-          />
+          <Suspense fallback={null}>
+            <RallyOverviewMapModal
+              isOpen={showRallyOverviewModal}
+              rallyName={activeFolderName || 'Mapa da Prova'}
+              tracks={overviewTracks}
+              waypoints={overviewWps}
+              activeTrackId={loadedTrack?.id}
+              currentPos={currentPos}
+              onClose={() => setShowRallyOverviewModal(false)}
+              onSelectStage={(tr) => {
+                setSelectedPoiId(null);
+                setSelectedTrackIdOverride(tr.id);
+                const idx = mergedTracks.findIndex((item) => item.id === tr.id);
+                if (idx >= 0) setSelectedTrackIdx(idx);
+                simProgressKmRef.current = 0;
+                setShowRallyOverviewModal(false);
+              }}
+              onNavigateToStage={(tr) => {
+                setSelectedPoiId(null);
+                setSelectedTrackIdOverride(tr.id);
+                const idx = mergedTracks.findIndex((item) => item.id === tr.id);
+                if (idx >= 0) setSelectedTrackIdx(idx);
+                simProgressKmRef.current = 0;
+                setShowRallyOverviewModal(false);
+                setWazeNavActive(true);
+                setNavSpeedFullscreen(true);
+              }}
+              onNavigateToWaypoint={(wp) => {
+                setSelectedPoiId(wp.id);
+                setShowRallyOverviewModal(false);
+                setWazeNavActive(true);
+                setNavSpeedFullscreen(true);
+              }}
+            />
+          </Suspense>
         );
       })()}
     </div>

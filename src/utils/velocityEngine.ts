@@ -65,6 +65,7 @@ export interface VelocityRun {
   avgSpeedKmh: number;
   distanceKm: number;
   samples: VelocitySample[];
+  sampleCount?: number;
 }
 
 export interface VelocityTrack {
@@ -836,9 +837,182 @@ export function detectTrapCrossing(
   };
 }
 
+export function roundSamplePrecision(s: VelocitySample): VelocitySample {
+  const out: VelocitySample = {
+    lat: Math.round(s.lat * 1e6) / 1e6,
+    lon: Math.round(s.lon * 1e6) / 1e6,
+    speedKmh: Math.round((Number.isFinite(s.speedKmh) ? s.speedKmh : 0) * 10) / 10,
+    accuracyM: s.accuracyM !== null && Number.isFinite(s.accuracyM) ? Math.round(s.accuracyM) : null,
+    headingDeg: s.headingDeg !== null && Number.isFinite(s.headingDeg) ? Math.round(s.headingDeg) : null,
+    altitudeM: s.altitudeM !== null && Number.isFinite(s.altitudeM) ? Math.round(s.altitudeM * 10) / 10 : null,
+    timestampMs: Math.round(s.timestampMs),
+    distKm: Math.round((Number.isFinite(s.distKm) ? s.distKm : 0) * 10000) / 10000,
+    stageElapsedMs: Math.round(Number.isFinite(s.stageElapsedMs) ? s.stageElapsedMs : 0),
+  };
+  if (typeof s.accelLongG === 'number' && Number.isFinite(s.accelLongG)) {
+    out.accelLongG = Math.round(s.accelLongG * 100) / 100;
+  } else if (s.accelLongG === null) {
+    out.accelLongG = null;
+  }
+  if (typeof s.accelLatG === 'number' && Number.isFinite(s.accelLatG)) {
+    out.accelLatG = Math.round(s.accelLatG * 100) / 100;
+  } else if (s.accelLatG === null) {
+    out.accelLatG = null;
+  }
+  return out;
+}
+
+function perpDistMetersFast(
+  pLat: number,
+  pLon: number,
+  aLat: number,
+  aLon: number,
+  bLat: number,
+  bLon: number,
+  mPerDegLon: number
+): number {
+  const mPerDegLat = 111132;
+  const px = pLon * mPerDegLon;
+  const py = pLat * mPerDegLat;
+  const ax = aLon * mPerDegLon;
+  const ay = aLat * mPerDegLat;
+  const bx = bLon * mPerDegLon;
+  const by = bLat * mPerDegLat;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq <= 1e-8) {
+    return Math.hypot(px - ax, py - ay);
+  }
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/**
+ * Simplificação geométrica Douglas-Peucker iterativa (stack-safe para traçados longos)
+ * com tolerância em metros (~1.5m padrão). Preserva início, fim e curvas reais.
+ */
+export function simplifyTraceDouglasPeucker(
+  samples: VelocitySample[],
+  toleranceM = 1.5
+): VelocitySample[] {
+  const n = samples.length;
+  if (n <= 4 || toleranceM <= 0) return samples;
+
+  const avgLat = samples[Math.floor(n / 2)].lat;
+  const mPerDegLon = 111320 * Math.max(0.2, Math.cos((avgLat * Math.PI) / 180));
+  const keep = new Uint8Array(n);
+  keep[0] = 1;
+  keep[n - 1] = 1;
+
+  const stack: number[] = [0, n - 1];
+  while (stack.length > 0) {
+    const end = stack.pop()!;
+    const start = stack.pop()!;
+    if (end - start <= 1) continue;
+
+    const a = samples[start];
+    const b = samples[end];
+    let maxDist = 0;
+    let maxIdx = -1;
+    for (let i = start + 1; i < end; i += 1) {
+      const p = samples[i];
+      const d = perpDistMetersFast(p.lat, p.lon, a.lat, a.lon, b.lat, b.lon, mPerDegLon);
+      if (d > maxDist) {
+        maxDist = d;
+        maxIdx = i;
+      }
+    }
+    if (maxIdx !== -1 && maxDist > toleranceM) {
+      keep[maxIdx] = 1;
+      if (maxIdx - start > 1) stack.push(start, maxIdx);
+      if (end - maxIdx > 1) stack.push(maxIdx, end);
+    }
+  }
+
+  const out: VelocitySample[] = [];
+  for (let i = 0; i < n; i += 1) {
+    if (keep[i]) out.push(samples[i]);
+  }
+  return out;
+}
+
+export function compactVelocitySamples(
+  samples: VelocitySample[],
+  toleranceM = 1.5
+): VelocitySample[] {
+  if (samples.length === 0) return [];
+  const simplified =
+    samples.length >= 8 ? simplifyTraceDouglasPeucker(samples, toleranceM) : samples;
+  return simplified.map(roundSamplePrecision);
+}
+
+/**
+ * Compacta amostras de uma volta com Douglas-Peucker preservando pontos exatos de transição
+ * próximos a cada parcial/chegada (evita perder precisão ao recalcular traps depois).
+ */
+export function compactRunSamplesPreservingTraps(
+  samples: VelocitySample[],
+  splitTimesMs?: Record<string, number>,
+  toleranceM = 1.5
+): VelocitySample[] {
+  if (samples.length <= 8) return samples.map(roundSamplePrecision);
+  const splitTargets = splitTimesMs
+    ? Object.values(splitTimesMs)
+        .filter((ms) => typeof ms === 'number' && Number.isFinite(ms) && ms > 0)
+        .sort((a, b) => a - b)
+    : [];
+
+  if (splitTargets.length === 0) {
+    return compactVelocitySamples(samples, toleranceM);
+  }
+
+  const anchors = new Set<number>([0, samples.length - 1]);
+  for (const targetMs of splitTargets) {
+    let lo = 0;
+    let hi = samples.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (samples[mid].stageElapsedMs < targetMs) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0) anchors.add(lo - 1);
+    anchors.add(lo);
+    if (lo + 1 < samples.length) anchors.add(lo + 1);
+  }
+
+  const sortedAnchors = Array.from(anchors).sort((a, b) => a - b);
+  const combined: VelocitySample[] = [];
+  for (let a = 0; a < sortedAnchors.length - 1; a += 1) {
+    const start = sortedAnchors[a];
+    const end = sortedAnchors[a + 1];
+    if (end <= start) continue;
+    const slice = samples.slice(start, end + 1);
+    const simplified =
+      slice.length >= 6 ? simplifyTraceDouglasPeucker(slice, toleranceM) : slice;
+    for (let j = a === 0 ? 0 : 1; j < simplified.length; j += 1) {
+      combined.push(roundSamplePrecision(simplified[j]));
+    }
+  }
+  return combined.length >= 2 ? combined : compactVelocitySamples(samples, toleranceM);
+}
+
+export function decimateSamplesForDisplay(
+  samples: VelocitySample[],
+  maxPoints = 900
+): VelocitySample[] {
+  if (samples.length <= maxPoints) return samples;
+  const out: VelocitySample[] = [];
+  const step = (samples.length - 1) / (maxPoints - 1);
+  for (let i = 0; i < maxPoints; i += 1) {
+    out.push(samples[Math.min(samples.length - 1, Math.round(i * step))]);
+  }
+  return out;
+}
+
 /**
  * Predictive Time Delta (Time Delta in seconds) comparing current distance & elapsed ms
- * against the reference best run saved on the same Special Stage.
+ * against the reference best run saved on the same Special Stage (O(log N) binary search).
  * Negative = faster than best (Green); Positive = slower than best (Red).
  */
 export function computePredictiveDeltaSec(
@@ -849,21 +1023,27 @@ export function computePredictiveDeltaSec(
   if (!bestRun || bestRun.samples.length < 2) return null;
   const samples = bestRun.samples;
   if (currentDistKm <= 0.005) return 0;
-
-  // Binary / linear search by distKm on reference trace
-  for (let i = 1; i < samples.length; i += 1) {
-    const s0 = samples[i - 1];
-    const s1 = samples[i];
-    if (currentDistKm <= s1.distKm) {
-      const spanKm = s1.distKm - s0.distKm;
-      const frac = spanKm > 1e-6 ? Math.max(0, Math.min(1, (currentDistKm - s0.distKm) / spanKm)) : 0;
-      const refElapsedAtDist = s0.stageElapsedMs + frac * (s1.stageElapsedMs - s0.stageElapsedMs);
-      return (currentElapsedMs - refElapsedAtDist) / 1000;
-    }
+  const n = samples.length;
+  if (currentDistKm <= samples[0].distKm) {
+    return (currentElapsedMs - samples[0].stageElapsedMs) / 1000;
+  }
+  if (currentDistKm >= samples[n - 1].distKm) {
+    return (currentElapsedMs - samples[n - 1].stageElapsedMs) / 1000;
   }
 
-  const last = samples[samples.length - 1];
-  return (currentElapsedMs - last.stageElapsedMs) / 1000;
+  let lo = 1;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].distKm < currentDistKm) lo = mid + 1;
+    else hi = mid;
+  }
+  const s0 = samples[lo - 1];
+  const s1 = samples[lo];
+  const spanKm = s1.distKm - s0.distKm;
+  const frac = spanKm > 1e-6 ? Math.max(0, Math.min(1, (currentDistKm - s0.distKm) / spanKm)) : 0;
+  const refElapsedAtDist = s0.stageElapsedMs + frac * (s1.stageElapsedMs - s0.stageElapsedMs);
+  return (currentElapsedMs - refElapsedAtDist) / 1000;
 }
 
 export function getOrderedTrackTraps(track: VelocityTrack): VelocityTrap[] {
@@ -1806,82 +1986,94 @@ export function interpolateSampleAtDist(
   samples: VelocitySample[],
   targetDistKm: number
 ): VelocitySample | null {
-  if (samples.length === 0) return null;
-  if (targetDistKm <= samples[0].distKm) return samples[0];
-  for (let i = 1; i < samples.length; i += 1) {
-    const a = samples[i - 1];
-    const b = samples[i];
-    if (targetDistKm <= b.distKm) {
-      const span = b.distKm - a.distKm;
-      const frac = span > 1e-6 ? Math.max(0, Math.min(1, (targetDistKm - a.distKm) / span)) : 0;
-      const aLongG = typeof a.accelLongG === 'number' ? a.accelLongG : 0;
-      const bLongG = typeof b.accelLongG === 'number' ? b.accelLongG : 0;
-      const aLatG = typeof a.accelLatG === 'number' ? a.accelLatG : 0;
-      const bLatG = typeof b.accelLatG === 'number' ? b.accelLatG : 0;
-      return {
-        lat: a.lat + (b.lat - a.lat) * frac,
-        lon: a.lon + (b.lon - a.lon) * frac,
-        speedKmh: a.speedKmh + (b.speedKmh - a.speedKmh) * frac,
-        accuracyM: b.accuracyM,
-        headingDeg: b.headingDeg,
-        altitudeM:
-          a.altitudeM !== null && b.altitudeM !== null
-            ? a.altitudeM + (b.altitudeM - a.altitudeM) * frac
-            : b.altitudeM,
-        timestampMs: Math.round(a.timestampMs + (b.timestampMs - a.timestampMs) * frac),
-        distKm: targetDistKm,
-        stageElapsedMs: Math.round(
-          a.stageElapsedMs + (b.stageElapsedMs - a.stageElapsedMs) * frac
-        ),
-        accelLongG: Number((aLongG + (bLongG - aLongG) * frac).toFixed(2)),
-        accelLatG: Number((aLatG + (bLatG - aLatG) * frac).toFixed(2)),
-      };
-    }
+  const n = samples.length;
+  if (n === 0) return null;
+  if (n === 1 || targetDistKm <= samples[0].distKm) return samples[0];
+  if (targetDistKm >= samples[n - 1].distKm) return samples[n - 1];
+
+  let lo = 1;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].distKm < targetDistKm) lo = mid + 1;
+    else hi = mid;
   }
-  return samples[samples.length - 1];
+
+  const a = samples[lo - 1];
+  const b = samples[lo];
+  const span = b.distKm - a.distKm;
+  const frac = span > 1e-6 ? Math.max(0, Math.min(1, (targetDistKm - a.distKm) / span)) : 0;
+  const aLongG = typeof a.accelLongG === 'number' ? a.accelLongG : 0;
+  const bLongG = typeof b.accelLongG === 'number' ? b.accelLongG : 0;
+  const aLatG = typeof a.accelLatG === 'number' ? a.accelLatG : 0;
+  const bLatG = typeof b.accelLatG === 'number' ? b.accelLatG : 0;
+  return {
+    lat: a.lat + (b.lat - a.lat) * frac,
+    lon: a.lon + (b.lon - a.lon) * frac,
+    speedKmh: a.speedKmh + (b.speedKmh - a.speedKmh) * frac,
+    accuracyM: b.accuracyM,
+    headingDeg: b.headingDeg,
+    altitudeM:
+      a.altitudeM !== null && b.altitudeM !== null
+        ? a.altitudeM + (b.altitudeM - a.altitudeM) * frac
+        : b.altitudeM,
+    timestampMs: Math.round(a.timestampMs + (b.timestampMs - a.timestampMs) * frac),
+    distKm: targetDistKm,
+    stageElapsedMs: Math.round(
+      a.stageElapsedMs + (b.stageElapsedMs - a.stageElapsedMs) * frac
+    ),
+    accelLongG: Number((aLongG + (bLongG - aLongG) * frac).toFixed(2)),
+    accelLatG: Number((aLatG + (bLatG - aLatG) * frac).toFixed(2)),
+  };
 }
 
 export function interpolateSampleAtElapsedMs(
   samples: VelocitySample[],
   targetElapsedMs: number
 ): VelocitySample | null {
-  if (samples.length === 0) return null;
-  if (targetElapsedMs <= samples[0].stageElapsedMs) return samples[0];
-  for (let i = 1; i < samples.length; i += 1) {
-    const a = samples[i - 1];
-    const b = samples[i];
-    if (targetElapsedMs <= b.stageElapsedMs) {
-      const span = b.stageElapsedMs - a.stageElapsedMs;
-      const frac =
-        span > 1 ? Math.max(0, Math.min(1, (targetElapsedMs - a.stageElapsedMs) / span)) : 0;
-      const aLongG = typeof a.accelLongG === 'number' ? a.accelLongG : 0;
-      const bLongG = typeof b.accelLongG === 'number' ? b.accelLongG : 0;
-      const aLatG = typeof a.accelLatG === 'number' ? a.accelLatG : 0;
-      const bLatG = typeof b.accelLatG === 'number' ? b.accelLatG : 0;
-      let interpHeading: number | null = b.headingDeg ?? a.headingDeg;
-      if (typeof a.headingDeg === 'number' && typeof b.headingDeg === 'number') {
-        const deltaH = ((b.headingDeg - a.headingDeg + 540) % 360) - 180;
-        interpHeading = Math.round((((a.headingDeg + deltaH * frac) % 360) + 360) % 360);
-      }
-      return {
-        lat: a.lat + (b.lat - a.lat) * frac,
-        lon: a.lon + (b.lon - a.lon) * frac,
-        speedKmh: a.speedKmh + (b.speedKmh - a.speedKmh) * frac,
-        accuracyM: b.accuracyM,
-        headingDeg: interpHeading,
-        altitudeM:
-          a.altitudeM !== null && b.altitudeM !== null
-            ? a.altitudeM + (b.altitudeM - a.altitudeM) * frac
-            : b.altitudeM,
-        timestampMs: Math.round(a.timestampMs + (b.timestampMs - a.timestampMs) * frac),
-        distKm: a.distKm + (b.distKm - a.distKm) * frac,
-        stageElapsedMs: Math.round(targetElapsedMs),
-        accelLongG: Number((aLongG + (bLongG - aLongG) * frac).toFixed(2)),
-        accelLatG: Number((aLatG + (bLatG - aLatG) * frac).toFixed(2)),
-      };
-    }
+  const n = samples.length;
+  if (n === 0) return null;
+  if (n === 1 || targetElapsedMs <= samples[0].stageElapsedMs) return samples[0];
+  if (targetElapsedMs >= samples[n - 1].stageElapsedMs) return samples[n - 1];
+
+  let lo = 1;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].stageElapsedMs < targetElapsedMs) lo = mid + 1;
+    else hi = mid;
   }
-  return samples[samples.length - 1];
+
+  const a = samples[lo - 1];
+  const b = samples[lo];
+  const span = b.stageElapsedMs - a.stageElapsedMs;
+  const frac =
+    span > 1 ? Math.max(0, Math.min(1, (targetElapsedMs - a.stageElapsedMs) / span)) : 0;
+  const aLongG = typeof a.accelLongG === 'number' ? a.accelLongG : 0;
+  const bLongG = typeof b.accelLongG === 'number' ? b.accelLongG : 0;
+  const aLatG = typeof a.accelLatG === 'number' ? a.accelLatG : 0;
+  const bLatG = typeof b.accelLatG === 'number' ? b.accelLatG : 0;
+  let interpHeading: number | null = b.headingDeg ?? a.headingDeg;
+  if (typeof a.headingDeg === 'number' && typeof b.headingDeg === 'number') {
+    const deltaH = ((b.headingDeg - a.headingDeg + 540) % 360) - 180;
+    interpHeading = Math.round((((a.headingDeg + deltaH * frac) % 360) + 360) % 360);
+  }
+  return {
+    lat: a.lat + (b.lat - a.lat) * frac,
+    lon: a.lon + (b.lon - a.lon) * frac,
+    speedKmh: a.speedKmh + (b.speedKmh - a.speedKmh) * frac,
+    accuracyM: b.accuracyM,
+    headingDeg: interpHeading,
+    altitudeM:
+      a.altitudeM !== null && b.altitudeM !== null
+        ? a.altitudeM + (b.altitudeM - a.altitudeM) * frac
+        : b.altitudeM,
+    timestampMs: Math.round(a.timestampMs + (b.timestampMs - a.timestampMs) * frac),
+    distKm: a.distKm + (b.distKm - a.distKm) * frac,
+    stageElapsedMs: Math.round(targetElapsedMs),
+    accelLongG: Number((aLongG + (bLongG - aLongG) * frac).toFixed(2)),
+    accelLatG: Number((aLatG + (bLatG - aLatG) * frac).toFixed(2)),
+  };
 }
 
 function findBrakingStartKm(samples: VelocitySample[], apexIdx: number): { distKm: number; speedKmh: number } {
@@ -2153,14 +2345,27 @@ export interface LiveSectorCardStatus {
 }
 
 function findNearestTraceDistKm(trace: VelocitySample[], lat: number, lon: number): number | null {
-  if (trace.length === 0) return null;
+  const n = trace.length;
+  if (n === 0) return null;
   let bestIdx = 0;
   let bestDist = Infinity;
-  for (let i = 0; i < trace.length; i += 1) {
+  const stride = n > 120 ? Math.max(1, Math.floor(n / 60)) : 1;
+  for (let i = 0; i < n; i += stride) {
     const d = haversineMetersVel(lat, lon, trace[i].lat, trace[i].lon);
     if (d < bestDist) {
       bestDist = d;
       bestIdx = i;
+    }
+  }
+  if (stride > 1) {
+    const lo = Math.max(0, bestIdx - stride);
+    const hi = Math.min(n - 1, bestIdx + stride);
+    for (let i = lo; i <= hi; i += 1) {
+      const d = haversineMetersVel(lat, lon, trace[i].lat, trace[i].lon);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
     }
   }
   return trace[bestIdx].distKm;

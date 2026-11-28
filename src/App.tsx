@@ -4,12 +4,23 @@ import { Crown, Lock, X } from 'lucide-react';
 import { AdminSecretLoginModal } from './components/AdminSecretLoginModal';
 import { DeviceLicenseGateScreen } from './components/DeviceLicenseGateScreen';
 import { InitialStatusTab } from './components/InitialStatusTab';
-import { NavigationCockpit } from './components/NavigationCockpit';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { PublicStandingsView } from './components/PublicStandingsView';
-import { SettingsTab } from './components/SettingsTab';
-import { TimeCalculatorTab } from './components/TimeCalculatorModal';
-import { VelocityCockpit } from './components/VelocityCockpit';
+
+const NavigationCockpit = lazy(() =>
+  import('./components/NavigationCockpit').then((m) => ({ default: m.NavigationCockpit }))
+);
+const PublicStandingsView = lazy(() =>
+  import('./components/PublicStandingsView').then((m) => ({ default: m.PublicStandingsView }))
+);
+const SettingsTab = lazy(() =>
+  import('./components/SettingsTab').then((m) => ({ default: m.SettingsTab }))
+);
+const TimeCalculatorTab = lazy(() =>
+  import('./components/TimeCalculatorModal').then((m) => ({ default: m.TimeCalculatorTab }))
+);
+const VelocityCockpit = lazy(() =>
+  import('./components/VelocityCockpit').then((m) => ({ default: m.VelocityCockpit }))
+);
 import {
   type DeviceLicenseStatus,
   getCachedLicenseStatusSync,
@@ -408,15 +419,11 @@ export default function App() {
       className={`${
         isHomeFullCanvas
           ? 'h-[100dvh] overflow-hidden'
-          : 'min-h-screen overflow-x-hidden'
+          : 'min-h-[100dvh] overflow-x-hidden'
       } w-full bg-rally-asphalt text-[var(--ps-text)] flex flex-col`}
     >
-      {/* PitStop-Sports Top Header (flush at top on native Android WebView) */}
-      <header
-        className={`sticky top-0 z-30 border-b border-[var(--ps-border)] bg-[var(--ps-header)] text-[var(--ps-text)] backdrop-blur-md ${
-          isNativeAndroid ? '' : 'pt-safe'
-        }`}
-      >
+      {/* PitStop-Sports Top Header (respeita Safe-Area em Android/iOS para nunca cobrir relógio/notificações) */}
+      <header className="sticky top-0 z-30 border-b border-[var(--ps-border)] bg-[var(--ps-header)] pt-safe text-[var(--ps-text)] backdrop-blur-md">
         <div className="relative overflow-hidden">
           <div className="relative mx-auto flex min-h-[54px] max-w-7xl items-center justify-between gap-2 px-2.5 py-1.5 sm:min-h-[58px] sm:gap-3 sm:px-4 lg:px-8">
             {/* 4 Ordered Tabs filtered by active rallyMode (Início, Regul. OR Veloc., Calc., Config.) */}
@@ -462,7 +469,7 @@ export default function App() {
                     }}
                     aria-label="Regularidade"
                     title="Regularidade"
-                    className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
+                    className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-colors duration-75 active:scale-[0.98] whitespace-nowrap ${
                       activeTab === 'navegacao'
                         ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                         : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
@@ -494,7 +501,7 @@ export default function App() {
                     }}
                     aria-label="Velocidade"
                     title="Velocidade"
-                    className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
+                    className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-colors duration-75 active:scale-[0.98] whitespace-nowrap ${
                       activeTab === 'velocidade'
                         ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                         : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
@@ -517,7 +524,7 @@ export default function App() {
                   onClick={() => setActiveTab('calculadora')}
                   aria-label="Calculadora"
                   title="Calculadora"
-                  className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
+                  className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-colors duration-75 active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'calculadora'
                       ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                       : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
@@ -539,7 +546,7 @@ export default function App() {
                   onClick={() => openSettingsSection('hub')}
                   aria-label="Configurações"
                   title="Configurações"
-                  className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-all active:scale-[0.98] whitespace-nowrap ${
+                  className={`relative overflow-hidden min-w-0 flex-1 lg:flex-none inline-flex min-h-[48px] flex-col lg:min-h-[42px] lg:flex-row items-center justify-center gap-1 lg:gap-2 rounded-xl border px-1.5 py-1 sm:px-3.5 lg:px-4 text-[11px] sm:text-xs font-bold tracking-wide transition-colors duration-75 active:scale-[0.98] whitespace-nowrap ${
                     activeTab === 'configuracoes'
                       ? 'border-[var(--ps-border-strong)] bg-[var(--ps-card)] text-[var(--ps-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
                       : 'border-transparent text-[var(--ps-muted)] hover:border-[var(--ps-border)] hover:bg-[var(--ps-surface)]/70 hover:text-[var(--ps-text)]'
@@ -584,7 +591,15 @@ export default function App() {
         }
       >
         {publicResultSlug ? (
-          <PublicStandingsView slug={publicResultSlug} />
+          <Suspense
+            fallback={
+              <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-6 text-center text-xs text-[var(--ps-muted)]">
+                Carregando resultado...
+              </div>
+            }
+          >
+            <PublicStandingsView slug={publicResultSlug} />
+          </Suspense>
         ) : isApuracao && OrganizerBackoffice ? (
           <Suspense
             fallback={
@@ -611,46 +626,54 @@ export default function App() {
             >
               <InitialStatusTab />
             </div>
-            {visitedTabs.has('navegacao') && (
-              <div className={activeTab === 'navegacao' ? '' : 'hidden'}>
-                <NavigationCockpit
-                  onOpenRoadbookSettings={() => openSettingsSection('roadbooks')}
-                />
-              </div>
-            )}
-            {visitedTabs.has('velocidade') && (
-              <div className={activeTab === 'velocidade' ? '' : 'hidden'}>
-                <VelocityCockpit isActive={activeTab === 'velocidade'} />
-              </div>
-            )}
-            {activeTab === 'calculadora' && <TimeCalculatorTab />}
-            {visitedTabs.has('configuracoes') && (
-              <div className={activeTab === 'configuracoes' ? '' : 'hidden'}>
-                <SettingsTab
-                  initialMenu={settingsMenu}
-                  onMenuChange={setSettingsMenu}
-                  rallyMode={rallyMode}
-                  onSelectRallyMode={updateRallyMode}
-                  onOpenNavigation={() => {
-                    if (!isPro) {
-                      openProUpgradeModal(
-                        'Navegação de Regularidade Completa',
-                        'Disponível para contas com Plano PRO ativo.'
-                      );
-                      return;
-                    }
-                    updateRallyMode('regularidade');
-                    setActiveTab('navegacao');
-                  }}
-                  onOpenApuracao={!isCompetitorEnv ? openApuracaoPortal : undefined}
-                  deviceLicense={deviceLicense}
-                  checkingDeviceLicense={checkingDeviceLicense}
-                  onRecheckDeviceLicense={() => {
-                    void runDeviceLicenseCheck();
-                  }}
-                />
-              </div>
-            )}
+            <Suspense
+              fallback={
+                <div className="rounded-2xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-6 text-center text-xs text-[var(--ps-muted)]">
+                  Carregando módulo...
+                </div>
+              }
+            >
+              {visitedTabs.has('navegacao') && (
+                <div className={activeTab === 'navegacao' ? '' : 'hidden'}>
+                  <NavigationCockpit
+                    onOpenRoadbookSettings={() => openSettingsSection('roadbooks')}
+                  />
+                </div>
+              )}
+              {visitedTabs.has('velocidade') && (
+                <div className={activeTab === 'velocidade' ? '' : 'hidden'}>
+                  <VelocityCockpit isActive={activeTab === 'velocidade'} />
+                </div>
+              )}
+              {activeTab === 'calculadora' && <TimeCalculatorTab />}
+              {visitedTabs.has('configuracoes') && (
+                <div className={activeTab === 'configuracoes' ? '' : 'hidden'}>
+                  <SettingsTab
+                    initialMenu={settingsMenu}
+                    onMenuChange={setSettingsMenu}
+                    rallyMode={rallyMode}
+                    onSelectRallyMode={updateRallyMode}
+                    onOpenNavigation={() => {
+                      if (!isPro) {
+                        openProUpgradeModal(
+                          'Navegação de Regularidade Completa',
+                          'Disponível para contas com Plano PRO ativo.'
+                        );
+                        return;
+                      }
+                      updateRallyMode('regularidade');
+                      setActiveTab('navegacao');
+                    }}
+                    onOpenApuracao={!isCompetitorEnv ? openApuracaoPortal : undefined}
+                    deviceLicense={deviceLicense}
+                    checkingDeviceLicense={checkingDeviceLicense}
+                    onRecheckDeviceLicense={() => {
+                      void runDeviceLicenseCheck();
+                    }}
+                  />
+                </div>
+              )}
+            </Suspense>
           </>
         )}
       </main>

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
   Camera,
   Car,
@@ -23,8 +24,10 @@ import type { GeoWaypoint } from '../utils/geoKmlParser';
 import {
   computeTrackSlopePctAtRatio,
   fetchTrackRealElevations,
+  lookupOfflineDemElevation,
   type ElevationSourceKind,
 } from '../utils/elevationService';
+import { drawCachedOrUpscaledTileOnCanvas } from '../utils/offlineMapsService';
 import { bearingBetweenDeg, type VelocitySample, type VelocityTrack } from '../utils/velocityEngine';
 import {
   buildElevationProfile,
@@ -98,10 +101,26 @@ function tile2lat(y: number, zoom: number): number {
   return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
 }
 
+function detectSoftwareWebGL(): boolean {
+  if (typeof document === 'undefined') return true;
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+    if (!gl) return true;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    if (!ext) return false;
+    const renderer = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '');
+    return /SwiftShader|llvmpipe|Software Rasterizer|Microsoft Basic Render/i.test(renderer);
+  } catch {
+    return false;
+  }
+}
+
 function loadArcGisSatelliteTileTexture(
   z: number,
   x: number,
   y: number,
+  maxAnisotropy: number,
   onLoaded?: (tex: THREE.Texture) => void
 ): THREE.Texture {
   const maxIdx = Math.pow(2, z);
@@ -115,18 +134,20 @@ function loadArcGisSatelliteTileTexture(
   }
 
   const fallback = getFallbackTerrainTileTexture();
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+  if (typeof document === 'undefined') {
     return fallback;
   }
 
-  const url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${clampedY}/${wrappedX}`;
-  const loader = new THREE.TextureLoader();
-  loader.setCrossOrigin('anonymous');
-  loader.load(
-    url,
-    (tex) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+
+  void drawCachedOrUpscaledTileOnCanvas('satellite', z, wrappedX, clampedY, canvas, 18)
+    .then((ok) => {
+      if (!ok) return;
+      const tex = new THREE.CanvasTexture(canvas);
       tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 4;
+      tex.anisotropy = Math.max(1, maxAnisotropy);
       tex.minFilter = THREE.LinearMipmapLinearFilter;
       tex.magFilter = THREE.LinearFilter;
       tex.needsUpdate = true;
@@ -140,12 +161,11 @@ function loadArcGisSatelliteTileTexture(
       }
       satelliteTileTexCache.set(key, tex);
       onLoaded?.(tex);
-    },
-    undefined,
-    () => {
-      // Offline / network fallback silently uses grid texture
-    }
-  );
+    })
+    .catch(() => {
+      // Offline / network fallback silently uses procedural grid texture
+    });
+
   return fallback;
 }
 
@@ -211,12 +231,14 @@ const CAMERA_MODES: Array<{ id: RecceCameraMode; label: string }> = [
 interface VirtualPoint3D {
   x: number;
   y: number;
+  groundY: number;
   z: number;
   lat: number;
   lon: number;
   distKm: number;
   altitudeM: number;
   headingRad: number;
+  isCurve: boolean;
   grade: PacenoteGrade;
 }
 
@@ -228,11 +250,11 @@ function getGradeBadgeClasses(grade: PacenoteGrade | 'R'): string {
   return 'bg-emerald-500 text-zinc-950 border-emerald-300/70';
 }
 
-function getGradeThreeColor(grade: PacenoteGrade): THREE.Color {
-  if (grade <= 2) return new THREE.Color('#EF233C');
-  if (grade === 3) return new THREE.Color('#F59E0B');
-  if (grade === 4) return new THREE.Color('#84CC16');
-  return new THREE.Color('#10B981');
+function getRallyBrSplineColor(isCurve: boolean, grade: PacenoteGrade): THREE.Color {
+  if (!isCurve) return new THREE.Color('#F8FAFC'); // Retas: branco
+  if (grade <= 2) return new THREE.Color('#EF233C'); // Fechada/gancho (1-2): vermelho
+  if (grade <= 4) return new THREE.Color('#FACC15'); // Média (3-4): amarelo
+  return new THREE.Color('#22C55E'); // Rápida (5-6): verde
 }
 
 function createProceduralCarCanvasTexture(
@@ -362,54 +384,64 @@ function buildCompositeRallyCar(
   const roofTex = createProceduralCarCanvasTexture('roof', carSpec);
   disposables.push(hoodTex, sideTex, roofTex);
 
-  const primaryMat = new THREE.MeshStandardMaterial({
+  const primaryMat = new THREE.MeshPhysicalMaterial({
     color: carSpec.primaryHex,
-    roughness: 0.34,
-    metalness: 0.25,
+    roughness: 0.28,
+    metalness: 0.3,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.14,
   });
-  const sideMat = new THREE.MeshStandardMaterial({
+  const sideMat = new THREE.MeshPhysicalMaterial({
     map: sideTex,
-    roughness: 0.32,
-    metalness: 0.2,
+    roughness: 0.28,
+    metalness: 0.22,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.14,
   });
-  const hoodMat = new THREE.MeshStandardMaterial({
+  const hoodMat = new THREE.MeshPhysicalMaterial({
     map: hoodTex,
-    roughness: 0.32,
-    metalness: 0.2,
+    roughness: 0.28,
+    metalness: 0.22,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.14,
   });
-  const roofMat = new THREE.MeshStandardMaterial({
+  const roofMat = new THREE.MeshPhysicalMaterial({
     map: roofTex,
-    roughness: 0.35,
-    metalness: 0.18,
+    roughness: 0.3,
+    metalness: 0.2,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.16,
   });
-  const glassMat = new THREE.MeshStandardMaterial({
-    color: '#0F172A',
-    roughness: 0.12,
-    metalness: 0.8,
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: '#0B1324',
+    roughness: 0.08,
+    metalness: 0.85,
+    clearcoat: 1.0,
   });
   const trimMat = new THREE.MeshStandardMaterial({
     color: '#18181B',
-    roughness: 0.72,
-    metalness: 0.12,
+    roughness: 0.78,
+    metalness: 0.1,
   });
   const accentMat = new THREE.MeshStandardMaterial({
     color: carSpec.accentHex,
-    roughness: 0.38,
-    metalness: 0.2,
+    roughness: 0.35,
+    metalness: 0.25,
   });
   const tireMat = new THREE.MeshStandardMaterial({
-    color: '#141416',
-    roughness: 0.85,
+    color: '#111113',
+    roughness: 0.9,
+    metalness: 0.02,
   });
   const rimMat = new THREE.MeshStandardMaterial({
     color: carSpec.wheelHex,
-    roughness: 0.3,
-    metalness: 0.75,
+    roughness: 0.24,
+    metalness: 0.82,
   });
   const headlightMat = new THREE.MeshStandardMaterial({
     color: '#FEF9C3',
     emissive: '#FEF08A',
-    emissiveIntensity: 0.8,
+    emissiveIntensity: 0.85,
   });
   const taillightMat = new THREE.MeshStandardMaterial({
     color: '#EF233C',
@@ -505,6 +537,30 @@ function buildCompositeRallyCar(
     disposables.push(lipGeo);
   }
 
+  // Front Splitter + Rear Diffuser + Exhaust + Side Mirrors + Rally Light Pod
+  const splitterGeo = new THREE.BoxGeometry(2.08, 0.1, 0.38);
+  const splitter = new THREE.Mesh(splitterGeo, trimMat);
+  splitter.position.set(0, 0.32, bodyLen * 0.48);
+  group.add(splitter);
+
+  const diffuser = new THREE.Mesh(splitterGeo, trimMat);
+  diffuser.position.set(0, 0.34, -bodyLen * 0.48);
+  group.add(diffuser);
+
+  const exhaustGeo = new THREE.CylinderGeometry(0.065, 0.065, 0.22, 10);
+  exhaustGeo.rotateX(Math.PI / 2);
+  const exhaust = new THREE.Mesh(exhaustGeo, rimMat);
+  exhaust.position.set(0.56, 0.31, -bodyLen * 0.51);
+  group.add(exhaust);
+
+  const mirrorGeo = new THREE.BoxGeometry(0.22, 0.12, 0.16);
+  for (const mx of [-0.98, 0.98]) {
+    const mirror = new THREE.Mesh(mirrorGeo, carSpec.id === 'palio46' ? accentMat : primaryMat);
+    mirror.position.set(mx, 1.12, cabinZ + cabinLen * 0.38);
+    group.add(mirror);
+  }
+  disposables.push(splitterGeo, exhaustGeo, mirrorGeo);
+
   // Headlights & Taillights
   const lightGeo = new THREE.BoxGeometry(0.38, 0.16, 0.08);
   for (const lx of [-0.68, 0.68]) {
@@ -564,10 +620,10 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
   track,
   availableTracks,
   onSelectTrackId,
-  waypoints = [],
 }) => {
   const [selectedCarId, setSelectedCarId] = useState<RecceCarId>('palio46');
   const [cameraMode, setCameraMode] = useState<RecceCameraMode>('chase');
+  const [reliefExaggeration, setReliefExaggeration] = useState<1 | 1.5 | 2>(1.5);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [simSpeedMult, setSimSpeedMult] = useState<0.5 | 1 | 1.5 | 2>(1);
@@ -697,23 +753,27 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
     const originLon = sumLon / baseSamples.length;
     const cosLat = Math.cos((originLat * Math.PI) / 180);
 
-    // Map each sample to nearest pacenote grade for coloring the 3D ribbon
+    // Map each sample to exact terrain groundY and +1.5m positive road clearance + RallyBR curve classification
+    const curveNotes = mergedNotes.filter((n) => n.direction !== 'R');
+
     const points: VirtualPoint3D[] = baseSamples.map((s, idx) => {
       const x = (s.lon - originLon) * 111320 * cosLat;
       const z = -(s.lat - originLat) * 110540;
       const altitudeM = getSampleAltitudeM(s, s.distKm);
-      const y = (altitudeM - minAlt) * 1.15 + 0.35;
+      const groundY = (altitudeM - minAlt) * reliefExaggeration;
+      const y = groundY + 1.5; // +1.5m positive vertical offset above terrain mesh
 
       const prev = baseSamples[Math.max(0, idx - 1)];
       const next = baseSamples[Math.min(baseSamples.length - 1, idx + 1)];
       const headingDeg = bearingBetweenDeg(prev.lat, prev.lon, next.lat, next.lon);
-      // Convert compass deg (0=N, 90=E) to Three.js rotation around +Y where car faces +Z
-      // +X is East, -Z is North => direction vector = (sin(hdg), 0, -cos(hdg))
       const hdgRad = (headingDeg * Math.PI) / 180;
 
+      let isCurve = false;
       let grade: PacenoteGrade = 6;
-      for (const n of mergedNotes) {
-        if (Math.abs(n.distKm - s.distKm) <= 0.045) {
+      for (const n of curveNotes) {
+        const halfWinKm = n.isLong ? 0.055 : 0.032;
+        if (Math.abs(n.distKm - s.distKm) <= halfWinKm) {
+          isCurve = true;
           grade = Math.min(grade, n.grade) as PacenoteGrade;
         }
       }
@@ -721,12 +781,14 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
       return {
         x,
         y,
+        groundY,
         z,
         lat: s.lat,
         lon: s.lon,
         distKm: s.distKm,
         altitudeM,
         headingRad: Math.atan2(Math.sin(hdgRad), -Math.cos(hdgRad)),
+        isCurve,
         grade,
       };
     });
@@ -740,7 +802,7 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
       originLon,
       cosLat,
     };
-  }, [baseSamples, mergedNotes]);
+  }, [baseSamples, mergedNotes, reliefExaggeration]);
 
   const activeCarSpec = useMemo(
     () => RECCE_CARS.find((c) => c.id === selectedCarId) ?? RECCE_CARS[0],
@@ -777,6 +839,21 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
   // Derive current telemetry from progressRatio
   const currentDistKm = progressRatio * sceneCourse.totalDistKm;
   const currentDistM = Math.round(currentDistKm * 1000);
+  const currentAltitudeM = useMemo(() => {
+    const pts = sceneCourse.points;
+    if (pts.length === 0) return Math.round(sceneCourse.minAlt);
+    const totalKm = Math.max(0.05, sceneCourse.totalDistKm);
+    const targetKm = progressRatio * totalKm;
+    for (let i = 1; i < pts.length; i += 1) {
+      if (pts[i].distKm >= targetKm) {
+        const a = pts[i - 1];
+        const b = pts[i];
+        const frac = Math.max(0, Math.min(1, (targetKm - a.distKm) / Math.max(1e-6, b.distKm - a.distKm)));
+        return Math.round(a.altitudeM + (b.altitudeM - a.altitudeM) * frac);
+      }
+    }
+    return Math.round(pts[pts.length - 1].altitudeM);
+  }, [sceneCourse, progressRatio]);
   const currentSlopePct = useMemo(
     () => computeTrackSlopePctAtRatio(sceneCourse.points, progressRatio),
     [sceneCourse.points, progressRatio]
@@ -825,7 +902,7 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
     }
   }, [isPlaying, voiceEnabled, upcomingNotes.next, currentDistM]);
 
-  // Main Three.js Scene & Animation Effect
+  // Main Three.js Scene & Animation Effect (RallyBR Zero-Clipping Terrain + Detailed 3D Car)
   useEffect(() => {
     const host = canvasHostRef.current;
     if (!host || sceneCourse.points.length < 2) return;
@@ -834,67 +911,107 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
     const disposables: Array<{ dispose: () => void }> = [];
     const width = Math.max(300, host.clientWidth);
     const height = Math.max(280, host.clientHeight);
+    const isSoftwareGl = detectSoftwareWebGL();
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#0B1018');
-    scene.fog = new THREE.FogExp2('#0B1018', 0.00028);
+    scene.fog = new THREE.FogExp2('#0B1018', 0.00024);
 
-    const camera = new THREE.PerspectiveCamera(54, width / height, 0.5, 12000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const camera = new THREE.PerspectiveCamera(54, width / height, 0.5, 14000);
+    const renderer = new THREE.WebGLRenderer({
+      antialias: !isSoftwareGl,
+      powerPreference: 'high-performance',
+    });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     host.innerHTML = '';
     host.appendChild(renderer.domElement);
 
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    const envTarget = pmremGenerator.fromScene(new RoomEnvironment(), 0.04);
+    scene.environment = envTarget.texture;
+    pmremGenerator.dispose();
+    disposables.push(envTarget);
+
+    const maxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+    controls.enableDamping = !isSoftwareGl;
     controls.dampingFactor = 0.08;
     controls.maxPolarAngle = Math.PI * 0.48;
     controls.minDistance = 8;
-    controls.maxDistance = 1800;
+    controls.maxDistance = 1900;
 
-    // Lighting (Natural Daylight + Rally Sun over Satellite Terrain)
+    // Warm/Cool Rally Lighting
     const hemiLight = new THREE.HemisphereLight('#E0F2FE', '#334155', 1.35);
     scene.add(hemiLight);
 
     const sunLight = new THREE.DirectionalLight('#FFFBEB', 1.45);
     sunLight.position.set(240, 380, 180);
-    sunLight.castShadow = true;
+    sunLight.castShadow = !isSoftwareGl;
     sunLight.shadow.mapSize.set(1024, 1024);
+    sunLight.shadow.bias = -0.0005;
+    sunLight.shadow.normalBias = 0.02;
     scene.add(sunLight);
 
-    // 1. Real Satellite Tile 3D Terrain (ArcGIS World_Imagery draped over real elevation relief)
-    const sampleStep = Math.max(1, Math.floor(sceneCourse.points.length / 180));
-    const sampledPts = sceneCourse.points.filter((_, idx) => idx % sampleStep === 0);
+    // 1. Unified Zero-Clipping Terrain Heightfield (DEM + exact segment-projected track roadbed)
+    const rawPts = sceneCourse.points;
+    const segStep = Math.max(1, Math.floor(rawPts.length / 220));
+    const sampledPts = rawPts.filter((_, idx) => idx % segStep === 0);
+    if (sampledPts[sampledPts.length - 1] !== rawPts[rawPts.length - 1]) {
+      sampledPts.push(rawPts[rawPts.length - 1]);
+    }
 
-    const sampleTerrainY = (vx: number, vz: number): number => {
-      let nearestY = 0.35;
-      let nearestDistSq = Infinity;
-      for (let j = 0; j < sampledPts.length; j += 1) {
-        const sp = sampledPts[j];
-        const dx = vx - sp.x;
-        const dz = vz - sp.z;
-        const dSq = dx * dx + dz * dz;
-        if (dSq < nearestDistSq) {
-          nearestDistSq = dSq;
-          nearestY = sp.y;
+    const projectRoadGroundY = (vx: number, vz: number): { roadY: number; distM: number } => {
+      let bestDistSq = Infinity;
+      let bestY = sampledPts[0]?.groundY ?? 0;
+      for (let i = 0; i < sampledPts.length - 1; i += 1) {
+        const a = sampledPts[i];
+        const b = sampledPts[i + 1];
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const lenSq = dx * dx + dz * dz;
+        const t =
+          lenSq > 1e-4
+            ? Math.max(0, Math.min(1, ((vx - a.x) * dx + (vz - a.z) * dz) / lenSq))
+            : 0;
+        const px = a.x + t * dx;
+        const pz = a.z + t * dz;
+        const dSq = (vx - px) * (vx - px) + (vz - pz) * (vz - pz);
+        if (dSq < bestDistSq) {
+          bestDistSq = dSq;
+          bestY = a.groundY + (b.groundY - a.groundY) * t;
         }
       }
-      const distM = Math.sqrt(nearestDistSq);
-      const hillBump =
-        distM > 18
-          ? Math.sin(vx * 0.014) * Math.cos(vz * 0.014) * Math.min(20, (distM - 18) * 0.1)
-          : 0;
-      return nearestY - 0.38 + hillBump;
+      return { roadY: bestY, distM: Math.sqrt(bestDistSq) };
+    };
+
+    const sampleTerrainMeshY = (lat: number, lon: number, vx: number, vz: number): number => {
+      const { roadY, distM } = projectRoadGroundY(vx, vz);
+      // Smoothly seat terrain directly under the road corridor so terrain triangles never poke through road spline
+      if (distM <= 18) {
+        return roadY - 0.35;
+      }
+      const demAlt = lookupOfflineDemElevation(lat, lon);
+      if (demAlt !== null) {
+        const demY = (demAlt - sceneCourse.minAlt) * reliefExaggeration;
+        const blend = Math.min(1, (distM - 18) / 48);
+        const smoothBlend = blend * blend * (3 - 2 * blend);
+        return roadY * (1 - smoothBlend) + demY * smoothBlend;
+      }
+      return roadY;
     };
 
     let minLat = Infinity;
     let maxLat = -Infinity;
     let minLon = Infinity;
     let maxLon = -Infinity;
-    for (const pt of sceneCourse.points) {
+    for (const pt of rawPts) {
       if (pt.lat < minLat) minLat = pt.lat;
       if (pt.lat > maxLat) maxLat = pt.lat;
       if (pt.lon < minLon) minLon = pt.lon;
@@ -904,13 +1021,14 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
     const latSpan = Math.max(0.004, maxLat - minLat);
     const lonSpan = Math.max(0.004, maxLon - minLon);
 
-    // Build real Web Mercator satellite tile plane with exact ENU projection & elevation displacement
+    // Satellite terrain plane with polygonOffset to permanently prevent Z-fighting / road burial
     const addSatelliteTileLayer = (
       zoom: number,
       padDeg: number,
       yOffset: number,
       maxTiles: number,
-      segsPerTile: number
+      segsPerTile: number,
+      polyOffsetFactor: number
     ) => {
       const txMin = lon2tileX(minLon - padDeg, zoom);
       const txMax = lon2tileX(maxLon + padDeg, zoom);
@@ -935,7 +1053,7 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
             const lat = tile2lat(ty + (1 - v), zoom);
             const vx = (lon - sceneCourse.originLon) * 111320 * sceneCourse.cosLat;
             const vz = -(lat - sceneCourse.originLat) * 110540;
-            const vy = sampleTerrainY(vx, vz) + yOffset;
+            const vy = sampleTerrainMeshY(lat, lon, vx, vz) + yOffset;
             posAttr.setXYZ(i, vx, vy, vz);
           }
           tileGeo.computeVertexNormals();
@@ -945,13 +1063,16 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
             map: getFallbackTerrainTileTexture(),
             roughness: 0.92,
             metalness: 0.02,
+            polygonOffset: true,
+            polygonOffsetFactor: polyOffsetFactor,
+            polygonOffsetUnits: polyOffsetFactor,
           });
           const mesh = new THREE.Mesh(tileGeo, mat);
-          mesh.receiveShadow = true;
+          mesh.receiveShadow = !isSoftwareGl;
           scene.add(mesh);
           disposables.push(tileGeo, mat);
 
-          loadArcGisSatelliteTileTexture(zoom, tx, ty, (loadedTex) => {
+          loadArcGisSatelliteTileTexture(zoom, tx, ty, maxAnisotropy, (loadedTex) => {
             if (disposed) return;
             mat.map = loadedTex;
             mat.needsUpdate = true;
@@ -961,24 +1082,29 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
       return true;
     };
 
-    // Wide regional satellite backdrop (guarantees full horizon even when rotating/zooming)
     const backdropPad = Math.max(0.018, Math.max(latSpan, lonSpan) * 0.9);
     const backdropZoom = Math.max(latSpan, lonSpan) > 0.09 ? 12 : 13;
-    addSatelliteTileLayer(backdropZoom, backdropPad, -1.1, 20, 4);
+    addSatelliteTileLayer(backdropZoom, backdropPad, -2.2, 20, 6, 4);
 
-    // High-resolution satellite corridor directly over the rally stage
     const detailPad = Math.max(0.0055, Math.max(latSpan, lonSpan) * 0.22);
-    const addedZ16 = addSatelliteTileLayer(16, detailPad, -0.04, 30, 8);
+    const addedZ16 = addSatelliteTileLayer(16, detailPad, 0, 30, 22, 2);
     if (!addedZ16) {
-      const addedZ15 = addSatelliteTileLayer(15, detailPad, -0.04, 30, 8);
+      const addedZ15 = addSatelliteTileLayer(15, detailPad, 0, 30, 20, 2);
       if (!addedZ15) {
-        addSatelliteTileLayer(14, detailPad * 1.4, -0.04, 30, 8);
+        addSatelliteTileLayer(14, detailPad * 1.4, 0, 30, 18, 2);
       }
     }
 
-    // 2. Severity-Colored 3D Stage Ribbon
-    const pts = sceneCourse.points;
-    const roadHalfW = 4.1;
+    // Ensure every road spline point has strict >= +1.5m positive offset above actual terrain height
+    const pts = rawPts.map((p) => {
+      const terrainAtPt = sampleTerrainMeshY(p.lat, p.lon, p.x, p.z);
+      const safeY = Math.max(p.groundY, terrainAtPt) + 1.5;
+      return { ...p, y: safeY };
+    });
+
+    // 2. RallyBR Clean Thin Stage Spline (Branco retas / Verde 5-6 / Amarelo 3-4 / Vermelho 1-2)
+    // Leaves real dirt road visible underneath without floating signs or dust
+    const roadHalfW = 0.55;
     const roadPositions: number[] = [];
     const roadColors: number[] = [];
     const roadIndices: number[] = [];
@@ -998,7 +1124,7 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
       roadPositions.push(p.x + nx * roadHalfW, p.y, p.z + nz * roadHalfW);
       roadPositions.push(p.x - nx * roadHalfW, p.y, p.z - nz * roadHalfW);
 
-      const c = getGradeThreeColor(p.grade);
+      const c = getRallyBrSplineColor(p.isCurve, p.grade);
       roadColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
 
       if (i < pts.length - 1) {
@@ -1011,42 +1137,48 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
     roadGeo.setAttribute('color', new THREE.Float32BufferAttribute(roadColors, 3));
     roadGeo.setIndex(roadIndices);
     roadGeo.computeVertexNormals();
-    const roadMat = new THREE.MeshStandardMaterial({
+    const roadMat = new THREE.MeshBasicMaterial({
       vertexColors: true,
-      roughness: 0.55,
-      metalness: 0.1,
       side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     });
     const roadMesh = new THREE.Mesh(roadGeo, roadMat);
-    roadMesh.receiveShadow = true;
+    roadMesh.renderOrder = 4;
     scene.add(roadMesh);
     disposables.push(roadGeo, roadMat);
 
-    // Center white dashed-style spline line for sharp contrast
+    // Subtle crisp centerline axis above the thin ribbon
     const centerLineGeo = new THREE.BufferGeometry().setFromPoints(
-      pts.map((p) => new THREE.Vector3(p.x, p.y + 0.08, p.z))
+      pts.map((p) => new THREE.Vector3(p.x, p.y + 0.05, p.z))
     );
-    const centerLineMat = new THREE.LineBasicMaterial({ color: '#F8FAFC', transparent: true, opacity: 0.72 });
+    const centerLineMat = new THREE.LineBasicMaterial({
+      color: '#FFFFFF',
+      transparent: true,
+      opacity: 0.55,
+    });
     const centerLine = new THREE.Line(centerLineGeo, centerLineMat);
+    centerLine.renderOrder = 5;
     scene.add(centerLine);
     disposables.push(centerLineGeo, centerLineMat);
 
-    // Start & Finish Gantry Arches
-    const buildGantry = (pt: VirtualPoint3D, hex: string) => {
+    // Clean Start & Finish Gantry Arches ONLY (no floating pacenote signs or dust)
+    const buildGantry = (pt: (typeof pts)[number], hex: string) => {
       const gantry = new THREE.Group();
-      const postGeo = new THREE.BoxGeometry(0.45, 5.2, 0.45);
-      const topGeo = new THREE.BoxGeometry(10.2, 1.1, 0.55);
+      const postGeo = new THREE.BoxGeometry(0.42, 5.0, 0.42);
+      const topGeo = new THREE.BoxGeometry(9.6, 1.0, 0.5);
       const mat = new THREE.MeshStandardMaterial({
         color: hex,
         emissive: hex,
         emissiveIntensity: 0.35,
       });
       const leftPost = new THREE.Mesh(postGeo, mat);
-      leftPost.position.set(-4.8, 2.6, 0);
+      leftPost.position.set(-4.5, 2.5, 0);
       const rightPost = new THREE.Mesh(postGeo, mat);
-      rightPost.position.set(4.8, 2.6, 0);
+      rightPost.position.set(4.5, 2.5, 0);
       const topBar = new THREE.Mesh(topGeo, mat);
-      topBar.position.set(0, 5.1, 0);
+      topBar.position.set(0, 4.9, 0);
       gantry.add(leftPost, rightPost, topBar);
       gantry.position.set(pt.x, pt.y, pt.z);
       gantry.rotation.y = pt.headingRad;
@@ -1056,87 +1188,62 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
     buildGantry(pts[0], '#10B981');
     buildGantry(pts[pts.length - 1], '#EF233C');
 
-    // Pacenote 3D Signposts along track (skip straights so signs highlight curves)
-    const postGeo = new THREE.CylinderGeometry(0.1, 0.1, 3.1, 6);
-    const signGeo = new THREE.BoxGeometry(1.4, 0.9, 0.16);
-    disposables.push(postGeo, signGeo);
-    for (const note of mergedNotes) {
-      if (note.direction === 'R') continue;
-      const idx = Math.min(pts.length - 1, Math.max(0, note.sampleIdx));
-      const p = pts[idx];
-      if (!p) continue;
-      const signMat = new THREE.MeshStandardMaterial({
-        color: getGradeThreeColor(note.grade),
-        emissive: getGradeThreeColor(note.grade),
-        emissiveIntensity: note.isCritical ? 0.45 : 0.15,
-      });
-      const signPostMat = new THREE.MeshStandardMaterial({ color: '#E2E8F0' });
-      const marker = new THREE.Group();
-      const pole = new THREE.Mesh(postGeo, signPostMat);
-      pole.position.y = 1.55;
-      const board = new THREE.Mesh(signGeo, signMat);
-      board.position.y = 3.2;
-      marker.add(pole, board);
-      const offsetSide = note.direction === 'E' ? -5.8 : 5.8;
-      marker.position.set(
-        p.x + Math.cos(p.headingRad) * offsetSide,
-        p.y,
-        p.z - Math.sin(p.headingRad) * offsetSide
-      );
-      marker.rotation.y = p.headingRad;
-      scene.add(marker);
-      disposables.push(signMat, signPostMat);
-    }
-
-    // Rally Support POIs (Parque de Serviços / Apoio)
-    if (waypoints.length > 0) {
-      const wpPinGeo = new THREE.ConeGeometry(1.6, 4.2, 8);
-      wpPinGeo.rotateX(Math.PI);
-      const wpMat = new THREE.MeshStandardMaterial({
-        color: '#F59E0B',
-        emissive: '#D97706',
-        emissiveIntensity: 0.4,
-      });
-      disposables.push(wpPinGeo, wpMat);
-      for (const wp of waypoints) {
-        const wx = (wp.lon - sceneCourse.originLon) * 111320 * sceneCourse.cosLat;
-        const wz = -(wp.lat - sceneCourse.originLat) * 110540;
-        const pin = new THREE.Mesh(wpPinGeo, wpMat);
-        pin.position.set(wx, pts[0].y + 4.5, wz);
-        scene.add(pin);
-      }
-    }
-
-    // 3. Build Composite 3D Rally Car
+    // 3. Build Composite 3D Rally Car seated flush on the +1.5m road surface
     const carBuild = buildCompositeRallyCar(activeCarSpec, disposables);
+    carBuild.group.renderOrder = 6;
     scene.add(carBuild.group);
 
-    // Position car initially
     const p0 = pts[0];
-    carBuild.group.position.set(p0.x, p0.y + 0.06, p0.z);
-    carBuild.group.rotation.y = p0.headingRad;
+    carBuild.group.position.set(p0.x, p0.y + 0.04, p0.z);
+    carBuild.group.rotation.order = 'YXZ';
+    carBuild.group.rotation.set(0, p0.headingRad, 0);
     camera.position.set(
       p0.x - Math.sin(p0.headingRad) * 18,
-      p0.y + 8,
+      p0.y + 18,
       p0.z - Math.cos(p0.headingRad) * 18
     );
-    controls.target.set(p0.x, p0.y + 1.4, p0.z);
+    controls.target.set(p0.x, p0.y + 1.2, p0.z);
     controls.update();
 
-    // Animation loop
-    let rafId = 0;
+    if (!isSoftwareGl) {
+      renderer.compile(scene, camera);
+    }
+
+    // Animation loop (pre-allocated helpers, zero per-frame allocations)
+    let frameId = 0;
     let lastTime = performance.now();
     const desiredCamPos = new THREE.Vector3();
     const desiredTarget = new THREE.Vector3();
 
-    const animate = (now: number) => {
-      rafId = window.requestAnimationFrame(animate);
+    const afterDraw = (cb: () => void) => {
+      const gl = renderer.getContext() as WebGL2RenderingContext;
+      const sync = typeof gl?.fenceSync === 'function' ? gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0) : null;
+      if (!sync) {
+        frameId = window.setTimeout(cb, 80);
+        return;
+      }
+      gl.flush();
+      const poll = () => {
+        if (disposed) return;
+        const state = gl.getSyncParameter(sync, gl.SYNC_STATUS);
+        if (state === gl.UNSIGNALED) {
+          frameId = window.setTimeout(poll, 5);
+        } else {
+          gl.deleteSync(sync);
+          frameId = window.setTimeout(cb, 80);
+        }
+      };
+      frameId = window.setTimeout(poll, 5);
+    };
+
+    const tick = () => {
+      if (disposed) return;
+      const now = performance.now();
       const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
       lastTime = now;
 
       const totalKm = Math.max(0.05, sceneCourse.totalDistKm);
       if (isPlayingRef.current) {
-        // Base virtual recce pace ~ 80 km/h * speed multiplier
         const advanceKm = ((82 * simSpeedMultRef.current) / 3600) * dt;
         let nextRatio = progressRef.current + advanceKm / totalKm;
         if (nextRatio >= 1) {
@@ -1150,7 +1257,6 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
         }
       }
 
-      // Interpolate car along track points
       const exactDistKm = progressRef.current * totalKm;
       let segIdx = 0;
       for (let i = 1; i < pts.length; i += 1) {
@@ -1169,18 +1275,28 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
       const cyPos = a.y + (b.y - a.y) * frac;
       const czPos = a.z + (b.z - a.z) * frac;
 
-      // Smooth angle wrap
       let dHeading = b.headingRad - a.headingRad;
       while (dHeading > Math.PI) dHeading -= Math.PI * 2;
       while (dHeading < -Math.PI) dHeading += Math.PI * 2;
       const heading = a.headingRad + dHeading * frac;
 
-      // Pitch from elevation change
+      // Dynamic terrain pitch & lateral roll alignment
       const horizDist = Math.max(0.2, Math.hypot(b.x - a.x, b.z - a.z));
       const pitch = -Math.atan2(b.y - a.y, horizDist);
+      const rightX = Math.cos(heading);
+      const rightZ = -Math.sin(heading);
+      const latCur = a.lat + (b.lat - a.lat) * frac;
+      const lonCur = a.lon + (b.lon - a.lon) * frac;
+      const dLatRoll = (4 * rightZ) / -110540;
+      const dLonRoll = (4 * rightX) / (111320 * sceneCourse.cosLat);
+      const yRight = sampleTerrainMeshY(latCur + dLatRoll, lonCur + dLonRoll, cxPos + 4 * rightX, czPos + 4 * rightZ);
+      const yLeft = sampleTerrainMeshY(latCur - dLatRoll, lonCur - dLonRoll, cxPos - 4 * rightX, czPos - 4 * rightZ);
+      const terrainRoll = Math.atan2(yLeft - yRight, 8) * 0.45;
+      const cornerRoll = Math.max(-0.18, Math.min(0.18, -dHeading * 1.9));
 
-      carBuild.group.position.set(cxPos, cyPos + 0.05, czPos);
-      carBuild.group.rotation.set(pitch * 0.7, heading, dHeading * -0.35);
+      carBuild.group.position.set(cxPos, cyPos + 0.04, czPos);
+      carBuild.group.rotation.order = 'YXZ';
+      carBuild.group.rotation.set(pitch * 0.85, heading, terrainRoll + cornerRoll);
 
       if (isPlayingRef.current) {
         for (const w of carBuild.wheels) {
@@ -1191,7 +1307,6 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
         fp.rotation.y = Math.max(-0.45, Math.min(0.45, dHeading * 1.6));
       }
 
-      // Camera positioning by selected mode
       const fwdX = Math.sin(heading);
       const fwdZ = Math.cos(heading);
 
@@ -1201,27 +1316,31 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
       } else {
         controls.enabled = false;
         if (cameraModeRef.current === 'chase') {
-          // 60° angled satellite chase camera following dynamic heading
-          desiredCamPos.set(cxPos - fwdX * 16, cyPos + 20.5, czPos - fwdZ * 16);
-          desiredTarget.set(cxPos + fwdX * 12, cyPos + 1.0, czPos + fwdZ * 12);
+          desiredCamPos.set(cxPos - fwdX * 16, cyPos + 19.5, czPos - fwdZ * 16);
+          desiredTarget.set(cxPos + fwdX * 13, cyPos + 0.8, czPos + fwdZ * 13);
         } else if (cameraModeRef.current === 'hood') {
-          desiredCamPos.set(cxPos + fwdX * 0.4, cyPos + 1.78, czPos + fwdZ * 0.4);
-          desiredTarget.set(cxPos + fwdX * 28, cyPos + 1.25, czPos + fwdZ * 28);
+          desiredCamPos.set(cxPos + fwdX * 0.45, cyPos + 1.75, czPos + fwdZ * 0.45);
+          desiredTarget.set(cxPos + fwdX * 28, cyPos + 1.15, czPos + fwdZ * 28);
         } else {
-          // Helicóptero
-          desiredCamPos.set(cxPos - fwdX * 32 + 16, cyPos + 46, czPos - fwdZ * 32 + 16);
+          desiredCamPos.set(cxPos - fwdX * 34 + 16, cyPos + 48, czPos - fwdZ * 34 + 16);
           desiredTarget.set(cxPos + fwdX * 16, cyPos + 0.8, czPos + fwdZ * 16);
         }
-        const lerpAlpha = cameraModeRef.current === 'hood' ? 0.55 : 0.14;
+        const dampLambda = cameraModeRef.current === 'hood' ? 18 : 7.5;
+        const lerpAlpha = 1 - Math.exp(-dampLambda * dt);
         camera.position.lerp(desiredCamPos, lerpAlpha);
         camera.lookAt(desiredTarget);
         controls.target.copy(desiredTarget);
       }
 
       renderer.render(scene, camera);
+      if (isSoftwareGl) {
+        afterDraw(tick);
+      } else {
+        frameId = window.requestAnimationFrame(tick);
+      }
     };
 
-    rafId = window.requestAnimationFrame(animate);
+    frameId = window.requestAnimationFrame(tick);
 
     const handleResize = () => {
       if (!host || disposed) return;
@@ -1237,7 +1356,8 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
 
     return () => {
       disposed = true;
-      window.cancelAnimationFrame(rafId);
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(frameId);
       window.removeEventListener('resize', handleResize);
       resizeObs.disconnect();
       controls.dispose();
@@ -1251,7 +1371,7 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
       renderer.dispose();
       host.innerHTML = '';
     };
-  }, [sceneCourse, activeCarSpec, mergedNotes, waypoints]);
+  }, [sceneCourse, activeCarSpec, reliefExaggeration]);
 
   const handleInsertManualNote = () => {
     if (!activeTrack || baseSamples.length === 0) return;
@@ -1373,7 +1493,27 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <div className="inline-flex items-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-0.5">
+              <span className="px-2 text-[10px] font-extrabold tracking-wider text-[var(--ps-muted)] uppercase">
+                Relevo
+              </span>
+              {([1, 1.5, 2] as const).map((ex) => (
+                <button
+                  key={ex}
+                  type="button"
+                  onClick={() => setReliefExaggeration(ex)}
+                  className={`min-h-[32px] rounded-lg px-2 font-mono text-[11px] font-extrabold transition-colors ${
+                    reliefExaggeration === ex
+                      ? 'bg-[#EF233C] text-white'
+                      : 'text-[var(--ps-muted)] hover:text-white'
+                  }`}
+                >
+                  {ex.toFixed(1)}x
+                </button>
+              ))}
+            </div>
+
             <button
               type="button"
               onClick={() => {
@@ -1441,7 +1581,7 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
         </div>
       </section>
 
-      {/* 3D Satellite Viewport + Live Pacenote HUD (supports inline & seamless Tela Cheia) */}
+      {/* 3D Satellite Viewport + Live RallyBR HUD (supports inline & seamless Tela Cheia) */}
       <section
         className={
           isFullscreen
@@ -1458,8 +1598,8 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
         >
           <div ref={canvasHostRef} className="h-full w-full touch-none" />
 
-          {/* Top-left Camera Modes */}
-          <div className="pointer-events-auto absolute top-2.5 left-2.5 z-10 flex max-w-[66%] flex-wrap gap-1 pt-[env(safe-area-inset-top)]">
+          {/* Top-left Camera Modes (no text truncation, zero backdrop-blur over WebGL) */}
+          <div className="pointer-events-auto absolute top-2.5 left-2.5 right-28 z-10 flex flex-wrap gap-1 pt-[env(safe-area-inset-top)]">
             {CAMERA_MODES.map((cm) => {
               const active = cm.id === cameraMode;
               return (
@@ -1467,38 +1607,26 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
                   key={cm.id}
                   type="button"
                   onClick={() => setCameraMode(cm.id)}
-                  className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-extrabold uppercase backdrop-blur-md transition-colors ${
+                  className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-lg border px-2 text-[10px] font-extrabold uppercase whitespace-nowrap transition-colors ${
                     active
                       ? 'border-[#EF233C] bg-[#EF233C] text-white'
-                      : 'border-white/15 bg-black/65 text-white/80 hover:text-white'
+                      : 'border-white/20 bg-[#0B0D10]/90 text-white/85 hover:text-white'
                   }`}
                 >
-                  <Camera className="h-3 w-3" />
+                  <Camera className="h-3 w-3 shrink-0" />
                   <span>{cm.label}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Top-right Telemetry Pill + Tela Cheia Button */}
-          <div className="pointer-events-auto absolute top-2.5 right-2.5 z-10 flex items-start gap-1.5 pt-[env(safe-area-inset-top)]">
-            <div className="pointer-events-none rounded-xl border border-white/15 bg-black/70 px-2.5 py-1.5 text-right font-mono backdrop-blur-md tabular-nums">
-              <p className="text-xs font-black text-white">
-                {currentVirtualSpeedKmh} <span className="text-[9px] text-white/65">KM/H</span>
-              </p>
-              <p className="text-[10px] font-bold text-emerald-400">
-                KM {currentDistKm.toFixed(2).replace('.', ',')}
-                {currentSlopePct !== 0
-                  ? ` · ${currentSlopePct > 0 ? `+${currentSlopePct}%` : `${currentSlopePct}%`}`
-                  : ''}
-              </p>
-            </div>
-
+          {/* Top-right Tela Cheia Button */}
+          <div className="pointer-events-auto absolute top-2.5 right-2.5 z-10 pt-[env(safe-area-inset-top)]">
             <button
               type="button"
               onClick={() => setIsFullscreen((v) => !v)}
               aria-label={isFullscreen ? 'Sair da Tela Cheia' : 'Abrir 3D em Tela Cheia'}
-              className="inline-flex h-10 items-center gap-1 rounded-xl border border-white/20 bg-black/75 px-2.5 text-[10px] font-extrabold text-white uppercase backdrop-blur-md hover:border-[#EF233C] active:scale-95"
+              className="inline-flex h-9 shrink-0 items-center gap-1 rounded-xl border border-white/20 bg-[#0B0D10]/90 px-2.5 text-[10px] font-extrabold text-white uppercase whitespace-nowrap hover:border-[#EF233C] active:scale-95"
             >
               {isFullscreen ? (
                 <>
@@ -1514,52 +1642,71 @@ export const VirtualRecce3D: React.FC<VirtualRecce3DProps> = ({
             </button>
           </div>
 
-          {/* Bottom Floating Pacenote HUD: PRÓXIMA NOTA + DEPOIS */}
+          {/* Bottom HUD: Left = PRÓXIMA NOTA + DEPOIS | Right = Velocímetro, Progresso, Altitude e Inclinação */}
           <div className="pointer-events-none absolute inset-x-2.5 bottom-2.5 z-10 flex flex-wrap items-end justify-between gap-2">
-            <div className="flex max-w-full items-center gap-2 rounded-2xl border border-white/20 bg-black/80 px-3 py-2 backdrop-blur-md shadow-2xl">
-              {upcomingNotes.next ? (
-                <>
-                  <span
-                    className={`flex h-11 min-w-[44px] shrink-0 items-center justify-center rounded-xl border px-2 font-mono text-sm font-black ${getGradeBadgeClasses(
-                      upcomingNotes.next.direction === 'R' ? 'R' : upcomingNotes.next.grade
-                    )}`}
-                  >
-                    {upcomingNotes.next.direction === 'R'
-                      ? 'RETA'
-                      : `${upcomingNotes.next.direction}${upcomingNotes.next.grade}`}
-                  </span>
-                  <div className="min-w-0 leading-tight">
-                    <p className="text-[9px] font-extrabold tracking-wider text-white/65 uppercase">
-                      Próxima Nota ·{' '}
-                      <span className="font-mono text-amber-300">
-                        {Math.max(0, upcomingNotes.next.distM - currentDistM)}m
-                      </span>
+            <div className="flex max-w-full flex-wrap items-end gap-1.5">
+              <div className="flex max-w-full items-center gap-2 rounded-2xl border border-white/20 bg-[#0B0D10]/92 px-3 py-2 shadow-2xl">
+                {upcomingNotes.next ? (
+                  <>
+                    <span
+                      className={`flex h-11 min-w-[44px] shrink-0 items-center justify-center rounded-xl border px-2 font-mono text-sm font-black ${getGradeBadgeClasses(
+                        upcomingNotes.next.direction === 'R' ? 'R' : upcomingNotes.next.grade
+                      )}`}
+                    >
+                      {upcomingNotes.next.direction === 'R'
+                        ? 'RETA'
+                        : `${upcomingNotes.next.direction}${upcomingNotes.next.grade}`}
+                    </span>
+                    <div className="min-w-0 leading-tight">
+                      <p className="text-[9px] font-extrabold tracking-wider text-white/65 uppercase">
+                        Próxima Nota ·{' '}
+                        <span className="font-mono text-amber-300">
+                          {Math.max(0, upcomingNotes.next.distM - currentDistM)}m
+                        </span>
+                      </p>
+                      <p className="truncate text-sm font-black text-white sm:text-base">
+                        {upcomingNotes.next.label}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="leading-tight">
+                    <p className="text-[9px] font-extrabold tracking-wider text-emerald-400 uppercase">
+                      Reta Final
                     </p>
-                    <p className="truncate text-sm font-black text-white sm:text-base">
-                      {upcomingNotes.next.label}
-                    </p>
+                    <p className="text-xs font-black text-white">Chegada da Especial</p>
                   </div>
-                </>
-              ) : (
-                <div className="leading-tight">
-                  <p className="text-[9px] font-extrabold tracking-wider text-emerald-400 uppercase">
-                    Reta Final
+                )}
+              </div>
+
+              {upcomingNotes.after && (
+                <div className="rounded-xl border border-white/15 bg-[#0B0D10]/90 px-2.5 py-1.5">
+                  <p className="text-[9px] font-extrabold tracking-wider text-white/60 uppercase">
+                    Depois (+{upcomingNotes.next?.distToNextM ?? 0}m)
                   </p>
-                  <p className="text-xs font-black text-white">Chegada da Especial</p>
+                  <p className="text-xs font-extrabold text-amber-300">
+                    {upcomingNotes.after.code}
+                  </p>
                 </div>
               )}
             </div>
 
-            {upcomingNotes.after && (
-              <div className="rounded-xl border border-white/15 bg-black/75 px-2.5 py-1.5 backdrop-blur-md">
-                <p className="text-[9px] font-extrabold tracking-wider text-white/60 uppercase">
-                  Depois (+{upcomingNotes.next?.distToNextM ?? 0}m)
-                </p>
-                <p className="text-xs font-extrabold text-amber-300">
-                  {upcomingNotes.after.code}
-                </p>
-              </div>
-            )}
+            <div className="rounded-2xl border border-white/20 bg-[#0B0D10]/92 px-3 py-2 text-right font-mono tabular-nums shadow-2xl">
+              <p className="text-sm font-black text-white leading-none">
+                {currentVirtualSpeedKmh}{' '}
+                <span className="text-[10px] font-bold text-white/65">KM/H</span>
+              </p>
+              <p className="mt-1 text-[10px] font-bold text-emerald-400">
+                KM {currentDistKm.toFixed(2).replace('.', ',')}
+                <span className="text-white/55">
+                  {' '}
+                  / {sceneCourse.totalDistKm.toFixed(2).replace('.', ',')}
+                </span>
+              </p>
+              <p className="text-[10px] font-bold text-amber-300">
+                {currentAltitudeM}m · {currentSlopePct > 0 ? `+${currentSlopePct}%` : `${currentSlopePct}%`}
+              </p>
+            </div>
           </div>
         </div>
 

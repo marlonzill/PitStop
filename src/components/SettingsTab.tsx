@@ -161,6 +161,13 @@ import {
   uploadAllTracksToCloud,
   uploadTrackToCloudLibrary,
 } from '../services/cloudTracksService';
+import {
+  clearOfflineMapsCache,
+  formatBytesCompact,
+  getOfflineMapsStorageSummary,
+  OFFLINE_MAPS_UPDATED_EVENT,
+  type OfflineMapsStorageSummary,
+} from '../utils/offlineMapsService';
 
 interface SettingsTabProps {
   initialMenu?: SettingsSubMenu;
@@ -377,6 +384,27 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   });
   const [backupFeedback, setBackupFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   const [confirmResetDefaults, setConfirmResetDefaults] = useState(false);
+  const [offlineMapsSummary, setOfflineMapsSummary] = useState<OfflineMapsStorageSummary | null>(
+    null
+  );
+  const [clearingOfflineMaps, setClearingOfflineMaps] = useState(false);
+  const [confirmClearOfflineMaps, setConfirmClearOfflineMaps] = useState(false);
+  const [offlineMapsNotice, setOfflineMapsNotice] = useState<string | null>(null);
+
+  const refreshOfflineMapsSummary = useCallback(() => {
+    void getOfflineMapsStorageSummary()
+      .then((summary) => setOfflineMapsSummary(summary))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (activeMenu === 'backup') {
+      refreshOfflineMapsSummary();
+    }
+    window.addEventListener(OFFLINE_MAPS_UPDATED_EVENT, refreshOfflineMapsSummary);
+    return () =>
+      window.removeEventListener(OFFLINE_MAPS_UPDATED_EVENT, refreshOfflineMapsSummary);
+  }, [activeMenu, refreshOfflineMapsSummary]);
 
   const [cloudLibOpen, setCloudLibOpen] = useState(false);
   const [cloudLibTab, setCloudLibTab] = useState<'explore' | 'upload'>('explore');
@@ -1440,7 +1468,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     calibration: 'Aferição do Hodômetro',
     alerts: 'Alertas & Atalhos',
     gopro: 'Câmeras GoPro (BLE)',
-    backup: 'Backup & Dados',
+    backup: 'Armazenamento & Dados',
     system: 'Sistema & Licença',
   };
 
@@ -1457,7 +1485,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     calibration: 'Calibre o fator W Fino e o erro percentual do hodômetro.',
     alerts: 'Bipes, avisos de voz, rolagem de planilha e teclas físicas.',
     gopro: 'Pareie e controle múltiplas câmeras GoPro via Bluetooth BLE.',
-    backup: 'Biblioteca online de pistas, envio para nuvem e backup de pistas.',
+    backup: 'Mapas offline em cache, biblioteca online de pistas e backup.',
     system: 'Licença do aparelho, atualizações, GPS, bateria e permissões.',
   };
 
@@ -1559,8 +1587,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     {
       id: 'backup',
       accentColor: '#22C55E',
-      title: 'BACKUP',
-      subtitle: 'Exportar Dados',
+      title: 'ARMAZENAMENTO & DADOS',
+      subtitle: 'Mapas Offline & Backup',
     },
     {
       id: 'system',
@@ -4565,6 +4593,97 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 </div>
               )}
             </div>
+          </section>
+
+          {/* Gerenciamento de Mapas Offline (Cache Local estilo Maps.me) */}
+          <section className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-surface)] p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Database className="h-4 w-4 text-emerald-400" />
+                  <h3 className="font-['Barlow_Condensed'] text-lg font-bold tracking-wide text-[var(--ps-text)] uppercase">
+                    Mapas Offline (Cache Local)
+                  </h3>
+                </div>
+                <p className="text-xs text-[var(--ps-muted)]">
+                  Quadrantes de satélite/ruas, elevação DEM e rotas de deslocamento salvos para navegação sem internet.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 font-mono tabular-nums">
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
+                <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Espaço Usado</p>
+                <p className="mt-0.5 text-base font-black text-emerald-400">
+                  {offlineMapsSummary ? formatBytesCompact(offlineMapsSummary.totalBytes) : '0 MB'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
+                <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Quadrantes</p>
+                <p className="mt-0.5 text-base font-black text-[var(--ps-text)]">
+                  {offlineMapsSummary?.cachedTilesCount ?? 0}
+                </p>
+              </div>
+              <div className="rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] p-2.5 text-center">
+                <p className="text-[9px] font-bold text-[var(--ps-muted)] uppercase">Provas / Rotas</p>
+                <p className="mt-0.5 text-base font-black text-[var(--ps-amber)]">
+                  {offlineMapsSummary?.packsCount ?? 0} / {offlineMapsSummary?.routesCount ?? 0}
+                </p>
+              </div>
+            </div>
+
+            {offlineMapsNotice && (
+              <p className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300">
+                {offlineMapsNotice}
+              </p>
+            )}
+
+            {!confirmClearOfflineMaps ? (
+              <button
+                type="button"
+                disabled={
+                  clearingOfflineMaps ||
+                  ((offlineMapsSummary?.cachedTilesCount ?? 0) === 0 &&
+                    (offlineMapsSummary?.packsCount ?? 0) === 0 &&
+                    (offlineMapsSummary?.routesCount ?? 0) === 0)
+                }
+                onClick={() => setConfirmClearOfflineMaps(true)}
+                className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-4 text-xs font-bold text-[var(--ps-muted)] hover:border-red-500/60 hover:text-[var(--ps-danger)] disabled:opacity-40"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>Limpar Cache de Mapas Offline</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/12 px-3 py-2">
+                <span className="flex-1 text-xs font-semibold text-[var(--ps-danger)]">
+                  Apagar todos os mapas e rotas offline salvos?
+                </span>
+                <button
+                  type="button"
+                  disabled={clearingOfflineMaps}
+                  onClick={() => {
+                    setClearingOfflineMaps(true);
+                    void clearOfflineMapsCache()
+                      .then(() => {
+                        setConfirmClearOfflineMaps(false);
+                        setOfflineMapsNotice('Cache de mapas offline limpo com sucesso.');
+                        refreshOfflineMapsSummary();
+                      })
+                      .finally(() => setClearingOfflineMaps(false));
+                  }}
+                  className="min-h-[34px] rounded-lg bg-[var(--ps-accent)] px-3 text-xs font-extrabold text-[var(--ps-accent-text)]"
+                >
+                  Sim
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearOfflineMaps(false)}
+                  className="min-h-[34px] rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-card-deep)] px-2.5 text-xs text-[var(--ps-muted)]"
+                >
+                  Não
+                </button>
+              </div>
+            )}
           </section>
         </div>
       )}

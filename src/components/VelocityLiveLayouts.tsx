@@ -94,6 +94,7 @@ export interface VelocityLiveLayoutViewProps {
   onStartOrArmStage: () => void;
   onForceManualStart: () => void;
   onEditTripDistanceKm: (nextDisplayedKm: number) => void;
+  cartelaCountdownBanner?: string | null;
 }
 
 function formatClockTime(tsMs: number): string {
@@ -222,6 +223,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
   onStartOrArmStage,
   onForceManualStart,
   onEditTripDistanceKm,
+  cartelaCountdownBanner,
 }) => {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [editingTrip, setEditingTrip] = useState(false);
@@ -796,7 +798,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
   };
 
   // ============================================================================
-  // SHARED 5-TAB NAVIGATION BAR (CRONÔM. | ANÁLISE | MAPA | SATCRON | CONFIG.)
+  // SHARED BOTTOM NAVIGATION BAR (CRONÔM. | ANÁLISE | MAPA | SATCRON | CONFIG.)
   // Position configurable via Settings: Rodapé (Polegar) or Topo
   // ============================================================================
   const renderFiveTabBar = () => (
@@ -810,7 +812,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       <button
         type="button"
         onClick={onSelectTimerTab}
-        className={`flex min-h-[44px] flex-col items-center justify-center rounded-lg px-0.5 text-[10px] font-extrabold uppercase transition-all active:scale-[0.98] ${
+        className={`flex min-h-[clamp(38px,5.6dvh,46px)] flex-col items-center justify-center rounded-lg px-0.5 text-[9.5px] font-extrabold uppercase transition-all active:scale-[0.98] sm:text-[10px] ${
           !showLiveMap && liveMode === 'timer'
             ? 'pitstop-btn-red'
             : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -823,7 +825,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       <button
         type="button"
         onClick={onOpenAnalysis}
-        className="flex min-h-[44px] flex-col items-center justify-center rounded-lg px-0.5 text-[10px] font-extrabold text-[var(--ps-emerald)] uppercase transition-all hover:bg-emerald-500/15 active:scale-[0.98]"
+        className="flex min-h-[clamp(38px,5.6dvh,46px)] flex-col items-center justify-center rounded-lg px-0.5 text-[9.5px] font-extrabold text-[var(--ps-emerald)] uppercase transition-all hover:bg-emerald-500/15 active:scale-[0.98] sm:text-[10px]"
       >
         <TrendingUp className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">Análise</span>
@@ -832,7 +834,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       <button
         type="button"
         onClick={onSelectMapTab}
-        className={`flex min-h-[44px] flex-col items-center justify-center rounded-lg px-0.5 text-[10px] font-extrabold uppercase transition-all active:scale-[0.98] ${
+        className={`flex min-h-[clamp(38px,5.6dvh,46px)] flex-col items-center justify-center rounded-lg px-0.5 text-[9.5px] font-extrabold uppercase transition-all active:scale-[0.98] sm:text-[10px] ${
           showLiveMap
             ? 'bg-sky-600 text-white'
             : 'text-[var(--ps-muted)] hover:text-[var(--ps-text)]'
@@ -845,7 +847,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       <button
         type="button"
         onClick={onOpenSatcron}
-        className="flex min-h-[44px] flex-col items-center justify-center rounded-lg px-0.5 text-[10px] font-extrabold text-[var(--ps-muted)] uppercase transition-all hover:text-[var(--ps-text)] active:scale-[0.98]"
+        className="flex min-h-[clamp(38px,5.6dvh,46px)] flex-col items-center justify-center rounded-lg px-0.5 text-[9.5px] font-extrabold text-[var(--ps-muted)] uppercase transition-all hover:text-[var(--ps-text)] active:scale-[0.98] sm:text-[10px]"
       >
         <Trophy className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent)]" />
         <span className="truncate">Satcron</span>
@@ -854,7 +856,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       <button
         type="button"
         onClick={onOpenConfigModal}
-        className="flex min-h-[44px] flex-col items-center justify-center rounded-lg px-0.5 text-[10px] font-extrabold text-[var(--ps-muted)] uppercase transition-all hover:text-[var(--ps-text)] active:scale-[0.98]"
+        className="flex min-h-[clamp(38px,5.6dvh,46px)] flex-col items-center justify-center rounded-lg px-0.5 text-[9.5px] font-extrabold text-[var(--ps-muted)] uppercase transition-all hover:text-[var(--ps-text)] active:scale-[0.98] sm:text-[10px]"
       >
         <Settings className="h-3.5 w-3.5 shrink-0 text-[var(--ps-text)]" />
         <span className="truncate">Config.</span>
@@ -930,7 +932,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                 <span>{isFaster ? '▲' : isSlower ? '▼' : '●'}</span>
                 <span>{isFaster ? 'MAIS RÁPIDO' : isSlower ? 'MAIS LENTO' : 'DELTA TIME'}</span>
               </div>
-              <div className="my-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums">
+              <div className="my-0.5 font-mono text-[clamp(2rem,6.5dvh,3.75rem)] font-black leading-none tracking-tighter tabular-nums">
                 {formattedCompactDelta}
               </div>
               <p className="max-w-full truncate font-mono text-[10px] font-bold leading-tight opacity-85 uppercase">
@@ -942,12 +944,12 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
 
             {/* Velocidade + Metros */}
             <div className="grid flex-1 min-h-0 grid-cols-2 gap-1.5">
-              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1 text-center">
                 <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                   Velocidade
                 </span>
                 <div className="mt-0.5 flex items-baseline justify-center gap-1 font-mono tabular-nums">
-                  <span className="text-5xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-6xl">
+                  <span className="text-[clamp(1.85rem,5.8dvh,3.5rem)] font-black leading-none tracking-tight text-[var(--ps-text)]">
                     {Math.round(speedKmh)}
                   </span>
                   <span className="text-xs font-extrabold text-[var(--ps-accent)] sm:text-sm">
@@ -956,12 +958,12 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                 </div>
               </div>
 
-              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1.5 text-center">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2 py-1 text-center">
                 <span className="text-[10px] font-bold tracking-wider text-[var(--ps-muted)] uppercase">
                   Metros (Odômetro)
                 </span>
                 {renderTripEditorOrValue(
-                  'text-4xl sm:text-5xl text-[var(--ps-amber)]',
+                  'text-[clamp(1.5rem,4.6dvh,2.75rem)] text-[var(--ps-amber)]',
                   'text-sm text-[var(--ps-amber)]',
                   'text-[11px] text-[var(--ps-muted)]'
                 )}
@@ -969,7 +971,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
             </div>
 
             {/* Cronômetro Principal + CH / MELHOR / ÚLTIMA */}
-            <div className="flex flex-1 min-h-0 flex-col justify-center space-y-1.5 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-2 sm:px-3">
+            <div className="flex flex-1 min-h-0 flex-col justify-center space-y-1 rounded-xl border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1.5 sm:px-3">
               <div className="flex flex-col items-center text-center">
                 <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 font-mono text-[10px] font-bold uppercase text-[var(--ps-muted)]">
                   <span className="text-[var(--ps-text)]">
@@ -989,7 +991,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                   </span>
                 </div>
                 <div
-                  className={`mt-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums ${
+                  className={`mt-0.5 font-mono text-[clamp(2rem,6.5dvh,3.75rem)] font-black leading-none tracking-tighter tabular-nums ${
                     stageState === 'running'
                       ? 'text-[var(--ps-text)]'
                       : stageState === 'finished'
@@ -1047,7 +1049,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               <div className="flex items-center gap-1.5 font-mono text-[11px] font-black tracking-wider uppercase sm:text-xs">
                 <span>{isFaster ? '▲ MAIS RÁPIDO' : isSlower ? '▼ MAIS LENTO' : '● DELTA TIME'}</span>
               </div>
-              <div className="my-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums">
+              <div className="my-0.5 font-mono text-[clamp(2rem,6.5dvh,3.75rem)] font-black leading-none tracking-tighter tabular-nums">
                 {formattedCompactDelta}
               </div>
               <p className="font-mono text-[10px] font-bold opacity-80 uppercase">
@@ -1089,7 +1091,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                   MEL {formatStageDuration(optimalSummary.bestRunTotalMs)}
                 </span>
               </div>
-              <div className="mt-1 font-mono text-6xl font-black leading-none tracking-tighter text-[var(--ps-text)] tabular-nums">
+              <div className="mt-1 font-mono text-[clamp(2rem,6.5dvh,3.75rem)] font-black leading-none tracking-tighter text-[var(--ps-text)] tabular-nums">
                 {formatStageDuration(currentStageElapsedMs)}
               </div>
             </div>
@@ -1107,7 +1109,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               </span>
               <div className="mt-2">
                 {renderTripEditorOrValue(
-                  'text-6xl sm:text-7xl text-[#FBBF24]',
+                  'text-[clamp(2.25rem,7dvh,4.25rem)] text-[#FBBF24]',
                   'text-2xl text-[#FBBF24]',
                   'text-xs text-amber-200/80'
                 )}
@@ -1429,7 +1431,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
         return (
           <div className="flex flex-1 min-h-0 flex-col justify-between gap-2 overflow-hidden">
             <div
-              className={`flex flex-[1.5] min-h-[170px] flex-col items-center justify-center rounded-2xl border-2 px-4 py-3 text-center transition-colors ${
+              className={`flex flex-[1.4] min-h-0 flex-col items-center justify-center rounded-2xl border-2 px-4 py-2 text-center transition-colors ${
                 isFaster
                   ? 'border-emerald-300 bg-[#10B981] text-black shadow-[0_0_30px_rgba(16,185,129,0.45)]'
                   : isSlower
@@ -1440,7 +1442,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               <span className="font-mono text-sm font-black tracking-widest uppercase sm:text-base">
                 {isFaster ? '▲ MAIS RÁPIDO' : isSlower ? '▼ MAIS LENTO' : '● DELTA TIME'}
               </span>
-              <span className="my-1 font-mono text-6xl font-black leading-none tracking-tight tabular-nums sm:text-7xl">
+              <span className="my-1 font-mono text-[clamp(2.25rem,8dvh,4.5rem)] font-black leading-none tracking-tight tabular-nums">
                 {formattedCompactDelta}
               </span>
               <span className="font-mono text-xs font-extrabold opacity-90 uppercase">
@@ -1504,7 +1506,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               </span>
               <div className="mt-2">
                 {renderTripEditorOrValue(
-                  'text-6xl sm:text-7xl text-[#FBBF24]',
+                  'text-[clamp(2.25rem,7dvh,4.25rem)] text-[#FBBF24]',
                   'text-2xl text-[#FBBF24]',
                   'text-sm text-amber-200/80'
                 )}
@@ -1580,7 +1582,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                 {isFaster ? '▲ MAIS RÁPIDO' : isSlower ? '▼ MAIS LENTO' : 'DELTA NOTURNO'}
               </span>
               <span
-                className={`my-0.5 font-mono text-6xl font-black leading-none tracking-tighter tabular-nums ${
+                className={`my-0.5 font-mono text-[clamp(2rem,6.5dvh,3.75rem)] font-black leading-none tracking-tighter tabular-nums ${
                   isFaster
                     ? 'text-emerald-400/90'
                     : isSlower
@@ -1630,7 +1632,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                   MEL {formatStageDuration(optimalSummary.bestRunTotalMs)}
                 </span>
               </div>
-              <div className="mt-1 font-mono text-6xl font-black leading-none tracking-tighter text-slate-100 tabular-nums">
+              <div className="mt-1 font-mono text-[clamp(2rem,6.5dvh,3.75rem)] font-black leading-none tracking-tighter text-slate-100 tabular-nums">
                 {formatStageDuration(currentStageElapsedMs)}
               </div>
             </div>
@@ -1777,7 +1779,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               </div>
 
               <div className="my-auto flex items-baseline justify-center gap-1.5 font-['Orbitron'] tabular-nums">
-                <span className="text-6xl font-black leading-none tracking-tight text-[var(--ps-text)] sm:text-7xl">
+                <span className="text-[clamp(2.25rem,7dvh,4.25rem)] font-black leading-none tracking-tight text-[var(--ps-text)]">
                   {Math.round(speedKmh)}
                 </span>
                 <span className="text-sm font-black text-[var(--ps-accent)] uppercase sm:text-base">
@@ -1994,7 +1996,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
                 HUD VELOCITY · {statusHeadline}
               </span>
               <div className="my-auto flex items-baseline justify-center gap-1.5 font-['Orbitron'] tabular-nums">
-                <span className="text-6xl font-black leading-none tracking-tight text-[var(--ps-text)] drop-shadow-[0_0_12px_var(--ps-accent-soft)] sm:text-7xl">
+                <span className="text-[clamp(2.25rem,7dvh,4.25rem)] font-black leading-none tracking-tight text-[var(--ps-text)] drop-shadow-[0_0_12px_var(--ps-accent-soft)]">
                   {Math.round(speedKmh)}
                 </span>
                 <span className="text-xs font-bold text-[var(--ps-accent)] uppercase sm:text-sm">
@@ -2296,14 +2298,14 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
   // ============================================================================
   return (
     <section
-      className={`fixed inset-0 z-40 flex h-[100dvh] flex-col justify-between gap-1.5 overflow-hidden p-2 sm:p-3 ${
+      className={`fixed inset-0 z-40 flex h-[100dvh] flex-col justify-between gap-1 overflow-hidden px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:gap-1.5 sm:px-3 ${
         isNightMode ? '!bg-[#000000] text-slate-200' : 'bg-[var(--ps-bg)] text-[var(--ps-text)]'
       }`}
     >
       {/* 1. TOPO LIMPO ÚNICO */}
-      <div className="shrink-0 space-y-1.5">
+      <div className="shrink-0 space-y-1">
         <div
-          className={`space-y-1 rounded-xl border px-2.5 py-2 ${
+          className={`space-y-1 rounded-xl border px-2.5 py-1.5 ${
             isNightMode
               ? 'border-white/10 bg-[#050609]'
               : 'border-[var(--ps-border)] bg-[var(--ps-surface)]'
@@ -2314,7 +2316,7 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               type="button"
               onClick={onBack}
               aria-label="Voltar"
-              className={`inline-flex min-h-[40px] shrink-0 items-center gap-1 rounded-lg border px-2.5 text-xs font-bold transition-all active:scale-[0.98] ${
+              className={`inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-lg border px-2.5 text-xs font-bold transition-all active:scale-[0.98] ${
                 isNightMode
                   ? 'border-white/10 bg-[#0A0C10] text-slate-200'
                   : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-text)] hover:border-[var(--ps-accent)]'
@@ -2324,40 +2326,20 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
               <span>Voltar</span>
             </button>
 
-            <p className="min-w-0 flex-1 text-center font-['Barlow_Condensed'] text-base font-black leading-tight tracking-wide uppercase sm:text-lg">
+            <p className="min-w-0 flex-1 truncate text-center font-['Barlow_Condensed'] text-base font-black leading-tight tracking-wide uppercase sm:text-lg">
               {activeTrackName}
             </p>
 
-            {(gpsStatusLabel || zeroSpeedLocked) && (
-              <div className="flex shrink-0 items-center gap-1 font-mono text-[10px] font-bold">
-                {zeroSpeedLocked && (
-                  <span
-                    title="Zero-Speed Anti-Drift Lock ativo (< 2,0 km/h)"
-                    className="rounded border border-amber-500/40 bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-black text-amber-400 uppercase"
-                  >
-                    LOCK 0.0
-                  </span>
-                )}
-                {gpsStatusLabel && (
-                  <span
-                    className={`rounded border px-1.5 py-0.5 tabular-nums ${
-                      isNightMode
-                        ? 'border-white/10 bg-[#0A0C10] text-emerald-400'
-                        : 'border-[var(--ps-border)] bg-[var(--ps-card-deep)] text-[var(--ps-emerald)]'
-                    }`}
-                  >
-                    {gpsStatusLabel}
-                  </span>
-                )}
-              </div>
-            )}
+            <div className="w-[64px] shrink-0" aria-hidden="true" />
           </div>
 
           {renderProgressBar()}
 
-          {(liveNotice || gpsError) && (
+          {(cartelaCountdownBanner || liveNotice || gpsError) && (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--ps-border)] bg-[var(--ps-card-deep)] px-2.5 py-1 text-[11px]">
-              <span className="truncate text-[var(--ps-amber)]">{liveNotice || gpsError}</span>
+              <span className="truncate font-mono font-bold text-[var(--ps-amber)] tabular-nums">
+                {gpsError || liveNotice || cartelaCountdownBanner}
+              </span>
               {wakeLockActive && (
                 <span className="shrink-0 font-mono text-[9px] text-[var(--ps-muted)]">
                   Tela Ativa
@@ -2381,14 +2363,14 @@ export const VelocityLivePresetScreen: React.FC<VelocityLiveLayoutViewProps> = (
       </div>
 
       {/* 3. RODAPÉ UNIFICADO ÚNICO */}
-      <div className="shrink-0 space-y-1.5">
+      <div className="shrink-0 space-y-1">
         <div className="grid grid-cols-2 gap-2">
           {goproCompactButtonNode}
 
           <button
             type="button"
             onClick={handleUnifiedStageAction}
-            className={`flex min-h-[48px] items-center justify-center gap-2 rounded-xl px-3 text-xs font-extrabold uppercase transition-all active:scale-[0.98] sm:text-sm ${unifiedButtonMeta.cls}`}
+            className={`flex min-h-[clamp(40px,5.8dvh,48px)] items-center justify-center gap-2 rounded-xl px-3 text-xs font-extrabold uppercase transition-all active:scale-[0.98] sm:text-sm ${unifiedButtonMeta.cls}`}
           >
             {unifiedButtonMeta.icon}
             <span>{unifiedButtonMeta.label}</span>

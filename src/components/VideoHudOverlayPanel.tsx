@@ -351,7 +351,7 @@ function drawHudOnCanvas(
   ctx.restore();
 }
 
-export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
+export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = React.memo(({
   lap1,
   lap2 = null,
   lap3 = null,
@@ -1653,4 +1653,4 @@ export const VideoHudOverlayPanel: React.FC<VideoHudOverlayPanelProps> = ({
       )}
     </div>
   );
-};
+});

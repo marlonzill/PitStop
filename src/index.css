@@ -719,15 +719,21 @@
     text-wrap: balance;
   }
 
+  button,
+  [role="button"],
+  a,
+  select,
+  input {
+    touch-action: manipulation;
+  }
+
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]) {
     transition:
-      transform 140ms cubic-bezier(0.16, 1, 0.3, 1),
-      background-color 150ms ease,
-      border-color 150ms ease,
-      color 150ms ease,
-      box-shadow 150ms ease,
-      opacity 150ms ease;
+      transform 65ms cubic-bezier(0.16, 1, 0.3, 1),
+      background-color 80ms ease,
+      border-color 80ms ease,
+      opacity 80ms ease;
   }
 
   button:not(:disabled):active {
@@ -763,12 +769,27 @@ input[type="date"] {
   letter-spacing: -0.02em;
 }
 
+html,
+body,
+#root {
+  min-height: 100dvh;
+}
+
 .pt-safe {
   padding-top: env(safe-area-inset-top, 0px);
 }
 
 .pb-safe {
-  padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+
+body.pitstop-map-fullscreen header,
+body.pitstop-map-fullscreen footer {
+  display: none !important;
+}
+
+.pitstop-leaflet-dark-tiles .leaflet-tile-pane {
+  filter: invert(93%) hue-rotate(180deg) brightness(95%) contrast(94%) saturate(85%);
 }
 
 /* Hide visible scrollbars on Planilha while keeping touch & wheel scroll fluid */

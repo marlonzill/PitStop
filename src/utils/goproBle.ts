@@ -1526,34 +1526,50 @@ function base64ToBlob(base64Data: string, mimeType: string): Blob {
  * (evitando bloqueios de mixed-content/CORS) com fallback para fetch na Web.
  */
 export async function fetchGoProMediaList(): Promise<GoProMediaItem[]> {
-  const url = `${GOPRO_WIFI_HOST}/gp/gpMediaList`;
+  const endpoints = [
+    `${GOPRO_WIFI_HOST}/gp/gpMediaList`,
+    `${GOPRO_WIFI_HOST}/gopro/media/list`,
+  ];
   let jsonPayload: { media?: RawGoProMediaDir[] } | null = null;
+  let lastErr: Error | null = null;
 
-  if (Capacitor.isNativePlatform()) {
-    const res = await CapacitorHttp.get({
-      url,
-      connectTimeout: 6500,
-      readTimeout: 8000,
-    });
-    if (res.status < 200 || res.status >= 300) {
-      throw new Error(`GoPro respondeu HTTP ${res.status}`);
-    }
-    jsonPayload =
-      typeof res.data === 'string'
-        ? (JSON.parse(res.data) as { media?: RawGoProMediaDir[] })
-        : (res.data as { media?: RawGoProMediaDir[] });
-  } else {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 6500);
+  for (const url of endpoints) {
     try {
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) {
-        throw new Error(`GoPro respondeu HTTP ${res.status}`);
+      if (Capacitor.isNativePlatform()) {
+        const res = await CapacitorHttp.get({
+          url,
+          connectTimeout: 6500,
+          readTimeout: 8000,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`GoPro respondeu HTTP ${res.status}`);
+        }
+        jsonPayload =
+          typeof res.data === 'string'
+            ? (JSON.parse(res.data) as { media?: RawGoProMediaDir[] })
+            : (res.data as { media?: RawGoProMediaDir[] });
+        break;
+      } else {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 6500);
+        try {
+          const res = await fetch(url, { signal: controller.signal });
+          if (!res.ok) {
+            throw new Error(`GoPro respondeu HTTP ${res.status}`);
+          }
+          jsonPayload = (await res.json()) as { media?: RawGoProMediaDir[] };
+          break;
+        } finally {
+          window.clearTimeout(timer);
+        }
       }
-      jsonPayload = (await res.json()) as { media?: RawGoProMediaDir[] };
-    } finally {
-      window.clearTimeout(timer);
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
     }
+  }
+
+  if (!jsonPayload && lastErr) {
+    throw lastErr;
   }
 
   const dirs = Array.isArray(jsonPayload?.media) ? jsonPayload.media : [];

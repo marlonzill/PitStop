@@ -15,9 +15,14 @@ import {
   Plus,
 } from 'lucide-react';
 import {
+  drawCachedOrUpscaledTileOnCanvas,
+  type OfflineTileLayerKind,
+} from '../utils/offlineMapsService';
+import {
   buildMarcoArrowGeometry,
   buildMarcoGateLineString,
   computeSampleGForces,
+  decimateSamplesForDisplay,
   extractMapSpeedBadges,
   type GeoWaypoint,
   type TrapKind,
@@ -80,6 +85,7 @@ interface VelocityMapboxViewProps {
     toLon: number;
     label?: string;
     color?: string;
+    routeLatLngs?: [number, number][];
   } | null;
   onSelectWaypoint?: (wp: GeoWaypoint) => void;
   onSelectMultiTrace?: (trackId: string) => void;
@@ -112,6 +118,10 @@ interface VelocityMapboxViewProps {
   requireLongPressForTraps?: boolean;
   mapStyleIndex?: number;
   onCycleMapStyle?: () => void;
+  driving3dMode?: boolean;
+  drivingTheme?: 'satellite' | 'dark' | 'light';
+  recenterTrigger?: number;
+  onUserPanChanged?: (paused: boolean) => void;
 }
 
 function trapColorByKind(kind: TrapKind): string {
@@ -260,6 +270,76 @@ function createVehicleMarkerElement(
   return el;
 }
 
+function createNavigationArrowCursorElement(headingDeg: number | null): {
+  el: HTMLDivElement;
+  arrowSvg: SVGSVGElement;
+} {
+  const el = document.createElement('div');
+  el.style.width = '50px';
+  el.style.height = '50px';
+  el.style.display = 'flex';
+  el.style.alignItems = 'center';
+  el.style.justifyContent = 'center';
+  el.style.position = 'relative';
+  el.style.pointerEvents = 'none';
+
+  // Soft cyan/blue navigation halo
+  const halo = document.createElement('div');
+  halo.style.position = 'absolute';
+  halo.style.inset = '2px';
+  halo.style.borderRadius = '9999px';
+  halo.style.background =
+    'radial-gradient(circle, rgba(56,189,248,0.42) 0%, rgba(14,165,233,0.16) 62%, rgba(14,165,233,0) 100%)';
+  halo.style.border = '1.5px solid rgba(125,211,252,0.55)';
+  el.appendChild(halo);
+
+  // Circular navigation puck
+  const puck = document.createElement('div');
+  puck.style.width = '34px';
+  puck.style.height = '34px';
+  puck.style.borderRadius = '9999px';
+  puck.style.background = 'linear-gradient(180deg, #0F172A 0%, #020617 100%)';
+  puck.style.border = '2.5px solid #FFFFFF';
+  puck.style.boxShadow = '0 4px 12px rgba(0,0,0,0.85), 0 0 12px rgba(56,189,248,0.45)';
+  puck.style.display = 'flex';
+  puck.style.alignItems = 'center';
+  puck.style.justifyContent = 'center';
+  puck.style.position = 'relative';
+
+  // 3D Extruded Arrowhead pointing North (0 deg) rotated by headingDeg inside map layer
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const arrowSvg = document.createElementNS(svgNS, 'svg');
+  arrowSvg.setAttribute('width', '22');
+  arrowSvg.setAttribute('height', '22');
+  arrowSvg.setAttribute('viewBox', '0 0 24 24');
+  arrowSvg.style.transform = `rotate(${headingDeg ?? 0}deg)`;
+  arrowSvg.style.transformOrigin = '50% 50%';
+  arrowSvg.style.transition = 'transform 180ms linear';
+  arrowSvg.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.9))';
+
+  const leftWing = document.createElementNS(svgNS, 'polygon');
+  leftWing.setAttribute('points', '12,2.5 12,16.5 4.2,20.2');
+  leftWing.setAttribute('fill', '#7DD3FC');
+  arrowSvg.appendChild(leftWing);
+
+  const rightWing = document.createElementNS(svgNS, 'polygon');
+  rightWing.setAttribute('points', '12,2.5 19.8,20.2 12,16.5');
+  rightWing.setAttribute('fill', '#0284C7');
+  arrowSvg.appendChild(rightWing);
+
+  const outline = document.createElementNS(svgNS, 'polygon');
+  outline.setAttribute('points', '12,2.5 19.8,20.2 12,16.5 4.2,20.2');
+  outline.setAttribute('fill', 'none');
+  outline.setAttribute('stroke', '#FFFFFF');
+  outline.setAttribute('stroke-width', '1.4');
+  outline.setAttribute('stroke-linejoin', 'round');
+  arrowSvg.appendChild(outline);
+
+  puck.appendChild(arrowSvg);
+  el.appendChild(puck);
+  return { el, arrowSvg };
+}
+
 function offsetTraceLatLngs(
   samples: VelocitySample[],
   offsetMeters: number
@@ -320,7 +400,7 @@ function offsetPointAlongTrace(
   ];
 }
 
-export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
+export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = React.memo(({
   trackId,
   editableTrace,
   traceColor,
@@ -369,14 +449,18 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   requireLongPressForTraps = false,
   mapStyleIndex,
   onCycleMapStyle,
+  driving3dMode = false,
+  drivingTheme,
+  recenterTrigger = 0,
+  onUserPanChanged,
 }) => {
   const outerWrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const baseLayersRef = useRef<{
-    satellite: L.TileLayer;
-    labels: L.TileLayer;
-    streets: L.TileLayer;
+    satellite: L.GridLayer;
+    labels: L.GridLayer;
+    streets: L.GridLayer;
   } | null>(null);
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
   const transitLayerRef = useRef<L.LayerGroup | null>(null);
@@ -398,8 +482,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   const primaryMarkerRef = useRef<{
     marker: L.Marker;
     el: HTMLDivElement;
+    arrowSvg?: SVGSVGElement;
     variant: string;
     compact: boolean;
+    arrowCursor: boolean;
   } | null>(null);
   const ghostMarkerRef = useRef<{
     marker: L.Marker;
@@ -489,6 +575,11 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   armUnlockRef.current = armUnlockedTrapTimeout;
 
   const effectiveHeadingUp = headingUp !== undefined ? headingUp : internalHeadingUp;
+  const is3dDrivingActive = Boolean(
+    navigationMode && effectiveHeadingUp && (driving3dMode || Boolean(transitRoute)) && !userInteracted
+  );
+  const is3dDrivingRef = useRef(is3dDrivingActive);
+  is3dDrivingRef.current = is3dDrivingActive;
   const autoRotationDeg =
     navigationMode && effectiveHeadingUp && typeof navHeadingDeg === 'number' && !userInteracted
       ? -navHeadingDeg
@@ -501,6 +592,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   userInteractedRef.current = userInteracted;
   const manualRotationRef = useRef(manualRotationDeg);
   manualRotationRef.current = manualRotationDeg;
+  const onUserPanChangedRef = useRef(onUserPanChanged);
+  onUserPanChangedRef.current = onUserPanChanged;
+
+  useEffect(() => {
+    onUserPanChangedRef.current?.(userInteracted || Math.abs(manualRotationDeg) > 1);
+  }, [userInteracted, manualRotationDeg]);
 
   const clientToMapContainerPoint = (clientX: number, clientY: number): [number, number] | null => {
     const wrapper = outerWrapperRef.current;
@@ -524,6 +621,20 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   const currentStyle = MAP_STYLES[effectiveStyleIndex];
   const externalFs = Boolean(isExternalFullscreen);
   const effectiveFullscreen = typeof forceFullscreen === 'boolean' ? forceFullscreen : isFullscreen;
+
+  // Oculta o cabeçalho/rodapé principal do app quando o mapa entra em Tela Cheia real
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const shouldHideAppShell = effectiveFullscreen && !externalFs;
+    if (shouldHideAppShell) {
+      document.body.classList.add('pitstop-map-fullscreen');
+    } else {
+      document.body.classList.remove('pitstop-map-fullscreen');
+    }
+    return () => {
+      document.body.classList.remove('pitstop-map-fullscreen');
+    };
+  }, [effectiveFullscreen, externalFs]);
 
   // Quando o caller reativa autoFollowCar (ex: botão Seguir Carro), retoma seguimento automático
   const prevAutoFollowPropRef = useRef(autoFollowCar);
@@ -557,12 +668,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     const wrap = outerWrapperRef.current;
     if (!el) return;
 
-    const TRANSPARENT_TILE_DATA_URL =
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-
     const map = L.map(el, {
       center: currentPos ? [currentPos.lat, currentPos.lon] : ERECHIM_LATLON,
-      zoom: currentPos ? 17 : 15,
+      zoom: currentPos ? 17.5 : 15,
+      zoomSnap: 0.5,
       minZoom: 3,
       maxZoom: 21,
       zoomControl: false,
@@ -573,27 +682,44 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       bounceAtZoomLimits: false,
     });
 
-    const satellite = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      {
+    const createOfflineCachedLayer = (
+      layerKind: OfflineTileLayerKind,
+      maxNativeZoom: number
+    ): L.GridLayer => {
+      const OfflineLayer = L.GridLayer.extend({
+        createTile(coords: L.Coords, done: L.DoneCallback) {
+          const canvas = document.createElement('canvas');
+          const tileSize = this.getTileSize();
+          canvas.width = tileSize.x;
+          canvas.height = tileSize.y;
+          void drawCachedOrUpscaledTileOnCanvas(
+            layerKind,
+            coords.z,
+            coords.x,
+            coords.y,
+            canvas,
+            maxNativeZoom
+          )
+            .then(() => {
+              done(undefined, canvas);
+            })
+            .catch(() => {
+              done(undefined, canvas);
+            });
+          return canvas;
+        },
+      });
+      return new (OfflineLayer as unknown as new (opts: L.GridLayerOptions) => L.GridLayer)({
+        minZoom: 3,
         maxZoom: 21,
-        maxNativeZoom: 18,
-        errorTileUrl: TRANSPARENT_TILE_DATA_URL,
-      }
-    );
-    const labels = L.tileLayer(
-      'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-      {
-        maxZoom: 21,
-        maxNativeZoom: 18,
-        errorTileUrl: TRANSPARENT_TILE_DATA_URL,
-      }
-    );
-    const streets = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 21,
-      maxNativeZoom: 19,
-      errorTileUrl: TRANSPARENT_TILE_DATA_URL,
-    });
+        tileSize: 256,
+        keepBuffer: 4,
+      });
+    };
+
+    const satellite = createOfflineCachedLayer('satellite', 18);
+    const labels = createOfflineCachedLayer('labels', 18);
+    const streets = createOfflineCachedLayer('streets', 19);
 
     satellite.addTo(map);
     baseLayersRef.current = { satellite, labels, streets };
@@ -622,9 +748,10 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     if (draggable) {
       draggable.on('predrag', () => {
         const deg = totalRotationRef.current;
-        if (Math.abs(deg) > 0.01 && draggable._startPos && draggable._newPos) {
+        const pitchScaleY = is3dDrivingRef.current ? 1.88 : 1;
+        if ((Math.abs(deg) > 0.01 || pitchScaleY !== 1) && draggable._startPos && draggable._newPos) {
           const dx = draggable._newPos.x - draggable._startPos.x;
-          const dy = draggable._newPos.y - draggable._startPos.y;
+          const dy = (draggable._newPos.y - draggable._startPos.y) * pitchScaleY;
           const rad = (-deg * Math.PI) / 180;
           const cos = Math.cos(rad);
           const sin = Math.sin(rad);
@@ -854,7 +981,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     };
   }, []);
 
-  // Alterna camada Satélite / Híbrido / Ruas
+  // Alterna camada Satélite / Híbrido / Ruas / Escuro / Claro
   useEffect(() => {
     const map = mapRef.current;
     const layers = baseLayersRef.current;
@@ -864,6 +991,16 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     if (map.hasLayer(layers.labels)) map.removeLayer(layers.labels);
     if (map.hasLayer(layers.streets)) map.removeLayer(layers.streets);
 
+    if (drivingTheme) {
+      if (drivingTheme === 'satellite') {
+        layers.satellite.addTo(map);
+        layers.labels.addTo(map);
+      } else {
+        layers.streets.addTo(map);
+      }
+      return;
+    }
+
     if (currentStyle.id === 'satellite') {
       layers.satellite.addTo(map);
     } else if (currentStyle.id === 'hybrid') {
@@ -872,7 +1009,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     } else {
       layers.streets.addTo(map);
     }
-  }, [currentStyle.id]);
+  }, [currentStyle.id, drivingTheme]);
 
   // Atualiza cursor quando em modo de marcação
   useEffect(() => {
@@ -917,10 +1054,11 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     );
 
     const drawHeatmapTrace = (
-      trace: VelocitySample[],
+      rawTrace: VelocitySample[],
       offsetM: number,
       mode: 'speed' | 'accel'
     ) => {
+      const trace = decimateSamplesForDisplay(rawTrace, 850);
       if (trace.length < 2) return;
       const latLngs = offsetTraceLatLngs(trace, offsetM);
       const groups: Array<{ color: string; pts: [number, number][] }> = [];
@@ -971,12 +1109,13 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     };
 
     const drawSolidTrace = (
-      trace: VelocitySample[],
+      rawTrace: VelocitySample[],
       offsetM: number,
       color: string,
       casingColor = '#050608',
       casingOpacity = 0.45
     ) => {
+      const trace = decimateSamplesForDisplay(rawTrace, 900);
       if (trace.length < 2) return;
       const latLngs = offsetTraceLatLngs(trace, offsetM);
       L.polyline(latLngs, {
@@ -995,7 +1134,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       }).addTo(routeLayer);
     };
 
-    const drawGuideTrace = (trace: VelocitySample[]) => {
+    const drawGuideTrace = (rawTrace: VelocitySample[]) => {
+      const trace = decimateSamplesForDisplay(rawTrace, 800);
       if (trace.length < 2) return;
       const latLngs = offsetTraceLatLngs(trace, 0);
       L.polyline(latLngs, {
@@ -1049,7 +1189,8 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     if (multiTraces && multiTraces.length > 0) {
       for (const layerItem of multiTraces) {
         if (layerItem.trace.length < 2) continue;
-        const latLngs = offsetTraceLatLngs(layerItem.trace, 0);
+        const decimatedLayerTrace = decimateSamplesForDisplay(layerItem.trace, 650);
+        const latLngs = offsetTraceLatLngs(decimatedLayerTrace, 0);
         const lineWeight = layerItem.active ? 5 : 3.2;
         const casingPoly = L.polyline(latLngs, {
           color: layerItem.active ? '#FFFFFF' : '#050608',
@@ -1582,21 +1723,24 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
 
     const destLatLng: [number, number] = [transitRoute.toLat, transitRoute.toLon];
     const lineColor = transitRoute.color || '#38BDF8';
+    const hasRoadPolyline =
+      Array.isArray(transitRoute.routeLatLngs) && transitRoute.routeLatLngs.length >= 2;
 
-    if (currentPos) {
-      const pts: [number, number][] = [[currentPos.lat, currentPos.lon], destLatLng];
-      L.polyline(pts, {
+    if (hasRoadPolyline) {
+      const roadPts = transitRoute.routeLatLngs!;
+      L.polyline(roadPts, {
         color: '#050608',
-        weight: 6.5,
-        opacity: 0.65,
+        weight: 8.5,
+        opacity: 0.84,
         lineCap: 'round',
+        lineJoin: 'round',
       }).addTo(transitLayer);
-      L.polyline(pts, {
+      L.polyline(roadPts, {
         color: lineColor,
-        weight: 3.5,
-        opacity: 0.95,
-        dashArray: '8 7',
+        weight: 4.5,
+        opacity: 0.98,
         lineCap: 'round',
+        lineJoin: 'round',
       }).addTo(transitLayer);
     }
 
@@ -1632,7 +1776,6 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       lbl.style.maxWidth = '180px';
       lbl.style.overflow = 'hidden';
       lbl.style.textOverflow = 'ellipsis';
-      lbl.style.boxShadow = '0 2px 6px rgba(0,0,0,0.8)';
       beaconWrap.appendChild(lbl);
     }
 
@@ -1647,27 +1790,37 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       interactive: false,
       zIndexOffset: 980,
     }).addTo(transitLayer);
-  }, [transitRoute, currentPos]);
+  }, [transitRoute]);
 
   // Renderiza marcadores persistentes de Alta Taxa (30/60fps) para V1, V2 e V3
   useEffect(() => {
     const carLayer = carLayerRef.current;
     if (!carLayer) return;
 
-    const iconPx = compactCarMarkers ? 12 : 18;
-    const anchorPx = compactCarMarkers ? 6 : 9;
+    const useArrowCursor = Boolean(navigationMode && vehicleStyle === 'default');
+    const iconPx = useArrowCursor ? 50 : compactCarMarkers ? 12 : 18;
+    const anchorPx = useArrowCursor ? 25 : compactCarMarkers ? 6 : 9;
 
-    // Carro 1 (Padrão ou Volta 1 Verde Esmeralda)
+    // Carro 1 (Seta 3D de Navegação estilo Waze/Maps ou ponto de volta)
     if (currentPos) {
       if (
         !primaryMarkerRef.current ||
         primaryMarkerRef.current.variant !== vehicleStyle ||
-        primaryMarkerRef.current.compact !== compactCarMarkers
+        primaryMarkerRef.current.compact !== compactCarMarkers ||
+        primaryMarkerRef.current.arrowCursor !== useArrowCursor
       ) {
         if (primaryMarkerRef.current) {
           carLayer.removeLayer(primaryMarkerRef.current.marker);
         }
-        const el = createVehicleMarkerElement(navHeadingDeg, vehicleStyle, compactCarMarkers);
+        let el: HTMLDivElement;
+        let arrowSvg: SVGSVGElement | undefined;
+        if (useArrowCursor) {
+          const created = createNavigationArrowCursorElement(navHeadingDeg);
+          el = created.el;
+          arrowSvg = created.arrowSvg;
+        } else {
+          el = createVehicleMarkerElement(navHeadingDeg, vehicleStyle, compactCarMarkers);
+        }
         const icon = L.divIcon({
           html: el,
           className: 'pitstop-car-divicon',
@@ -1679,9 +1832,19 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           interactive: false,
           zIndexOffset: 1100,
         }).addTo(carLayer);
-        primaryMarkerRef.current = { marker, el, variant: vehicleStyle, compact: compactCarMarkers };
+        primaryMarkerRef.current = {
+          marker,
+          el,
+          arrowSvg,
+          variant: vehicleStyle,
+          compact: compactCarMarkers,
+          arrowCursor: useArrowCursor,
+        };
       } else {
         primaryMarkerRef.current.marker.setLatLng([currentPos.lat, currentPos.lon]);
+        if (primaryMarkerRef.current.arrowSvg) {
+          primaryMarkerRef.current.arrowSvg.style.transform = `rotate(${navHeadingDeg ?? 0}deg)`;
+        }
       }
     } else if (primaryMarkerRef.current) {
       carLayer.removeLayer(primaryMarkerRef.current.marker);
@@ -1752,6 +1915,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
   }, [
     currentPos,
     navHeadingDeg,
+    navigationMode,
     vehicleStyle,
     compactCarMarkers,
     ghostCar,
@@ -1837,11 +2001,29 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     const now = Date.now();
     if (now - lastNavEaseRef.current < 160) return;
     lastNavEaseRef.current = now;
-    const targetZoom = Math.max(map.getZoom(), 17);
+    const curZ = map.getZoom();
+    const targetZoom = is3dDrivingActive
+      ? curZ >= 17.5 && curZ <= 18.5
+        ? curZ
+        : 18
+      : Math.max(curZ, 17);
     map.setView([currentPos.lat, currentPos.lon], targetZoom, {
       animate: true,
     });
-  }, [navigationMode, autoFollowCar, userInteracted, currentPos]);
+  }, [navigationMode, autoFollowCar, userInteracted, currentPos, is3dDrivingActive]);
+
+  // External recenter trigger (snap back to 3D Heading-Up & close driving zoom)
+  useEffect(() => {
+    if (recenterTrigger <= 0) return;
+    setManualRotationDeg(0);
+    setUserInteracted(false);
+    if (currentPos && mapRef.current) {
+      mapRef.current.setView([currentPos.lat, currentPos.lon], driving3dMode ? 18 : 17.5, {
+        animate: true,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recenterTrigger]);
 
   const cycleMapStyle = () => {
     if (onCycleMapStyle) {
@@ -1936,10 +2118,12 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
     onMapClickPlaceTrap(c.lat, c.lng);
   };
 
-  const isRotated = Math.abs(totalRotationDeg) > 0.05;
+  const isRotated = Math.abs(totalRotationDeg) > 0.05 || is3dDrivingActive;
   const rotatedSquareSide =
     isRotated && wrapperSize.w > 0 && wrapperSize.h > 0
-      ? Math.ceil(Math.hypot(wrapperSize.w, wrapperSize.h)) + 16
+      ? is3dDrivingActive
+        ? Math.min(2600, Math.ceil(Math.max(wrapperSize.w, wrapperSize.h) * 2.9))
+        : Math.ceil(Math.hypot(wrapperSize.w, wrapperSize.h)) + 16
       : 0;
 
   useEffect(() => {
@@ -1949,92 +2133,305 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       map.invalidateSize({ animate: false });
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [isRotated, rotatedSquareSide]);
+  }, [isRotated, rotatedSquareSide, is3dDrivingActive]);
+
+  const perspectivePx = Math.max(820, Math.round((wrapperSize.h || 760) * 0.96));
 
   return (
     <div
       ref={outerWrapperRef}
-      className={
-        effectiveFullscreen
-          ? 'fixed inset-0 z-50 overflow-hidden bg-[var(--ps-bg)]'
-          : containerClassName
+      style={
+        is3dDrivingActive
+          ? {
+              perspective: `${perspectivePx}px`,
+              perspectiveOrigin: '50% 68%',
+            }
+          : undefined
       }
+      className={`${
+        effectiveFullscreen
+          ? 'fixed inset-0 z-[9995] h-[100dvh] w-screen overflow-hidden bg-[var(--ps-bg)]'
+          : containerClassName
+      } ${drivingTheme === 'dark' ? 'pitstop-leaflet-dark-tiles' : ''}`}
     >
       <div
         ref={containerRef}
         className="will-change-transform"
         style={
-          isRotated && rotatedSquareSide > 0
+          is3dDrivingActive && rotatedSquareSide > 0
             ? {
                 position: 'absolute',
                 left: '50%',
-                top: '50%',
+                top: '68%',
                 width: `${rotatedSquareSide}px`,
                 height: `${rotatedSquareSide}px`,
-                transform: `translate(-50%, -50%) rotate(${totalRotationDeg}deg)`,
-                transition: userInteracted ? 'none' : 'transform 220ms ease-out',
+                transform: `translate(-50%, -50%) rotateX(58deg) rotate(${totalRotationDeg}deg)`,
+                transition: 'transform 260ms ease-out',
               }
-            : {
-                position: 'absolute',
-                inset: 0,
-                width: '100%',
-                height: '100%',
-                transform: isRotated ? `rotate(${totalRotationDeg}deg)` : undefined,
-              }
+            : isRotated && rotatedSquareSide > 0
+              ? {
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  width: `${rotatedSquareSide}px`,
+                  height: `${rotatedSquareSide}px`,
+                  transform: `translate(-50%, -50%) rotate(${totalRotationDeg}deg)`,
+                  transition: userInteracted ? 'none' : 'transform 220ms ease-out',
+                }
+              : {
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  transform: isRotated ? `rotate(${totalRotationDeg}deg)` : undefined,
+                }
         }
       />
 
-      {/* Botão flutuante discreto Centralizar / Norte quando usuário move ou rotaciona o mapa manualmente */}
-      {(userInteracted || Math.abs(manualRotationDeg) > 1) && (
-        <button
-          type="button"
-          onClick={handleRecenterAndNorth}
-          className={`absolute left-2.5 z-[415] inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)] active:scale-95 ${
-            effectiveFullscreen && fullscreenOverlay
-              ? 'bottom-[94px] sm:bottom-[98px]'
-              : 'bottom-2.5'
-          }`}
-          title="Voltar para o Norte (0°) e centralizar mapa"
-        >
-          <Compass
-            className="h-3.5 w-3.5 text-[var(--ps-accent)] transition-transform"
-            style={{ transform: `rotate(${totalRotationDeg}deg)` }}
-          />
-          <span>Centralizar / Norte</span>
-        </button>
-      )}
-
-      {/* Live Heading-Up vs Norte Fixo mode toggle when navigationMode is enabled */}
-      {navigationMode && !hideBuiltInTopControls && (
-        <button
-          type="button"
-          onClick={() => {
-            if (onToggleHeadingUp) onToggleHeadingUp();
-            else setInternalHeadingUp((v) => !v);
-          }}
-          className={`absolute top-2.5 left-2.5 z-[400] inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-extrabold shadow-lg backdrop-blur-xs ${
-            effectiveHeadingUp
-              ? 'border-[var(--ps-accent)] bg-[var(--ps-surface)]/95 text-[var(--ps-text)]'
-              : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/90 text-[var(--ps-muted)]'
-          }`}
-          title="Alternar entre seguir sentido do veículo (Heading-Up) ou Norte Fixo"
-        >
-          <Compass className={`h-3.5 w-3.5 ${effectiveHeadingUp ? 'text-[var(--ps-accent)]' : 'text-sky-400'}`} />
-          <span>{effectiveHeadingUp ? 'Heading-Up' : 'Norte Fixo'}</span>
-        </button>
-      )}
-
-      {/* Legenda / Overlay superior esquerdo customizável (ex: Barra única em Tela Cheia) */}
-      {!navigationMode && topLeftOverlay && (
+      {/* Horizonte atmosférico sutil no topo quando em perspectiva 3D de direção */}
+      {is3dDrivingActive && (
         <div
-          className={
-            externalFs
-              ? 'pointer-events-none absolute top-2.5 left-2.5 right-[136px] z-[405]'
-              : 'pointer-events-none absolute top-2.5 left-2.5 z-[405] max-w-[65%]'
-          }
-        >
-          {topLeftOverlay}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 z-[390] h-36 bg-gradient-to-b from-[#07111E] via-[#07111E]/75 to-transparent"
+        />
+      )}
+
+      {/* Botão flutuante discreto Centralizar / Norte quando usuário move ou rotaciona o mapa manualmente */}
+      {!(hideBuiltInTopControls && driving3dMode) &&
+        (userInteracted || Math.abs(manualRotationDeg) > 1) && (
+          <button
+            type="button"
+            onClick={handleRecenterAndNorth}
+            className={`absolute left-2.5 z-[415] inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)] active:scale-95 ${
+              effectiveFullscreen && fullscreenOverlay
+                ? 'bottom-[calc(94px+env(safe-area-inset-bottom,0px))] sm:bottom-[calc(98px+env(safe-area-inset-bottom,0px))]'
+                : effectiveFullscreen
+                  ? 'bottom-[max(0.75rem,env(safe-area-inset-bottom))]'
+                  : 'bottom-2.5'
+            }`}
+            title="Voltar para o Norte (0°) e centralizar mapa"
+          >
+            <Compass
+              className="h-3.5 w-3.5 text-[var(--ps-accent)] transition-transform"
+              style={{ transform: `rotate(${totalRotationDeg}deg)` }}
+            />
+            <span>Centralizar / Norte</span>
+          </button>
+        )}
+
+      {/* BARRA SUPERIOR ÚNICA EM TELA CHEIA (sem duplicação ou colisão) */}
+      {effectiveFullscreen && !externalFs && !hideBuiltInTopControls ? (
+        <div className="pointer-events-none absolute top-0 inset-x-0 z-[410] flex flex-col gap-1.5 px-2.5 pt-[max(0.5rem,env(safe-area-inset-top))]">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-1.5">
+            <div className="flex flex-wrap items-center gap-1">
+              {navigationMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onToggleHeadingUp) onToggleHeadingUp();
+                    else setInternalHeadingUp((v) => !v);
+                  }}
+                  className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2 text-[11px] font-extrabold shadow-lg backdrop-blur-xs ${
+                    effectiveHeadingUp
+                      ? 'border-[var(--ps-accent)] bg-[var(--ps-surface)]/95 text-[var(--ps-text)]'
+                      : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/90 text-[var(--ps-muted)]'
+                  }`}
+                  title="Alternar entre seguir sentido do veículo (Heading-Up) ou Norte Fixo"
+                >
+                  <Compass
+                    className={`h-3.5 w-3.5 ${effectiveHeadingUp ? 'text-[var(--ps-accent)]' : 'text-sky-400'}`}
+                  />
+                  <span>{effectiveHeadingUp ? 'Heading-Up' : 'Norte'}</span>
+                </button>
+              )}
+
+              {(editableTrace.length > 0 ||
+                (multiTraces && multiTraces.length > 0) ||
+                (waypoints && waypoints.length > 0) ||
+                orderedTraps.length > 0) && (
+                <button
+                  type="button"
+                  onClick={() => fitMapToTrackOrCenter(true)}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+                  title="Enquadrar Pista"
+                >
+                  <LocateFixed className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+                  <span>Rota</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  void centerOnMyPosition();
+                }}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-emerald)]"
+                title="Centralizar na minha posição GPS atual"
+              >
+                <Navigation className="h-3 w-3 text-[var(--ps-emerald)]" />
+                <span>GPS</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={cycleMapStyle}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+                aria-label="Alternar camada do mapa"
+              >
+                <Layers className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+                <span>{currentStyle.label}</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (onFullscreenToggle) {
+                  onFullscreenToggle();
+                } else {
+                  setIsFullscreen(false);
+                }
+              }}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/95 px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+              aria-label="Sair da tela cheia"
+            >
+              <Minimize2 className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+              <span>Sair Tela Cheia</span>
+            </button>
+          </div>
+
+          {!navigationMode && topLeftOverlay && (
+            <div className="pointer-events-none">{topLeftOverlay}</div>
+          )}
+
+          {fullscreenTopOverlay && (
+            <div className="pointer-events-auto">{fullscreenTopOverlay}</div>
+          )}
         </div>
+      ) : (
+        <>
+          {/* Live Heading-Up vs Norte Fixo mode toggle when navigationMode is enabled */}
+          {navigationMode && !hideBuiltInTopControls && (
+            <button
+              type="button"
+              onClick={() => {
+                if (onToggleHeadingUp) onToggleHeadingUp();
+                else setInternalHeadingUp((v) => !v);
+              }}
+              className={`absolute left-2.5 z-[400] inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-extrabold shadow-lg backdrop-blur-xs ${
+                externalFs ? 'top-[max(0.5rem,env(safe-area-inset-top))]' : 'top-2.5'
+              } ${
+                effectiveHeadingUp
+                  ? 'border-[var(--ps-accent)] bg-[var(--ps-surface)]/95 text-[var(--ps-text)]'
+                  : 'border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/90 text-[var(--ps-muted)]'
+              }`}
+              title="Alternar entre seguir sentido do veículo (Heading-Up) ou Norte Fixo"
+            >
+              <Compass
+                className={`h-3.5 w-3.5 ${effectiveHeadingUp ? 'text-[var(--ps-accent)]' : 'text-sky-400'}`}
+              />
+              <span>{effectiveHeadingUp ? 'Heading-Up' : 'Norte Fixo'}</span>
+            </button>
+          )}
+
+          {/* Legenda / Overlay superior esquerdo customizável */}
+          {!navigationMode && topLeftOverlay && (
+            <div
+              className={
+                externalFs
+                  ? 'pointer-events-none absolute top-[max(0.5rem,env(safe-area-inset-top))] left-2.5 right-[136px] z-[405]'
+                  : 'pointer-events-none absolute top-2.5 left-2.5 z-[405] max-w-[65%]'
+              }
+            >
+              {topLeftOverlay}
+            </div>
+          )}
+
+          {/* Controles superiores direitos */}
+          {hideBuiltInTopControls ? null : externalFs ? (
+            onFullscreenToggle ? (
+              <div className="absolute top-[max(0.5rem,env(safe-area-inset-top))] right-2.5 z-[410]">
+                <button
+                  type="button"
+                  onClick={() => onFullscreenToggle()}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/95 px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+                  aria-label="Sair da tela cheia"
+                >
+                  <Minimize2 className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+                  <span>Sair Tela Cheia</span>
+                </button>
+              </div>
+            ) : null
+          ) : (
+            <div className="absolute top-2.5 right-2.5 z-[400] flex flex-wrap items-center gap-1.5">
+              {(editableTrace.length > 0 || (multiTraces && multiTraces.length > 0) || (waypoints && waypoints.length > 0) || orderedTraps.length > 0) && (
+                <button
+                  type="button"
+                  onClick={() => fitMapToTrackOrCenter(true)}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+                  title="Enquadrar Pista"
+                >
+                  <LocateFixed className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
+                  <span>Rota</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  void centerOnMyPosition();
+                }}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-emerald)]"
+                title="Buscar e centralizar na minha posição GPS atual"
+              >
+                <Navigation className="h-3 w-3 text-[var(--ps-emerald)]" />
+                <span>Minha Posição</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={cycleMapStyle}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+                aria-label="Alternar camada do mapa"
+              >
+                <Layers className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
+                <span>{currentStyle.label}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (onFullscreenToggle) {
+                    onFullscreenToggle();
+                  } else {
+                    setIsFullscreen((v) => !v);
+                  }
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
+                aria-label={effectiveFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
+              >
+                {effectiveFullscreen ? (
+                  <Minimize2 className="h-4 w-4" />
+                ) : (
+                  <Maximize2 className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Micro-Overlay superior exclusivo quando externalFs ou hideBuiltInTopControls está ativo */}
+          {effectiveFullscreen && fullscreenTopOverlay && (
+            <div
+              className={`pointer-events-none absolute left-2.5 right-2.5 z-[410] ${
+                hideBuiltInTopControls
+                  ? 'top-[max(0.5rem,env(safe-area-inset-top))]'
+                  : 'top-[calc(max(0.5rem,env(safe-area-inset-top))+2.5rem)]'
+              }`}
+            >
+              <div className="pointer-events-auto">{fullscreenTopOverlay}</div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Central Crosshair Mira overlay when placing Marcos interactively */}
@@ -2044,89 +2441,6 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           className="pointer-events-none absolute inset-0 z-[400] flex items-center justify-center"
         >
           <Crosshair className="h-9 w-9 text-amber-300 drop-shadow-[0_0_6px_rgba(0,0,0,0.95)]" />
-        </div>
-      )}
-
-      {/* Controles superiores direitos */}
-      {hideBuiltInTopControls ? null : externalFs ? (
-        onFullscreenToggle ? (
-          <div className="absolute top-2.5 right-2.5 z-[410]">
-            <button
-              type="button"
-              onClick={() => onFullscreenToggle()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/95 px-2.5 text-[11px] font-extrabold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-              aria-label="Sair da tela cheia"
-            >
-              <Minimize2 className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-              <span>Sair Tela Cheia</span>
-            </button>
-          </div>
-        ) : null
-      ) : (
-        <div className="absolute top-2.5 right-2.5 z-[400] flex flex-wrap items-center gap-1.5">
-          {(editableTrace.length > 0 || (multiTraces && multiTraces.length > 0) || (waypoints && waypoints.length > 0) || orderedTraps.length > 0) && (
-            <button
-              type="button"
-              onClick={() => fitMapToTrackOrCenter(true)}
-              className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-              title="Enquadrar Pista"
-            >
-              <LocateFixed className="h-3.5 w-3.5 text-[var(--ps-accent)]" />
-              <span>Rota</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => {
-              void centerOnMyPosition();
-            }}
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-emerald)]"
-            title="Buscar e centralizar na minha posição GPS atual"
-          >
-            <Navigation className="h-3 w-3 text-[var(--ps-emerald)]" />
-            <span>Minha Posição</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={cycleMapStyle}
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 px-2 text-[11px] font-bold text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-            aria-label="Alternar camada do mapa"
-          >
-            <Layers className="h-3.5 w-3.5 text-[var(--ps-amber)]" />
-            <span>{currentStyle.label}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (onFullscreenToggle) {
-                onFullscreenToggle();
-              } else {
-                setIsFullscreen((v) => !v);
-              }
-            }}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 text-[var(--ps-text)] shadow-lg backdrop-blur-xs hover:border-[var(--ps-accent)]"
-            aria-label={effectiveFullscreen ? 'Sair da tela cheia' : 'Mapa em tela cheia'}
-          >
-            {effectiveFullscreen ? (
-              <Minimize2 className="h-4 w-4" />
-            ) : (
-              <Maximize2 className="h-4 w-4" />
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* Micro-Overlay superior exclusivo de Tela Cheia (ex: Horário Oficial CH) */}
-      {effectiveFullscreen && fullscreenTopOverlay && (
-        <div
-          className={`pointer-events-none absolute left-2.5 z-[410] ${
-            navigationMode ? 'top-12' : 'top-12 sm:top-2.5'
-          }`}
-        >
-          <div className="pointer-events-auto">{fullscreenTopOverlay}</div>
         </div>
       )}
 
@@ -2158,31 +2472,35 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
         </div>
       )}
 
-      {/* Controles de Zoom + / - estilo RaceChrono */}
-      <div
-        className={`absolute right-2.5 z-[400] flex flex-col overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 shadow-lg backdrop-blur-xs ${
-          effectiveFullscreen && fullscreenZoomBottomClass
-            ? fullscreenZoomBottomClass
-            : zoomControlsBottomClass ?? (externalFs ? 'bottom-2.5' : 'bottom-14')
-        }`}
-      >
-        <button
-          type="button"
-          onClick={() => mapRef.current?.zoomIn()}
-          className="flex h-9 w-9 items-center justify-center text-[var(--ps-text)] hover:bg-[var(--ps-card)] border-b border-[var(--ps-border)]"
-          aria-label="Aumentar zoom"
+      {/* Controles de Zoom + / - estilo RaceChrono (ocultos na condução 3D limpa estilo Waze) */}
+      {!(hideBuiltInTopControls && driving3dMode) && (
+        <div
+          className={`absolute right-2.5 z-[400] flex flex-col overflow-hidden rounded-lg border border-[var(--ps-border-strong)] bg-[var(--ps-surface)]/92 shadow-lg backdrop-blur-xs ${
+            effectiveFullscreen && fullscreenZoomBottomClass
+              ? fullscreenZoomBottomClass
+              : effectiveFullscreen
+                ? 'bottom-[max(3.5rem,calc(env(safe-area-inset-bottom,0px)+3rem))]'
+                : zoomControlsBottomClass ?? (externalFs ? 'bottom-2.5' : 'bottom-14')
+          }`}
         >
-          <Plus className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() => mapRef.current?.zoomOut()}
-          className="flex h-9 w-9 items-center justify-center text-[var(--ps-text)] hover:bg-[var(--ps-card)]"
-          aria-label="Diminuir zoom"
-        >
-          <Minus className="h-4 w-4" />
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => mapRef.current?.zoomIn()}
+            className="flex h-9 w-9 items-center justify-center text-[var(--ps-text)] hover:bg-[var(--ps-card)] border-b border-[var(--ps-border)]"
+            aria-label="Aumentar zoom"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => mapRef.current?.zoomOut()}
+            className="flex h-9 w-9 items-center justify-center text-[var(--ps-text)] hover:bg-[var(--ps-card)]"
+            aria-label="Diminuir zoom"
+          >
+            <Minus className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Botão Marcar na Mira quando em modo de marcação */}
       {placementKind && onMapClickPlaceTrap && (
@@ -2190,7 +2508,9 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
           type="button"
           onClick={handlePlaceAtCrosshair}
           className={`pitstop-btn-red absolute z-[410] inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-extrabold shadow-xl active:scale-95 ${
-            effectiveFullscreen && fullscreenOverlay ? 'top-2.5 left-2.5' : 'bottom-3 left-3'
+            effectiveFullscreen && fullscreenOverlay
+              ? 'top-[calc(max(0.5rem,env(safe-area-inset-top))+2.75rem)] left-2.5'
+              : 'bottom-3 left-3'
           }`}
         >
           <Plus className="h-4 w-4" />
@@ -2201,7 +2521,7 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       {/* Barra flutuante de criação/edição de Marcos ou HUD exclusiva do modo Tela Cheia */}
       {effectiveFullscreen && fullscreenOverlay && (
         <div
-          className={`pointer-events-none absolute inset-x-2.5 bottom-2.5 z-[410] flex justify-center ${
+          className={`pointer-events-none absolute inset-x-2.5 bottom-[max(0.625rem,env(safe-area-inset-bottom))] z-[410] flex justify-center ${
             fullscreenOverlayFullWidth ? '' : 'pr-12 sm:pr-0'
           }`}
         >
@@ -2212,4 +2532,4 @@ export const VelocityMapboxView: React.FC<VelocityMapboxViewProps> = ({
       )}
     </div>
   );
-};
+});

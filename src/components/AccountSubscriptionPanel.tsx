@@ -18,6 +18,7 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
 import { AdminSecretLoginModal } from './AdminSecretLoginModal';
 import {
   applyGithubReleaseUpdate,
@@ -30,6 +31,7 @@ import {
   type GithubReleaseCheckResult,
   isLicenseExpired,
   logoutAdminSession,
+  performOtaPwaUpdateAndReload,
   updateDispositivoRecord,
   useAdminLicenseSession,
 } from '../services/deviceLicenseService';
@@ -261,20 +263,49 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
     setCheckingUpdate(true);
     setUpdateCheckResult(null);
     try {
-      const remote = await checkGithubReleaseUpdate();
-      if (remote.hasUpdate) {
-        setUpdateCheckResult({
-          status: 'available',
-          remoteInfo: remote,
-          message: 'Nova atualização disponível',
-        });
-      } else {
-        setUpdateCheckResult({
-          status: 'latest',
-          remoteInfo: remote,
-          message: 'Seu aplicativo já está atualizado',
-        });
+      if (Capacitor.isNativePlatform()) {
+        const remote = await checkGithubReleaseUpdate();
+        if (remote.hasUpdate) {
+          setUpdateCheckResult({
+            status: 'available',
+            remoteInfo: remote,
+            message: 'Nova atualização disponível',
+          });
+        } else {
+          setUpdateCheckResult({
+            status: 'latest',
+            remoteInfo: remote,
+            message: 'Seu aplicativo já está atualizado',
+          });
+        }
+        return;
       }
+
+      const ota = await performOtaPwaUpdateAndReload();
+      if (!ota.ok) {
+        setUpdateCheckResult({
+          status: 'error',
+          message: ota.error
+            ? `Sem conexão para atualizar (${ota.error}).`
+            : 'Sem conexão para verificar atualizações.',
+        });
+        return;
+      }
+
+      setUpdatingApp(true);
+      setUpdateCheckResult({
+        status: 'available',
+        message: 'Atualizando para a versão mais recente...',
+      });
+      window.setTimeout(() => {
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set('_upd', String(Date.now()));
+          window.location.replace(url.toString());
+        } catch {
+          window.location.reload();
+        }
+      }, 650);
     } catch (err) {
       setUpdateCheckResult({
         status: 'error',
@@ -290,6 +321,11 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
 
   const handleApplyUpdate = async () => {
     setUpdatingApp(true);
+    setUpdateCheckResult({
+      status: 'available',
+      remoteInfo: updateCheckResult?.remoteInfo,
+      message: 'Atualizando para a versão mais recente...',
+    });
     try {
       await applyGithubReleaseUpdate(updateCheckResult?.remoteInfo?.publishedAt);
     } finally {
@@ -561,12 +597,22 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
 
           <button
             type="button"
-            disabled={checkingUpdate}
+            disabled={checkingUpdate || updatingApp}
             onClick={() => void handleCheckForUpdates()}
             className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-lg border border-[var(--ps-border-strong)] bg-transparent px-3 text-xs font-bold text-[var(--ps-text)] transition-colors hover:border-white/35 hover:bg-white/5 disabled:opacity-50 whitespace-nowrap"
           >
-            <RefreshCw className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${checkingUpdate ? 'animate-spin' : ''}`} />
-            <span>{checkingUpdate ? 'Verificando...' : 'Buscar Atualização'}</span>
+            <RefreshCw
+              className={`h-3.5 w-3.5 text-[var(--ps-muted)] ${
+                checkingUpdate || updatingApp ? 'animate-spin' : ''
+              }`}
+            />
+            <span>
+              {updatingApp
+                ? 'Atualizando...'
+                : checkingUpdate
+                  ? 'Verificando...'
+                  : 'Verificar Atualização'}
+            </span>
           </button>
         </div>
 
@@ -592,7 +638,7 @@ export const AccountSubscriptionPanel: React.FC<AccountSubscriptionPanelProps> =
               />
               <span>{updateCheckResult.message}</span>
             </span>
-            {updateCheckResult.status === 'available' && (
+            {updateCheckResult.status === 'available' && updateCheckResult.remoteInfo?.hasUpdate && (
               <button
                 type="button"
                 disabled={updatingApp}

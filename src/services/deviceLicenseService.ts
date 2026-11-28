@@ -955,6 +955,45 @@ export async function publishOfficialAppVersion(
   return { version: cleanVersion, download_url: safeUrl, source: 'fallback' };
 }
 
+const PERSISTENT_OFFLINE_TILE_CACHE = 'rally-offline-tiles-v1';
+
+export async function clearCodeCachesPreservingOfflineMaps(): Promise<number> {
+  let deletedCount = 0;
+  try {
+    if ('caches' in window) {
+      const keys = await window.caches.keys();
+      const codeCaches = keys.filter((k) => k !== PERSISTENT_OFFLINE_TILE_CACHE);
+      await Promise.all(codeCaches.map((k) => window.caches.delete(k)));
+      deletedCount = codeCaches.length;
+    }
+  } catch {
+    // Ignore cache clear failure
+  }
+  return deletedCount;
+}
+
+export async function triggerServiceWorkerUpdates(): Promise<void> {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(
+        regs.map(async (r) => {
+          try {
+            await r.update();
+          } catch {
+            // ignore update fetch error
+          }
+          if (r.waiting) {
+            r.waiting.postMessage({ type: 'SKIP_WAITING' });
+          }
+        })
+      );
+    }
+  } catch {
+    // Ignore service worker failure
+  }
+}
+
 export async function forceAppUpdateReload(downloadUrl?: string | null): Promise<void> {
   const safeUrl = sanitizeSafeDownloadUrl(downloadUrl);
   if (safeUrl) {
@@ -962,23 +1001,8 @@ export async function forceAppUpdateReload(downloadUrl?: string | null): Promise
     return;
   }
 
-  try {
-    if ('caches' in window) {
-      const keys = await window.caches.keys();
-      await Promise.all(keys.map((k) => window.caches.delete(k)));
-    }
-  } catch {
-    // Ignore cache clear failure
-  }
-
-  try {
-    if ('serviceWorker' in navigator) {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(regs.map((r) => r.unregister()));
-    }
-  } catch {
-    // Ignore service worker failure
-  }
+  await triggerServiceWorkerUpdates();
+  await clearCodeCachesPreservingOfflineMaps();
 
   try {
     const url = new URL(window.location.href);
@@ -986,6 +1010,34 @@ export async function forceAppUpdateReload(downloadUrl?: string | null): Promise
     window.location.replace(url.toString());
   } catch {
     window.location.reload();
+  }
+}
+
+export async function performOtaPwaUpdateAndReload(): Promise<{ ok: boolean; error?: string }> {
+  await triggerServiceWorkerUpdates();
+  await clearCodeCachesPreservingOfflineMaps();
+
+  const base =
+    typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
+      ? import.meta.env.BASE_URL
+      : '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const checkUrl = `${normalizedBase}index.html?t=${Date.now()}`;
+
+  try {
+    const res = await fetchWithTimeout(checkUrl, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      return { ok: false, error: `Servidor respondeu HTTP ${res.status}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Sem conexão com o servidor.',
+    };
   }
 }
 

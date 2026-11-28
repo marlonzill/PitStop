@@ -281,9 +281,9 @@ export const VelocityStartTachButton: React.FC<VelocityStartTachButtonProps> = (
   const isRevPeak = revLimiterActive && !isLaunching && litSegments >= 50;
 
   return (
-    <div className="relative flex flex-col items-center justify-center py-3 sm:py-5">
+    <div className="relative flex flex-col items-center justify-center py-0.5 sm:py-2">
       {!isPro && (
-        <span className="mb-1.5 rounded border border-amber-500/60 bg-[var(--ps-card-deep)] px-2 py-0.5 font-mono text-[10px] font-black text-[var(--ps-amber)] shadow">
+        <span className="mb-1 rounded border border-amber-500/60 bg-[var(--ps-card-deep)] px-2 py-0.5 font-mono text-[10px] font-black text-[var(--ps-amber)] shadow">
           PRO
         </span>
       )}
@@ -293,7 +293,7 @@ export const VelocityStartTachButton: React.FC<VelocityStartTachButtonProps> = (
         type="button"
         onClick={handlePress}
         aria-label={`Iniciar e ${subtitle.toLowerCase()}`}
-        className="group relative flex h-48 w-48 items-center justify-center rounded-full touch-manipulation select-none transition-shadow duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF2A2A] focus-visible:ring-offset-4 focus-visible:ring-offset-[var(--ps-bg)] sm:h-52 sm:w-52"
+        className="group relative flex h-[clamp(138px,21.5dvh,204px)] w-[clamp(138px,21.5dvh,204px)] items-center justify-center rounded-full touch-manipulation select-none transition-shadow duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF2A2A] focus-visible:ring-offset-4 focus-visible:ring-offset-[var(--ps-bg)]"
         style={{
           background: [
             'linear-gradient(135deg, rgba(255,255,255,0.42) 0%, rgba(255,255,255,0.06) 28%, rgba(0,0,0,0.45) 60%, rgba(255,255,255,0.22) 100%)',
@@ -581,7 +581,7 @@ export const VelocityStartTachButton: React.FC<VelocityStartTachButtonProps> = (
           <svg
             viewBox="0 0 24 24"
             aria-hidden="true"
-            className="mb-1 h-4 w-4 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:h-4.5 sm:w-4.5"
+            className="mb-0.5 h-[clamp(13px,2.2dvh,18px)] w-[clamp(13px,2.2dvh,18px)] drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]"
           >
             <path
               fill={launchPhase === 'flash3' ? '#34D399' : '#FFFFFF'}
@@ -589,11 +589,11 @@ export const VelocityStartTachButton: React.FC<VelocityStartTachButtonProps> = (
             />
           </svg>
 
-          <span className="font-['Barlow_Condensed'] text-[28px] font-black italic leading-none tracking-wider text-white uppercase drop-shadow-[0_3px_8px_rgba(0,0,0,0.98)] sm:text-[31px]">
+          <span className="font-['Barlow_Condensed'] text-[clamp(20px,3.6dvh,31px)] font-black italic leading-none tracking-wider text-white uppercase drop-shadow-[0_3px_8px_rgba(0,0,0,0.98)]">
             INICIAR
           </span>
 
-          <span className="mt-1.5 whitespace-nowrap font-mono text-[8px] font-bold tracking-[0.18em] text-slate-300 uppercase leading-none drop-shadow-[0_1px_4px_rgba(0,0,0,0.98)] sm:text-[8.5px]">
+          <span className="mt-1 whitespace-nowrap font-mono text-[clamp(7px,1.15dvh,8.5px)] font-bold tracking-[0.16em] text-slate-300 uppercase leading-none drop-shadow-[0_1px_4px_rgba(0,0,0,0.98)]">
             {subtitle}
           </span>
         </span>

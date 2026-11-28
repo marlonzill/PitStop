@@ -163,7 +163,7 @@ function sampleSeriesInWindow(
   return out;
 }
 
-export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
+export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = React.memo(({
   sessionTrack,
   sessionRuns,
   lap1,
@@ -3344,4 +3344,4 @@ export const FuelTechAnalysisPanel: React.FC<FuelTechAnalysisPanelProps> = ({
       })()}
     </div>
   );
-};
+});

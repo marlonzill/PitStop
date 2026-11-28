@@ -28,7 +28,24 @@ interface OdometerCockpitProps {
   isActive?: boolean;
 }
 
-export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = true }) => {
+const OdometerClockReadout: React.FC<{ isActive: boolean; clockOffsetMs: number }> = React.memo(
+  ({ isActive, clockOffsetMs }) => {
+    const [nowMs, setNowMs] = useState(() => Date.now());
+    useEffect(() => {
+      if (!isActive) return;
+      const id = window.setInterval(() => setNowMs(Date.now()), 500);
+      return () => window.clearInterval(id);
+    }, [isActive]);
+    return (
+      <span className="font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
+        <Satellite className="mr-1 inline h-3.5 w-3.5 text-[var(--ps-emerald)]" />
+        {formatClockTime(nowMs + clockOffsetMs)}
+      </span>
+    );
+  }
+);
+
+export const OdometerCockpit: React.FC<OdometerCockpitProps> = React.memo(({ isActive = true }) => {
   const [settings, updateSettings] = useNavSettings();
   const [source, setSource] = useState<DriveMode>('gps');
   const [totalKm, setTotalKm] = useState(0);
@@ -36,13 +53,12 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
   const [regressive, setRegressive] = useState(false);
   const [targetKm, setTargetKm] = useState(10.0);
   const [speedKmh, setSpeedKmh] = useState(0);
+  const [avgSpeedKmh, setAvgSpeedKmh] = useState(0);
   const [maxSpeedKmh, setMaxSpeedKmh] = useState(0);
-  const [avgSpeedSamples, setAvgSpeedSamples] = useState<number[]>([]);
   const [simSpeedKmh, setSimSpeedKmh] = useState(50);
   const [simRunning, setSimRunning] = useState(false);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [isCounting, setIsCounting] = useState(true);
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState('10.00');
@@ -57,20 +73,41 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
   isCountingRef.current = isCounting;
   const calFactorRef = useRef(settings.calibrationPct / 100);
   calFactorRef.current = settings.calibrationPct / 100;
+  const avgSpeedSumRef = useRef(0);
+  const avgSpeedCountRef = useRef(0);
+  const totalKmRef = useRef(0);
+  const tripKmRef = useRef(0);
+  totalKmRef.current = totalKm;
+  tripKmRef.current = tripKm;
 
-  useEffect(() => {
-    if (!isActive) return;
-    const id = window.setInterval(() => setNowMs(Date.now()), 250);
-    return () => window.clearInterval(id);
-  }, [isActive]);
-
-  // Continuous GPS watcher with 2D Kalman Filter
+  // Continuous GPS watcher with 2D Kalman Filter & throttled UI flush (~120ms)
   useEffect(() => {
     if (!isActive || source !== 'gps') return;
     let cancelled = false;
     let webWid: number | null = null;
     let capWid: string | null = null;
+    let lastUiFlushMs = 0;
+    let maxSpdPending = 0;
+    let lastAcc: number | null = null;
+    let lastSpd = 0;
     kalmanRef.current.reset();
+
+    const flushUi = (force = false) => {
+      const now = performance.now();
+      if (!force && now - lastUiFlushMs < 120) return;
+      lastUiFlushMs = now;
+      setGpsAccuracy(lastAcc);
+      setTotalKm(totalKmRef.current);
+      setTripKm(tripKmRef.current);
+      setSpeedKmh(lastSpd);
+      if (maxSpdPending > 0) {
+        const nextMax = maxSpdPending;
+        setMaxSpeedKmh((m) => Math.max(m, nextMax));
+      }
+      if (avgSpeedCountRef.current > 0) {
+        setAvgSpeedKmh(Math.round(avgSpeedSumRef.current / avgSpeedCountRef.current));
+      }
+    };
 
     const handlePos = (lat: number, lon: number, rawSpeedMs: number | null, accM: number | null, ts: number) => {
       if (cancelled) return;
@@ -83,20 +120,22 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
         rawHeadingDeg: null,
         timestampMs: ts,
       });
-      setGpsAccuracy(filtered.accuracyM);
+      lastAcc = filtered.accuracyM;
 
       if (isCountingRef.current && filtered.distStepM > 0) {
         const scaledKm = (filtered.distStepM / 1000) * calFactorRef.current;
-        setTotalKm((v) => Math.max(0, v + scaledKm));
-        setTripKm((v) => Math.max(0, v + scaledKm));
+        totalKmRef.current = Math.max(0, totalKmRef.current + scaledKm);
+        tripKmRef.current = Math.max(0, tripKmRef.current + scaledKm);
       }
 
       const spdRounded = Math.round(filtered.speedKmh);
-      setSpeedKmh(spdRounded);
+      lastSpd = spdRounded;
       if (isCountingRef.current && spdRounded >= 2) {
-        setMaxSpeedKmh((m) => Math.max(m, spdRounded));
-        setAvgSpeedSamples((arr) => [...arr.slice(-119), spdRounded]);
+        maxSpdPending = Math.max(maxSpdPending, spdRounded);
+        avgSpeedSumRef.current += spdRounded;
+        avgSpeedCountRef.current += 1;
       }
+      flushUi(lastUiFlushMs === 0);
     };
 
     const start = async () => {
@@ -158,7 +197,9 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
         setTripKm((v) => v + kmTick);
         if (simSpeedKmh >= 2) {
           setMaxSpeedKmh((m) => Math.max(m, simSpeedKmh));
-          setAvgSpeedSamples((arr) => [...arr.slice(-119), simSpeedKmh]);
+          avgSpeedSumRef.current += simSpeedKmh;
+          avgSpeedCountRef.current += 1;
+          setAvgSpeedKmh(Math.round(avgSpeedSumRef.current / avgSpeedCountRef.current));
         }
       }
       setSpeedKmh(simSpeedKmh);
@@ -170,8 +211,14 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
     const n = Number(rawText.replace(',', '.'));
     if (Number.isFinite(n) && n >= 0) {
       const nextKm = odoEditUnit === 'm' ? n / 1000 : n;
-      if (which === 'total') setTotalKm(nextKm);
-      else setTripKm(regressive ? Math.max(0, targetKm - nextKm) : nextKm);
+      if (which === 'total') {
+        totalKmRef.current = nextKm;
+        setTotalKm(nextKm);
+      } else {
+        const resolved = regressive ? Math.max(0, targetKm - nextKm) : nextKm;
+        tripKmRef.current = resolved;
+        setTripKm(resolved);
+      }
     }
     if (which === 'total') setEditingTotalOdo(false);
     else setEditingTripOdo(false);
@@ -185,12 +232,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
   const displayedTripKm = regressive ? Math.max(0, targetKm - tripKm) : tripKm;
   const totalMeters = Math.round(totalKm * 1000);
   const tripMeters = Math.round(displayedTripKm * 1000);
-  const avgSpeedKmh =
-    avgSpeedSamples.length > 0
-      ? Math.round(avgSpeedSamples.reduce((a, b) => a + b, 0) / avgSpeedSamples.length)
-      : 0;
   const activeW = wValueFromCalibrationPct(settings.calibrationPct, settings.wBaseValue);
-  const officialClockMs = nowMs + settings.clockOffsetMs;
 
   return (
     <div className="mx-auto max-w-4xl space-y-3 text-[var(--ps-text)]">
@@ -234,10 +276,7 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
             </button>
           </div>
 
-          <span className="font-mono text-xs font-bold text-[var(--ps-muted)] tabular-nums">
-            <Satellite className="mr-1 inline h-3.5 w-3.5 text-[var(--ps-emerald)]" />
-            {formatClockTime(officialClockMs)}
-          </span>
+          <OdometerClockReadout isActive={isActive} clockOffsetMs={settings.clockOffsetMs} />
         </div>
       </section>
 
@@ -536,7 +575,9 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
             type="button"
             onClick={() => {
               setMaxSpeedKmh(0);
-              setAvgSpeedSamples([]);
+              avgSpeedSumRef.current = 0;
+              avgSpeedCountRef.current = 0;
+              setAvgSpeedKmh(0);
             }}
             className="text-[10px] text-[var(--ps-muted)] hover:text-[var(--ps-text)] underline"
           >
@@ -600,4 +641,4 @@ export const OdometerCockpit: React.FC<OdometerCockpitProps> = ({ isActive = tru
       </section>
     </div>
   );
-};
+});

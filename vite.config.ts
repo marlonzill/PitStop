@@ -18,7 +18,13 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
+        strategies: 'injectManifest',
+        srcDir: 'src',
+        filename: 'sw.js',
         registerType: 'autoUpdate',
+        injectManifest: {
+          injectionPoint: undefined,
+        },
         includeAssets: [
           'icon.svg',
           'apple-touch-icon.png',
@@ -56,41 +62,6 @@ export default defineConfig(() => {
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
-            },
-          ],
-        },
-        workbox: {
-          maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,jpg,webp,svg,woff,woff2,txt}'],
-          globIgnores: ['assets/aistudio/**/*.{png,jpg,jpeg,pdf}'],
-          runtimeCaching: [
-            {
-              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'google-fonts-cache',
-                expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-            {
-              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'gstatic-fonts-cache',
-                expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
             },
           ],
         },
